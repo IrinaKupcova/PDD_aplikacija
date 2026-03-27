@@ -7,14 +7,14 @@
     <title>PDD aplikācija</title>
     <!--
       BEZ SERVERA: atver šo failu pārlūkā (file:///…) vai kopē uz jebkuru tīmekļa vietu.
-      1) Pagaidām: parole <code>pdd</code> (maināms PAGAIDU_PAROLE). Vēlāk: FILE_SUPABASE_* vai GitHub Secrets.
+      1) Noklusējums: uzreiz atvērts skats (<code>TIKAI_VIENKARSI_SKATS = true</code>). Ieslēgt Supabase: iestatīt false un aizpildīt API.
       2) Palaižot no file:// dažās vecākās sistēmās bloķē trešo pušu moduļus — tad lieto
          to pašu failu caur https (piem. GitHub Pages) vai pārlūka iestatījumos atļauj file piekļuvi.
     -->
     <style>
       :root {
         color-scheme: light dark;
-        --bg: #0f1419;
+        --bg: #1b87f3;
         --surface: #1a222d;
         --surface2: #243041;
         --border: #334155;
@@ -226,7 +226,10 @@
       const LS_ABS = "pdd_local_absences";
       const LS_TYPES = "pdd_local_types";
 
-      // Supabase (vēlāk): ja abi aizpildīti, lieto mākoni nevis vietējo režīmu.
+      /** true: tūlīt moduļu skats — bez API, paroles un ielogošanās. false: Supabase vai lokālā parole. */
+      const TIKAI_VIENKARSI_SKATS = true;
+
+      // Supabase (vēlāk): ja abi aizpildīti un TIKAI_VIENKARSI_SKATS = false, lieto mākoni.
       const FILE_SUPABASE_URL = "https://YOUR_PROJECT.supabase.co";
       const FILE_SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
 
@@ -244,6 +247,7 @@
       }
 
       function configured() {
+        if (TIKAI_VIENKARSI_SKATS) return false;
         const { url, key } = loadConfig();
         return (
           Boolean(url && key) &&
@@ -261,6 +265,9 @@
       }
 
       function localDisplayName() {
+        if (TIKAI_VIENKARSI_SKATS) {
+          return sessionStorage.getItem(LS_LOCAL_NAME) || "Komanda";
+        }
         return sessionStorage.getItem(LS_LOCAL_NAME) || "PDD lietotājs";
       }
 
@@ -362,6 +369,11 @@
         const [session, setSession] = useState(null);
         const [loading, setLoading] = useState(true);
         useEffect(() => {
+          if (TIKAI_VIENKARSI_SKATS) {
+            setSession({ user: { id: LOCAL_USER_ID, email: "local@pdd" } });
+            setLoading(false);
+            return;
+          }
           if (isLocalMode()) {
             if (localSessionActive()) {
               setSession({ user: { id: LOCAL_USER_ID, email: "demo@local" } });
@@ -1010,6 +1022,10 @@
         );
 
         async function signOut() {
+          if (TIKAI_VIENKARSI_SKATS) {
+            setView("home");
+            return;
+          }
           if (isLocalMode()) {
             sessionStorage.removeItem(LS_LOCAL_OK);
             sessionStorage.removeItem(LS_LOCAL_NAME);
@@ -1021,7 +1037,7 @@
           setView("home");
         }
 
-        if (isLocalMode() && !localSessionActive()) {
+        if (isLocalMode() && !TIKAI_VIENKARSI_SKATS && !localSessionActive()) {
           return html`
             <div class="app-shell">
               ${title}
@@ -1066,13 +1082,17 @@
           <div class="app-shell">
             <header class="app-header">
               ${title}
-              <div class="row">
-                <span style=${{ color: "var(--muted)", fontSize: "0.9rem" }}>
-                  ${profile?.full_name ?? session.user.email}
-                  ${profile?.role === "manager" || profile?.role === "admin" ? " · vadītājs" : ""}
-                </span>
-                <button type="button" class="btn btn-ghost btn-small" onClick=${signOut}>Iziet</button>
-              </div>
+              ${TIKAI_VIENKARSI_SKATS
+                ? html`<span style=${{ color: "var(--muted)", fontSize: "0.9rem" }}>Vietējā kopija — dati tikai šajā pārlūkā</span>`
+                : html`
+                    <div class="row">
+                      <span style=${{ color: "var(--muted)", fontSize: "0.9rem" }}>
+                        ${profile?.full_name ?? session.user.email}
+                        ${profile?.role === "manager" || profile?.role === "admin" ? " · vadītājs" : ""}
+                      </span>
+                      <button type="button" class="btn btn-ghost btn-small" onClick=${signOut}>Iziet</button>
+                    </div>
+                  `}
             </header>
             ${view === "home"
               ? html`<${Dashboard} onOpenPrombutnes=${() => setView("prombutnes")} />`

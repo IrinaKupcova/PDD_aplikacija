@@ -1,11 +1,11 @@
 # PDD aplikācija
 
-**Viena `index.html` — bez Node, bez `npm run dev`.** React, Supabase un date-fns ielādējas no tīkla (CDN). Pietiek atvērt failu pārlūkā vai publicēt uz GitHub Pages.
+**Viena `index.html` — bez Node, bez `npm run dev`.** React un date-fns no CDN. Atver failu — **uzreiz moduļu skats** (`TIKAI_VIENKARSI_SKATS = true`), dati `localStorage`.
 
 ## Konfigurācija
 
-1. **Pagaidām (bez API):** atver `index.html` — ievadi paroli **`pdd`** (vai maini konstanti `PAGAIDU_PAROLE` failā). Prombūtnes glabājas tikai šajā pārlūkā (`localStorage`).
-2. **Vēlāk ar Supabase:** ieraksti `index.html` laukos `FILE_SUPABASE_URL` un `FILE_SUPABASE_ANON_KEY`, vai GitHub Actions Secrets — tad dati mākonī.
+1. **Noklusējums:** nav API, nav paroles — tieši **Moduļi** → **Prombūtnes**.
+2. **Supabase / parole:** `index.html` ieliec `TIKAI_VIENKARSI_SKATS = false`, tad iestati `FILE_SUPABASE_*` vai lokālo paroli (`LocalPasswordScreen`).
 2. Supabase **SQL Editor**: palaid `supabase/migrations/20260327220000_initial_pdd.sql`
 3. **Authentication → URL configuration**: **Site URL** un **Redirect URLs** — tava lappuse (piem. `https://irinakupcova.github.io/PDD_aplikacija/`) un `http://localhost/**` ja vajag.
 
