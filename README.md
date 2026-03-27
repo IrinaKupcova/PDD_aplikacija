@@ -2,6 +2,24 @@
 
 Pakalpojumu dizaina daļas darba organizācija: **React (Vite)**, **Supabase** (auth + dati), izvietošana **GitHub Pages**.
 
+## Kas jau salikts projektā
+
+- Viss avota kods, SQL migrācija un **GitHub Actions** darbplūsma `Deploy GitHub Pages`.
+- Lokāli ir **git commit** uz zara `main`. Automātiski nevarēja: **GitHub push** (repozitorijs nepastāv vai nav piekļuves) un **Supabase projekts** (vajadzīgs tavs konts).
+
+### Tūlīt tevis (dažas minūtes)
+
+1. **GitHub:** izveido tukšu repozitoriju `PDD_aplikacija` (vai kā sauc remote), tad projekta mapē:
+   ```bash
+   git remote set-url origin https://github.com/TAVS_LIETOTAJVARDS/PDD_aplikacija.git
+   git push -u origin main
+   ```
+2. **GitHub:** **Settings → Secrets → Actions** — pievieno `VITE_SUPABASE_URL` un `VITE_SUPABASE_ANON_KEY`.
+3. **GitHub:** **Settings → Pages** — **Source: GitHub Actions**.
+4. **Supabase:** palaid SQL no `supabase/migrations/…` un iestatījumi zemāk.
+
+Pēc tam automātiski notiks lappuses salikšana katrā `git push` uz `main`.
+
 ## Supabase
 
 1. Izveido projektu [supabase.com](https://supabase.com) → **Project URL** un **anon public** atslēga (**Settings → API**).
