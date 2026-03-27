@@ -7,7 +7,7 @@
     <title>PDD aplikācija</title>
     <!--
       BEZ SERVERA: atver šo failu pārlūkā (file:///…) vai kopē uz jebkuru tīmekļa vietu.
-      1) Atver lapu — aizpildi Supabase formu, vai scriptā ieraksti FILE_SUPABASE_URL / FILE_SUPABASE_ANON_KEY.
+      1) Pagaidām: parole <code>pdd</code> (maināms PAGAIDU_PAROLE). Vēlāk: FILE_SUPABASE_* vai GitHub Secrets.
       2) Palaižot no file:// dažās vecākās sistēmās bloķē trešo pušu moduļus — tad lieto
          to pašu failu caur https (piem. GitHub Pages) vai pārlūka iestatījumos atļauj file piekļuvi.
     -->
@@ -218,7 +218,15 @@
       } from "https://esm.sh/date-fns@4.1.0";
       import { lv } from "https://esm.sh/date-fns@4.1.0/locale/lv";
 
-      // Failā var ierakstīt īstos datus; ja paliek YOUR_* — lasa no localStorage (formā zemāk).
+      // Vietējais režīms (bez API): parole un dati pārlūkā. Mainiet paroli šeit:
+      const PAGAIDU_PAROLE = "pdd";
+      const LOCAL_USER_ID = "local-user-1";
+      const LS_LOCAL_OK = "pdd_local_ok";
+      const LS_LOCAL_NAME = "pdd_local_display_name";
+      const LS_ABS = "pdd_local_absences";
+      const LS_TYPES = "pdd_local_types";
+
+      // Supabase (vēlāk): ja abi aizpildīti, lieto mākoni nevis vietējo režīmu.
       const FILE_SUPABASE_URL = "https://YOUR_PROJECT.supabase.co";
       const FILE_SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
 
@@ -235,10 +243,6 @@
         return { url, key };
       }
 
-      const html = htm.bind(React.createElement);
-      const __cfg = loadConfig();
-      const supabase = createClient(__cfg.url, __cfg.key);
-
       function configured() {
         const { url, key } = loadConfig();
         return (
@@ -248,60 +252,108 @@
         );
       }
 
-      function ConfigScreen() {
-        const [url, setUrl] = useState(() => localStorage.getItem(LS_URL) || "");
-        const [key, setKey] = useState(() => localStorage.getItem(LS_KEY) || "");
-        function save(e) {
+      const html = htm.bind(React.createElement);
+      const __cfg = loadConfig();
+      const supabase = configured() ? createClient(__cfg.url, __cfg.key) : null;
+
+      function isLocalMode() {
+        return !configured();
+      }
+
+      function localDisplayName() {
+        return sessionStorage.getItem(LS_LOCAL_NAME) || "PDD lietotājs";
+      }
+
+      function ensureLocalTypes() {
+        if (localStorage.getItem(LS_TYPES)) return;
+        const seed = [
+          { id: 1, name: "Atvaļinājums", color: "#2563eb", sort_order: 1 },
+          { id: 2, name: "Papildatvaļinājums", color: "#7c3aed", sort_order: 2 },
+          { id: 3, name: "Komandējums", color: "#0891b2", sort_order: 3 },
+          { id: 4, name: "Mācības", color: "#059669", sort_order: 4 },
+          { id: 5, name: "Slimības lapa", color: "#dc2626", sort_order: 5 },
+          { id: 6, name: "Neapmaksāta prombūtne", color: "#ca8a04", sort_order: 6 },
+          { id: 7, name: "Cits (saskaņots)", color: "#64748b", sort_order: 7 },
+        ];
+        localStorage.setItem(LS_TYPES, JSON.stringify(seed));
+      }
+
+      function getLocalTypes() {
+        ensureLocalTypes();
+        return JSON.parse(localStorage.getItem(LS_TYPES) || "[]");
+      }
+
+      function getLocalAbsences() {
+        return JSON.parse(localStorage.getItem(LS_ABS) || "[]");
+      }
+
+      function setLocalAbsences(rows) {
+        localStorage.setItem(LS_ABS, JSON.stringify(rows));
+      }
+
+      function localSessionActive() {
+        return sessionStorage.getItem(LS_LOCAL_OK) === "1";
+      }
+
+      function LocalPasswordScreen() {
+        const [pw, setPw] = useState("");
+        const [name, setName] = useState(() => sessionStorage.getItem(LS_LOCAL_NAME) || "");
+        const [err, setErr] = useState(null);
+        function submit(e) {
           e.preventDefault();
-          localStorage.setItem(LS_URL, url.trim());
-          localStorage.setItem(LS_KEY, key.trim());
-          location.reload();
-        }
-        function clearStored() {
-          localStorage.removeItem(LS_URL);
-          localStorage.removeItem(LS_KEY);
+          setErr(null);
+          if (pw !== PAGAIDU_PAROLE) {
+            setErr("Nepareiza parole.");
+            return;
+          }
+          sessionStorage.setItem(LS_LOCAL_OK, "1");
+          if (name.trim()) sessionStorage.setItem(LS_LOCAL_NAME, name.trim());
           location.reload();
         }
         return html`
-          <div class="auth-box" style=${{ maxWidth: "460px" }}>
-            <h1>Supabase pieslēgums</h1>
-            <p class="app-sub">
-              Supabase → <strong>Project Settings → API</strong>: kopē <strong>Project URL</strong> un
-              <strong>anon public</strong> atslēgu, ielīmē zemāk, saglabā.
-            </p>
-            <form class="stack" onSubmit=${save}>
+          <div class="auth-box" style=${{ maxWidth: "420px" }}>
+            <h1>PDD — ieeja</h1>
+            <p class="app-sub">Pagaidu režīms: dati tikai šajā pārlūkā, bez Supabase.</p>
+            <form class="stack" onSubmit=${submit}>
               <div class="field">
-                <label for="cfg-url">Project URL</label>
+                <label for="loc-name">Vārds (kalendāram)</label>
                 <input
-                  id="cfg-url"
+                  id="loc-name"
                   class="input"
-                  value=${url}
-                  onChange=${(ev) => setUrl(ev.target.value)}
-                  placeholder="https://xxxxxxxx.supabase.co"
-                  required
+                  value=${name}
+                  onChange=${(ev) => setName(ev.target.value)}
+                  placeholder="Piemēram, Jānis"
+                  autoComplete="name"
                 />
               </div>
               <div class="field">
-                <label for="cfg-key">anon public</label>
+                <label for="loc-pw">Parole</label>
                 <input
-                  id="cfg-key"
-                  class="input"
+                  id="loc-pw"
                   type="password"
-                  value=${key}
-                  onChange=${(ev) => setKey(ev.target.value)}
-                  placeholder="eyJhbGciOiJIUzI1NiIs..."
+                  class="input"
+                  value=${pw}
+                  onChange=${(ev) => setPw(ev.target.value)}
+                  placeholder="Noklusējums: pdd"
                   required
+                  autoComplete="current-password"
                 />
               </div>
-              <button type="submit" class="btn btn-primary">Saglabāt un pārlādēt</button>
+              ${err ? html`<p style=${{ color: "var(--danger, #f87171)", margin: 0 }}>${err}</p>` : null}
+              <button type="submit" class="btn btn-primary">Ieiet</button>
             </form>
-            <p style=${{ fontSize: "0.85rem", color: "var(--muted)", marginTop: "1rem" }}>
-              Datubāze: SQL Editor → palaid
-              <code>supabase/migrations/20260327220000_initial_pdd.sql</code>
+            <p style=${{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "1rem" }}>
+              Noklusējuma parole ir <code>pdd</code> — nomaini to konstantē
+              <code>PAGAIDU_PAROLE</code> šajā HTML.
             </p>
-            <button type="button" class="btn btn-ghost btn-small" style=${{ marginTop: "0.5rem" }} onClick=${clearStored}>
-              Notīrīt saglabāto šajā pārlūkā
-            </button>
+            <details style=${{ marginTop: "1rem", fontSize: "0.85rem", color: "var(--muted)" }}>
+              <summary style=${{ cursor: "pointer" }}>Supabase (vēlāk, ar API)</summary>
+              <p style=${{ marginTop: "0.5rem" }}>
+                Kad būs gatavs: ieraksti šajā HTML <code>FILE_SUPABASE_URL</code> un
+                <code>FILE_SUPABASE_ANON_KEY</code>, vai GitHub Secrets + Pages. SQL:
+                <code>supabase/migrations/…</code>
+              </p>
+            </details>
           </div>
         `;
       }
@@ -310,7 +362,16 @@
         const [session, setSession] = useState(null);
         const [loading, setLoading] = useState(true);
         useEffect(() => {
-          if (!configured()) {
+          if (isLocalMode()) {
+            if (localSessionActive()) {
+              setSession({ user: { id: LOCAL_USER_ID, email: "demo@local" } });
+            } else {
+              setSession(null);
+            }
+            setLoading(false);
+            return;
+          }
+          if (!supabase) {
             setLoading(false);
             return;
           }
@@ -334,7 +395,21 @@
         const [profile, setProfile] = useState(null);
         const [loading, setLoading] = useState(Boolean(userId));
         useEffect(() => {
-          if (!userId || !configured()) {
+          if (!userId) {
+            setProfile(null);
+            setLoading(false);
+            return;
+          }
+          if (isLocalMode()) {
+            setProfile({
+              id: LOCAL_USER_ID,
+              full_name: localDisplayName(),
+              role: "manager",
+            });
+            setLoading(false);
+            return;
+          }
+          if (!supabase) {
             setProfile(null);
             setLoading(false);
             return;
@@ -370,6 +445,10 @@
         async function onSubmit(e) {
           e.preventDefault();
           setMessage(null);
+          if (!supabase) {
+            setMessage("Supabase nav pieejams.");
+            return;
+          }
           setBusy(true);
           try {
             if (mode === "signup") {
@@ -555,6 +634,10 @@
         const [comment, setComment] = useState("");
         const [busy, setBusy] = useState(false);
         useEffect(() => {
+          if (isLocalMode()) {
+            setTypes(getLocalTypes());
+            return;
+          }
           supabase
             .from("prombutnes_veidi")
             .select("*")
@@ -569,17 +652,32 @@
           if (!typeId) return;
           setBusy(true);
           try {
-            const { error } = await supabase.from("prombutnes_dati").insert({
-              user_id: userId,
-              type_id: Number(typeId),
-              start_date: startDate,
-              end_date: endDate,
-              comment: comment.trim() || null,
-              status: "pending",
-            });
-            if (error) {
-              alert("Kļūda: " + error.message);
-              return;
+            if (isLocalMode()) {
+              const rows = getLocalAbsences();
+              rows.push({
+                id: crypto.randomUUID(),
+                user_id: userId,
+                type_id: Number(typeId),
+                start_date: startDate,
+                end_date: endDate,
+                comment: comment.trim() || null,
+                status: "pending",
+                created_at: new Date().toISOString(),
+              });
+              setLocalAbsences(rows);
+            } else {
+              const { error } = await supabase.from("prombutnes_dati").insert({
+                user_id: userId,
+                type_id: Number(typeId),
+                start_date: startDate,
+                end_date: endDate,
+                comment: comment.trim() || null,
+                status: "pending",
+              });
+              if (error) {
+                alert("Kļūda: " + error.message);
+                return;
+              }
             }
             setStartDate("");
             setEndDate("");
@@ -657,6 +755,20 @@
         const [pending, setPending] = useState([]);
         const [busyId, setBusyId] = useState(null);
         async function load() {
+          if (isLocalMode()) {
+            const types = getLocalTypes();
+            const tmap = new Map(types.map((t) => [t.id, t]));
+            const list = getLocalAbsences()
+              .filter((r) => r.status === "pending")
+              .map((r) => ({
+                ...r,
+                type: tmap.get(r.type_id) ?? null,
+                employee: { id: r.user_id, full_name: localDisplayName() },
+              }))
+              .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+            setPending(list);
+            return;
+          }
           const { data: rows, error } = await supabase
             .from("prombutnes_dati")
             .select("*, type:prombutnes_veidi(*)")
@@ -681,17 +793,31 @@
         async function settle(id, status) {
           setBusyId(id);
           try {
-            const { error } = await supabase
-              .from("prombutnes_dati")
-              .update({
-                status,
-                approved_by: currentUserId,
-                approved_at: new Date().toISOString(),
-              })
-              .eq("id", id);
-            if (error) {
-              alert(error.message);
-              return;
+            if (isLocalMode()) {
+              const rows = getLocalAbsences().map((r) =>
+                r.id === id
+                  ? {
+                      ...r,
+                      status,
+                      approved_by: currentUserId,
+                      approved_at: new Date().toISOString(),
+                    }
+                  : r
+              );
+              setLocalAbsences(rows);
+            } else {
+              const { error } = await supabase
+                .from("prombutnes_dati")
+                .update({
+                  status,
+                  approved_by: currentUserId,
+                  approved_at: new Date().toISOString(),
+                })
+                .eq("id", id);
+              if (error) {
+                alert(error.message);
+                return;
+              }
             }
             await load();
             onChanged();
@@ -752,6 +878,19 @@
         const [error, setError] = useState(null);
         const refresh = useCallback(async () => {
           setError(null);
+          if (isLocalMode()) {
+            const types = getLocalTypes();
+            const tmap = new Map(types.map((t) => [t.id, t]));
+            const list = getLocalAbsences()
+              .map((r) => ({
+                ...r,
+                type: tmap.get(r.type_id) ?? null,
+                employee: { id: r.user_id, full_name: localDisplayName() },
+              }))
+              .sort((a, b) => a.start_date.localeCompare(b.start_date));
+            setAbsences(list);
+            return;
+          }
           const { data: rows, error: qErr } = await supabase
             .from("prombutnes_dati")
             .select("*, type:prombutnes_veidi(*)")
@@ -839,35 +978,56 @@
         );
 
         async function signOut() {
-          await supabase.auth.signOut();
+          if (isLocalMode()) {
+            sessionStorage.removeItem(LS_LOCAL_OK);
+            sessionStorage.removeItem(LS_LOCAL_NAME);
+            setView("home");
+            location.reload();
+            return;
+          }
+          if (supabase) await supabase.auth.signOut();
           setView("home");
         }
 
-        if (!configured()) {
+        if (isLocalMode() && !localSessionActive()) {
           return html`
             <div class="app-shell">
               ${title}
-              <${ConfigScreen} />
+              <${LocalPasswordScreen} />
             </div>
           `;
         }
 
-        if (loading) {
-          return html`
-            <div class="app-shell">
-              ${title}
-              <p style=${{ color: "var(--muted)" }}>Ielādē…</p>
-            </div>
-          `;
+        if (configured()) {
+          if (loading) {
+            return html`
+              <div class="app-shell">
+                ${title}
+                <p style=${{ color: "var(--muted)" }}>Ielādē…</p>
+              </div>
+            `;
+          }
+          if (!session?.user) {
+            return html`
+              <div class="app-shell">
+                ${title}
+                <${AuthScreen} />
+              </div>
+            `;
+          }
+        } else {
+          if (loading) {
+            return html`
+              <div class="app-shell">
+                ${title}
+                <p style=${{ color: "var(--muted)" }}>Ielādē…</p>
+              </div>
+            `;
+          }
         }
 
         if (!session?.user) {
-          return html`
-            <div class="app-shell">
-              ${title}
-              <${AuthScreen} />
-            </div>
-          `;
+          return null;
         }
 
         return html`

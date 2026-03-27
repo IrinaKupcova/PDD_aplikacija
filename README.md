@@ -4,7 +4,8 @@
 
 ## Konfigurācija
 
-1. Atver **`index.html`** pārlūkā — parādīsies forma **Supabase pieslēgums**: ielīmē **Project URL** un **anon public** (*Supabase → Project Settings → API*), saglabā (glabājas šajā pārlūkā). Vai ieraksti tos pašus datus tieši `index.html` kā `FILE_SUPABASE_*` (tad forma nav vajadzīga).
+1. **Pagaidām (bez API):** atver `index.html` — ievadi paroli **`pdd`** (vai maini konstanti `PAGAIDU_PAROLE` failā). Prombūtnes glabājas tikai šajā pārlūkā (`localStorage`).
+2. **Vēlāk ar Supabase:** ieraksti `index.html` laukos `FILE_SUPABASE_URL` un `FILE_SUPABASE_ANON_KEY`, vai GitHub Actions Secrets — tad dati mākonī.
 2. Supabase **SQL Editor**: palaid `supabase/migrations/20260327220000_initial_pdd.sql`
 3. **Authentication → URL configuration**: **Site URL** un **Redirect URLs** — tava lappuse (piem. `https://irinakupcova.github.io/PDD_aplikacija/`) un `http://localhost/**` ja vajag.
 
