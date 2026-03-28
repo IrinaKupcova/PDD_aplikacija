@@ -236,7 +236,12 @@
       const LS_TYPES = "pdd_local_types";
       const LS_LOCAL_CITS = "pdd_local_cits_requests";
       const LS_LOCAL_DEPUTY_USER_ID = "pdd_local_deputy_user_id";
+      const LS_LOCAL_DEPUTY_FROM = "pdd_local_deputy_from";
+      const LS_LOCAL_DEPUTY_TO = "pdd_local_deputy_to";
       const DEFAULT_MANAGER_EMAIL = "katrina.jirgensone@vid.gov.lv";
+      const DEFAULT_MANAGER_NAME = "Katrīna Jirgensone";
+      /** Dropdown: nav DB p.i. — apstiprinājumi uz pamatvadītāju. */
+      const DEPUTY_OPT_MANAGER = "__vaditajs__";
 
       /** true: tūlīt moduļu skats. false: tiešsaistes konts (URL+atslēga failā) vai lokālā parole. */
       const TIKAI_VIENKARSI_SKATS = false;
@@ -316,7 +321,20 @@
       }
 
       function isCitsSaskanotsTypeName(name) {
-        return /cits\s*\(\s*saskaņots\s*\)/i.test(String(name || ""));
+        const n = String(name || "");
+        return (
+          /cits\s*\(\s*saskaņots\s*\)/i.test(n) ||
+          /cits\s*\(\s*ar\s+saskaņojumu\s*\)/i.test(n)
+        );
+      }
+
+      /** p.i. ir spēkā tikai norādītajā datumu intervālā (ieskaitot galējās dienas); tukši datumi = bez gala. */
+      function effectiveDeputyUserId(rawId, validFrom, validTo) {
+        if (!rawId) return null;
+        const today = new Date().toISOString().slice(0, 10);
+        if (validFrom && today < validFrom) return null;
+        if (validTo && today > validTo) return null;
+        return rawId;
       }
 
       async function fetchAbsenceFormUsers(supabaseClient, options) {
@@ -382,7 +400,7 @@
           { id: 4, name: "Mācības", color: "#059669", sort_order: 4 },
           { id: 5, name: "Slimības lapa", color: "#dc2626", sort_order: 5 },
           { id: 6, name: "Neapmaksāta prombūtne", color: "#ca8a04", sort_order: 6 },
-          { id: 7, name: "Cits (saskaņots)", color: "#64748b", sort_order: 7 },
+          { id: 7, name: "Cits (ar saskaņojumu)", color: "#64748b", sort_order: 7 },
         ];
         localStorage.setItem(LS_TYPES, JSON.stringify(seed));
       }
@@ -724,7 +742,7 @@
         return { background: "#854d0e", color: "#fef3c7" };
       }
 
-      function AbsenceCalendar({ month, onMonthChange, absences }) {
+      function AbsenceCalendar({ month, onMonthChange, absences, caption }) {
         const start = startOfWeek(startOfMonth(month), { weekStartsOn: 1 });
         const end = endOfWeek(endOfMonth(month), { weekStartsOn: 1 });
         const days = eachDayOfInterval({ start, end });
@@ -744,6 +762,9 @@
                 →
               </button>
             </div>
+            ${caption
+              ? html`<p style=${{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--muted)", lineHeight: 1.35 }}>${caption}</p>`
+              : null}
             <div class="cal-grid">
               ${dow.map(
                 (l, i) => html`
@@ -764,7 +785,16 @@
                         key=${a.id}
                         class="cal-chip"
                         style=${chipStyle(a)}
-                        title=${`${a.employee?.full_name ?? "Darbinieks"} — ${a.type?.name ?? ""} (${a.status})`}
+                        title=${[
+                          a.employee?.full_name ?? "Darbinieks",
+                          a.type?.name ?? "",
+                          a.status,
+                          a.comment
+                            ? `Komentārs: ${String(a.comment).replace(/"/g, "'")}`
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" — ")}
                       >
                         ${(a.employee?.full_name?.split(" ")[0] ?? "?") + " · " + (a.type?.name ?? "")}
                       </span>
@@ -777,7 +807,7 @@
         `;
       }
 
-      function AbsenceRequestForm({ userId, role, onCreated }) {
+      function AbsenceRequestForm({ userId, role, onCreated, notifyEmail }) {
         const [types, setTypes] = useState([]);
         const [typeId, setTypeId] = useState("");
         const [startDate, setStartDate] = useState("");
@@ -787,7 +817,6 @@
         const [users, setUsers] = useState([]);
         const [selectedUserId, setSelectedUserId] = useState("");
         const isManager = role === "manager" || role === "admin";
-        const typeOptions = types.filter((t) => !isCitsSaskanotsTypeName(t.name));
         useEffect(() => {
           if (isLocalMode()) {
             setTypes(getLocalTypes());
@@ -834,8 +863,75 @@
         async function handleSubmit(e) {
           e.preventDefault();
           if (!typeId || !selectedUserId) return;
+          const typeObj = types.find((t) => String(t.id) === String(typeId));
+          const isCitsFlow = typeObj && isCitsSaskanotsTypeName(typeObj.name);
           setBusy(true);
           try {
+            if (isCitsFlow) {
+              const to = notifyEmail;
+              if (!to || !String(to).includes("@")) {
+                alert("Nav derīga e-pasta adrese saskaņotājam (vadītājs vai p.i.).");
+                return;
+              }
+              if (isLocalMode()) {
+                const token = crypto.randomUUID();
+                const rows = getLocalCitsRequests();
+                rows.push({
+                  id: crypto.randomUUID(),
+                  user_id: selectedUserId,
+                  start_date: startDate,
+                  end_date: endDate,
+                  comment: comment.trim() || null,
+                  notify_email: to,
+                  approval_token: token,
+                  status: "pending_manager",
+                  created_at: new Date().toISOString(),
+                });
+                setLocalCitsRequests(rows);
+                const base = window.location.href.split("?")[0];
+                alert(
+                  "Vietējā režīmā e-pasts netiek nosūtīts. Nosūti saskaņotājam saiti:\n\n" +
+                    `${base}?cits=${token}`
+                );
+              } else {
+                const { data: ins, error: insErr } = await supabase
+                  .from("pdd_cits_requests")
+                  .insert({
+                    user_id: selectedUserId,
+                    start_date: startDate,
+                    end_date: endDate,
+                    comment: comment.trim() || null,
+                    notify_email: to,
+                  })
+                  .select("id")
+                  .single();
+                if (insErr) {
+                  alert(insErr.message);
+                  return;
+                }
+                const appBase = window.location.href.split("?")[0];
+                const { data: fnData, error: fnErr } = await supabase.functions.invoke("notify-cits-manager", {
+                  body: { request_id: ins.id, app_base_url: appBase },
+                });
+                if (fnErr) {
+                  console.error(fnErr);
+                  alert(
+                    "Pieteikums saglabāts, bet e-pasta funkcija nav pieejama (pārbaudi Edge Function „notify-cits-manager”)."
+                  );
+                } else if (fnData?.skipped) {
+                  alert(fnData.message || "E-pasts nav nosūtīts — skatīt konsoli.");
+                } else if (fnData?.link) {
+                  alert("Nosūtīts uz " + to + ". Saite arī: " + fnData.link);
+                }
+              }
+              setStartDate("");
+              setEndDate("");
+              setComment("");
+              setTypeId("");
+              if (!isManager) setSelectedUserId(userId);
+              onCreated();
+              return;
+            }
             if (isLocalMode()) {
               const rows = getLocalAbsences();
               rows.push({
@@ -875,10 +971,11 @@
         }
         return html`
           <div class="list-panel">
-            <h2>Parastā prombūtne</h2>
+            <h2>Prombūtnes pieteikums</h2>
             <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
-              Veidu <strong>Cits (saskaņots)</strong> šeit nevar izvēlēties — tam ir atsevišķa sadaļa
-              zemāk.
+              Izvēlies veidu un periodu. Veids <strong>Cits (ar saskaņojumu)</strong> nozīmē obligātu e-pasta
+              saskaņošanu — pieprasījums un saite tiek nosūtīta uz <strong>${notifyEmail}</strong>, nevis uzreiz
+              parastajā „gaida akceptu” kārtībā.
             </p>
             <form class="stack" onSubmit=${handleSubmit}>
               <div class="field">
@@ -914,7 +1011,7 @@
                   onChange=${(ev) => setTypeId(ev.target.value)}
                 >
                   <option value="">Izvēlies veidu</option>
-                  ${typeOptions.map(
+                  ${types.map(
                     (t) => html`
                       <option key=${t.id} value=${t.id}>${t.name}</option>
                     `
@@ -956,7 +1053,7 @@
                 />
               </div>
               <button type="submit" class="btn btn-primary" disabled=${busy}>
-                ${busy ? "Sūta…" : "Nosūtīt saskaņošanai"}
+                ${busy ? "Sūta…" : "Iesniegt"}
               </button>
             </form>
           </div>
@@ -993,28 +1090,49 @@
         `;
       }
 
-      function DeputyDelegePanel({ teamUsers, deputyUserId, onDeputyChange, currentUserId }) {
-        const [sel, setSel] = useState(deputyUserId ? String(deputyUserId) : "");
+      function DeputyDelegePanel({
+        teamUsers,
+        deputyUserId,
+        deputyValidFrom,
+        deputyValidTo,
+        onDeputyChange,
+        currentUserId,
+      }) {
+        const [sel, setSel] = useState(() => (deputyUserId ? String(deputyUserId) : DEPUTY_OPT_MANAGER));
+        const [periodFrom, setPeriodFrom] = useState(deputyValidFrom ?? "");
+        const [periodTo, setPeriodTo] = useState(deputyValidTo ?? "");
         const [busy, setBusy] = useState(false);
         const [msg, setMsg] = useState(null);
         useEffect(() => {
-          setSel(deputyUserId ? String(deputyUserId) : "");
-        }, [deputyUserId]);
-        async function persist(nextId) {
+          setSel(deputyUserId ? String(deputyUserId) : DEPUTY_OPT_MANAGER);
+          setPeriodFrom(deputyValidFrom ?? "");
+          setPeriodTo(deputyValidTo ?? "");
+        }, [deputyUserId, deputyValidFrom, deputyValidTo]);
+        async function persist(nextId, fromStr, toStr) {
           setBusy(true);
           setMsg(null);
           try {
             if (isLocalMode()) {
               if (nextId) localStorage.setItem(LS_LOCAL_DEPUTY_USER_ID, nextId);
               else localStorage.removeItem(LS_LOCAL_DEPUTY_USER_ID);
+              if (fromStr) localStorage.setItem(LS_LOCAL_DEPUTY_FROM, fromStr);
+              else localStorage.removeItem(LS_LOCAL_DEPUTY_FROM);
+              if (toStr) localStorage.setItem(LS_LOCAL_DEPUTY_TO, toStr);
+              else localStorage.removeItem(LS_LOCAL_DEPUTY_TO);
               await onDeputyChange();
-              setMsg(nextId ? "P.i. saglabāts (vietējais režīms)." : "P.i. atcelts (vietējais režīms).");
+              setMsg(
+                nextId
+                  ? "P.i. un periods saglabāti (vietējais režīms)."
+                  : "Atiestatīts uz pamatvadītāju (vietējais režīms)."
+              );
               return;
             }
             const { error } = await supabase
               .from("pdd_deputy_state")
               .update({
                 deputy_user_id: nextId,
+                deputy_valid_from: fromStr || null,
+                deputy_valid_to: toStr || null,
                 updated_by: currentUserId,
                 updated_at: new Date().toISOString(),
               })
@@ -1026,8 +1144,8 @@
             await onDeputyChange();
             setMsg(
               nextId
-                ? "P.i. saglabāts — „Cits (saskaņots)” un apstiprinājumi iet uz izvēlētā e-pastu."
-                : "P.i. atcelts — funkcijas atgrieztas pamatvadītājam."
+                ? "P.i. saglabāts — apstiprinājumi un „Cits (ar saskaņojumu)” uz izvēlētā e-pastu norādītajā periodā."
+                : "Atiestatīts uz pamatvadītāju."
             );
           } finally {
             setBusy(false);
@@ -1035,17 +1153,28 @@
         }
         async function saveForm(e) {
           e.preventDefault();
-          await persist(sel || null);
+          const isMgrOpt = sel === DEPUTY_OPT_MANAGER;
+          const nextId = isMgrOpt ? null : sel;
+          const fromStr = isMgrOpt ? "" : periodFrom.trim();
+          const toStr = isMgrOpt ? "" : periodTo.trim();
+          if (!isMgrOpt && fromStr && toStr && fromStr > toStr) {
+            alert("Datums „no” nevar būt pēc „līdz”.");
+            return;
+          }
+          await persist(nextId, fromStr, toStr);
         }
-        async function cancelDeputy() {
-          setSel("");
-          await persist(null);
+        async function resetToManager() {
+          setSel(DEPUTY_OPT_MANAGER);
+          setPeriodFrom("");
+          setPeriodTo("");
+          await persist(null, "", "");
         }
         return html`
           <div class="list-panel" style=${{ marginTop: "0.85rem" }}>
             <h3 style=${{ margin: "0 0 0.5rem", fontSize: "0.95rem" }}>Vadītāja pienākumu izpildītājs (p.i.)</h3>
             <p style=${{ margin: "0 0 0.65rem", fontSize: "0.8rem", color: "var(--muted)" }}>
-              Izvēlies personu no saraksta. Apstiprināšanu drīkst vadītājs vai saglabātais p.i.
+              Pirmais punkts — pamatvadītājs; tad personas no <code>users</code>. Norādi periodu, kad p.i. ir tiesīgs
+              apstiprināt. Tukši perioda lauki (izvēlētai personai) — bez datuma ierobežojuma.
             </p>
             <form class="stack" onSubmit=${saveForm}>
               <div class="field">
@@ -1056,7 +1185,9 @@
                   value=${sel}
                   onChange=${(ev) => setSel(ev.target.value)}
                 >
-                  <option value="">Nav p.i. — ${DEFAULT_MANAGER_EMAIL}</option>
+                  <option value=${DEPUTY_OPT_MANAGER}>
+                    Vadītājs — ${DEFAULT_MANAGER_NAME} (${DEFAULT_MANAGER_EMAIL})
+                  </option>
                   ${teamUsers.map(
                     (u) => html`
                       <option key=${u.id} value=${u.id}>
@@ -1066,142 +1197,40 @@
                   )}
                 </select>
               </div>
+              <div class="row" style=${{ gap: "0.75rem" }}>
+                <div class="field" style=${{ flex: "1 1 140px" }}>
+                  <label for="dep-from">p.i. periods no</label>
+                  <input
+                    id="dep-from"
+                    type="date"
+                    class="input"
+                    disabled=${sel === DEPUTY_OPT_MANAGER}
+                    value=${periodFrom}
+                    onChange=${(ev) => setPeriodFrom(ev.target.value)}
+                  />
+                </div>
+                <div class="field" style=${{ flex: "1 1 140px" }}>
+                  <label for="dep-to">līdz</label>
+                  <input
+                    id="dep-to"
+                    type="date"
+                    class="input"
+                    disabled=${sel === DEPUTY_OPT_MANAGER}
+                    value=${periodTo}
+                    onChange=${(ev) => setPeriodTo(ev.target.value)}
+                  />
+                </div>
+              </div>
               <div class="row">
                 <button type="submit" class="btn btn-primary btn-small" disabled=${busy}>
-                  ${busy ? "…" : "Saglabāt p.i."}
+                  ${busy ? "…" : "Saglabāt"}
                 </button>
-                <button type="button" class="btn btn-danger btn-small" disabled=${busy} onClick=${cancelDeputy}>
-                  Atcelt p.i.
+                <button type="button" class="btn btn-ghost btn-small" disabled=${busy} onClick=${resetToManager}>
+                  Atiestatīt uz vadītāju
                 </button>
               </div>
             </form>
             ${msg ? html`<p style=${{ margin: "0.35rem 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>${msg}</p>` : null}
-          </div>
-        `;
-      }
-
-      function CitsSaskanotsForm({ userId, onCreated, notifyEmail }) {
-        const [startDate, setStartDate] = useState("");
-        const [endDate, setEndDate] = useState("");
-        const [comment, setComment] = useState("");
-        const [busy, setBusy] = useState(false);
-        async function submit(e) {
-          e.preventDefault();
-          const to = notifyEmail;
-          if (!to || !String(to).includes("@")) {
-            alert("Nav derīga e-pasta adrese apstiprinātājam (pārbaudi p.i. vai public.users e-pastu).");
-            return;
-          }
-          setBusy(true);
-          try {
-            if (isLocalMode()) {
-              const token = crypto.randomUUID();
-              const rows = getLocalCitsRequests();
-              rows.push({
-                id: crypto.randomUUID(),
-                user_id: userId,
-                start_date: startDate,
-                end_date: endDate,
-                comment: comment.trim() || null,
-                notify_email: to,
-                approval_token: token,
-                status: "pending_manager",
-                created_at: new Date().toISOString(),
-              });
-              setLocalCitsRequests(rows);
-              const base = window.location.href.split("?")[0];
-              const link = `${base}?cits=${token}`;
-              alert(
-                "Vietējā režīmā e-pasts netiek nosūtīts. Nosūti vadītājam saiti manuāli:\n\n" + link
-              );
-              setStartDate("");
-              setEndDate("");
-              setComment("");
-              onCreated();
-              return;
-            }
-            const { data: ins, error: insErr } = await supabase
-              .from("pdd_cits_requests")
-              .insert({
-                user_id: userId,
-                start_date: startDate,
-                end_date: endDate,
-                comment: comment.trim() || null,
-                notify_email: to,
-              })
-              .select("id")
-              .single();
-            if (insErr) {
-              alert(insErr.message);
-              return;
-            }
-            const appBase = window.location.href.split("?")[0];
-            const { data: fnData, error: fnErr } = await supabase.functions.invoke("notify-cits-manager", {
-              body: { request_id: ins.id, app_base_url: appBase },
-            });
-            if (fnErr) {
-              console.error(fnErr);
-              alert(
-                "Pieteikums saglabāts, bet e-pasta funkcija nav pieejama (pārbaudi Edge Function „notify-cits-manager”)."
-              );
-            } else if (fnData?.skipped) {
-              alert(fnData.message || "E-pasts nav nosūtīts — skatīt konsoli.");
-            } else if (fnData?.link) {
-              alert("Nosūtīts uz " + to + ". Saite arī: " + fnData.link);
-            }
-            setStartDate("");
-            setEndDate("");
-            setComment("");
-            onCreated();
-          } finally {
-            setBusy(false);
-          }
-        }
-        return html`
-          <div class="list-panel" style=${{ marginTop: "0.85rem" }}>
-            <h2>Cits (saskaņots) — īpašais ceļš</h2>
-            <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
-              Pieprasījums un saite uz apstiprināšanu tiek sūtīta uz <strong>${notifyEmail}</strong>.
-            </p>
-            <form class="stack" onSubmit=${submit}>
-              <div class="row" style=${{ gap: "0.75rem" }}>
-                <div class="field" style=${{ flex: "1 1 140px" }}>
-                  <label for="cstart">No</label>
-                  <input
-                    id="cstart"
-                    type="date"
-                    class="input"
-                    required
-                    value=${startDate}
-                    onChange=${(ev) => setStartDate(ev.target.value)}
-                  />
-                </div>
-                <div class="field" style=${{ flex: "1 1 140px" }}>
-                  <label for="cend">Līdz</label>
-                  <input
-                    id="cend"
-                    type="date"
-                    class="input"
-                    required
-                    value=${endDate}
-                    onChange=${(ev) => setEndDate(ev.target.value)}
-                  />
-                </div>
-              </div>
-              <div class="field">
-                <label for="ccom">Komentārs</label>
-                <textarea
-                  id="ccom"
-                  class="textarea"
-                  value=${comment}
-                  onChange=${(ev) => setComment(ev.target.value)}
-                  placeholder="Piemēram, iemesls"
-                />
-              </div>
-              <button type="submit" class="btn btn-primary" disabled=${busy}>
-                ${busy ? "Sūta…" : "Sūtīt vadītājam"}
-              </button>
-            </form>
           </div>
         `;
       }
@@ -1222,13 +1251,18 @@
           setDeputyLoaded(false);
           supabase
             .from("pdd_deputy_state")
-            .select("deputy_user_id")
+            .select("deputy_user_id, deputy_valid_from, deputy_valid_to")
             .eq("id", 1)
             .maybeSingle()
             .then(({ data, error }) => {
               if (cancelled) return;
               if (error) console.error(error);
-              setDeputyUserId(data?.deputy_user_id ?? null);
+              const eff = effectiveDeputyUserId(
+                data?.deputy_user_id ?? null,
+                data?.deputy_valid_from ?? null,
+                data?.deputy_valid_to ?? null
+              );
+              setDeputyUserId(eff);
               setDeputyLoaded(true);
             });
           return () => {
@@ -1304,7 +1338,7 @@
               const types = getLocalTypes();
               const cits = types.find((t) => isCitsSaskanotsTypeName(t.name));
               if (!cits) {
-                setErr("Nav veida „Cits (saskaņots)” lokālajos datos.");
+                setErr("Nav veida „Cits (ar saskaņojumu)” lokālajos datos.");
                 return;
               }
               const abs = getLocalAbsences();
@@ -1342,7 +1376,7 @@
         }
         return html`
           <div class="auth-box" style=${{ maxWidth: "480px" }}>
-            <h1 style=${{ fontSize: "1.15rem" }}>„Cits (saskaņots)” — apstiprinājums</h1>
+            <h1 style=${{ fontSize: "1.15rem" }}>„Cits (ar saskaņojumu)” — apstiprinājums</h1>
             ${err
               ? html`<p style=${{ color: "#f87171" }}>${err}</p>`
               : !preview
@@ -1714,6 +1748,8 @@
         const [typesList, setTypesList] = useState([]);
         const [teamUsers, setTeamUsers] = useState([]);
         const [deputyUserId, setDeputyUserId] = useState(null);
+        const [deputyValidFrom, setDeputyValidFrom] = useState(null);
+        const [deputyValidTo, setDeputyValidTo] = useState(null);
         const [error, setError] = useState(null);
         useEffect(() => {
           if (isLocalMode()) {
@@ -1739,6 +1775,8 @@
               },
             ]);
             setDeputyUserId(localStorage.getItem(LS_LOCAL_DEPUTY_USER_ID) || null);
+            setDeputyValidFrom(localStorage.getItem(LS_LOCAL_DEPUTY_FROM) || null);
+            setDeputyValidTo(localStorage.getItem(LS_LOCAL_DEPUTY_TO) || null);
             return;
           }
           const { data: urows, error: uErr } = await supabase
@@ -1749,23 +1787,29 @@
           setTeamUsers(urows ?? []);
           const { data: drow, error: dErr } = await supabase
             .from("pdd_deputy_state")
-            .select("deputy_user_id")
+            .select("deputy_user_id, deputy_valid_from, deputy_valid_to")
             .eq("id", 1)
             .maybeSingle();
           if (dErr) console.error(dErr);
           setDeputyUserId(drow?.deputy_user_id ?? null);
+          setDeputyValidFrom(drow?.deputy_valid_from ?? null);
+          setDeputyValidTo(drow?.deputy_valid_to ?? null);
         }, []);
         useEffect(() => {
           void loadTeamAndDeputy();
         }, [loadTeamAndDeputy]);
+        const deputyEffectiveId = useMemo(
+          () => effectiveDeputyUserId(deputyUserId, deputyValidFrom, deputyValidTo),
+          [deputyUserId, deputyValidFrom, deputyValidTo]
+        );
         const notifyEmail = useMemo(
-          () => resolveNotifyEmail(teamUsers, deputyUserId),
-          [teamUsers, deputyUserId]
+          () => resolveNotifyEmail(teamUsers, deputyEffectiveId),
+          [teamUsers, deputyEffectiveId]
         );
         const deputyDisplayName = useMemo(() => {
-          if (!deputyUserId || !teamUsers.length) return null;
-          return teamUsers.find((u) => String(u.id) === String(deputyUserId))?.full_name ?? null;
-        }, [deputyUserId, teamUsers]);
+          if (!deputyEffectiveId || !teamUsers.length) return null;
+          return teamUsers.find((u) => String(u.id) === String(deputyEffectiveId))?.full_name ?? null;
+        }, [deputyEffectiveId, teamUsers]);
         const refresh = useCallback(async () => {
           setError(null);
           if (isLocalMode()) {
@@ -1803,7 +1847,7 @@
           void refresh();
         }, [refresh]);
         const isManager = role === "manager" || role === "admin";
-        const canApprove = userCanApproveAbsences(role, userId, deputyUserId);
+        const canApprove = userCanApproveAbsences(role, userId, deputyEffectiveId);
         return html`
           <section class="stack" style=${{ gap: "1.25rem" }}>
             <div class="row" style=${{ justifyContent: "space-between", alignItems: "center" }}>
@@ -1813,12 +1857,17 @@
               </div>
               <button type="button" class="btn btn-ghost" onClick=${onBack}>← Atpakaļ uz moduļiem</button>
             </div>
-            ${deputyUserId
+            ${deputyEffectiveId
               ? html`
                   <div class="banner-deputy" role="status">
-                    <strong>Uzmanību:</strong> šobrīd vadītāja pienākumu izpildītājs (p.i.) ir
-                    <strong> ${deputyDisplayName ?? "izvēlēta persona"}</strong>. Apstiprinājumi un „Cits
-                    (saskaņots)” paziņojumi tiek sūtīti uz <strong>${notifyEmail}</strong>.
+                    <strong>Uzmanību:</strong> šobrīd aktīvs p.i. ir
+                    <strong> ${deputyDisplayName ?? "izvēlēta persona"}</strong>.
+                    ${deputyValidFrom || deputyValidTo
+                      ? html`<span>
+                          Periods: <strong>${deputyValidFrom ?? "—"}</strong> — <strong>${deputyValidTo ?? "—"}</strong>.
+                        </span>`
+                      : null}
+                    Apstiprinājumi un „Cits (ar saskaņojumu)” uz <strong>${notifyEmail}</strong>.
                   </div>
                 `
               : null}
@@ -1829,26 +1878,29 @@
               : null}
             <${TeamUsersList} users=${teamUsers} />
             <div class="prombutnes-grid">
-              <${AbsenceCalendar} month=${month} onMonthChange=${setMonth} absences=${absences} />
+              <${AbsenceCalendar}
+                month=${month}
+                onMonthChange=${setMonth}
+                absences=${absences}
+                caption="Komandas kalendārs: redzami visu lietotāju ieraksti. Uz krāsainā lauka novieto kursoru, lai redzētu vārdu, veidu, statusu un komentāru."
+              />
               <div class="stack" style=${{ gap: "0.85rem" }}>
                 <${AbsenceRequestForm}
                   userId=${userId}
                   role=${role}
                   onCreated=${() => void refresh()}
+                  notifyEmail=${notifyEmail}
                 />
                 ${isManager
                   ? html`<${DeputyDelegePanel}
                       teamUsers=${teamUsers}
                       deputyUserId=${deputyUserId}
+                      deputyValidFrom=${deputyValidFrom}
+                      deputyValidTo=${deputyValidTo}
                       onDeputyChange=${loadTeamAndDeputy}
                       currentUserId=${userId}
                     />`
                   : null}
-                <${CitsSaskanotsForm}
-                  userId=${userId}
-                  onCreated=${() => void refresh()}
-                  notifyEmail=${notifyEmail}
-                />
               </div>
             </div>
             ${canApprove ? html`<${ManagerApprovals} currentUserId=${userId} onChanged=${() => void refresh()} />` : null}
@@ -1917,7 +1969,7 @@
                 <div class="app-shell">
                   ${title}
                   <div class="banner-warn" role="alert" style=${{ marginBottom: "1rem", fontSize: "0.9rem" }}>
-                    Lai apstiprinātu „Cits (saskaņots)”, ielogojies. Apstiprināt drīkst tikai vadītājs,
+                    Lai apstiprinātu „Cits (ar saskaņojumu)”, ielogojies. Apstiprināt drīkst tikai vadītājs,
                     administrators vai aktuālais p.i.
                   </div>
                   <${AuthScreen} />

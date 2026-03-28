@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
 
     const html = `
       <p>Sveiki,</p>
-      <p><strong>${employee}</strong> pieprasa prombūtni ar veidu <strong>Cits (saskaņots)</strong>.</p>
+      <p><strong>${employee}</strong> pieprasa prombūtni ar veidu <strong>Cits (ar saskaņojumu)</strong>.</p>
       <p>Periods: <strong>${row.start_date}</strong> — <strong>${row.end_date}</strong></p>
       ${row.comment ? `<p>Komentārs: ${String(row.comment).replace(/</g, "&lt;")}</p>` : ""}
       <p><a href="${link}">Atvērt apstiprināšanu PDD lapā</a></p>
@@ -115,7 +115,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         from,
         to: [row.notify_email],
-        subject: `PDD: Cits (saskaņots) — ${employee} (${row.start_date}–${row.end_date})`,
+        subject: `PDD: Cits (ar saskaņojumu) — ${employee} (${row.start_date}–${row.end_date})`,
         html,
       }),
     });
