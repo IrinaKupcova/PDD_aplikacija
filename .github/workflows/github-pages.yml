@@ -33,13 +33,13 @@ jobs:
           const key = process.env.SUPA_KEY || "";
           if (url) {
             h = h.replace(
-              'const FILE_SUPABASE_URL = "https://YOUR_PROJECT.supabase.co";',
+              /const FILE_SUPABASE_URL = "https:\/\/[^"]+";/,
               "const FILE_SUPABASE_URL = " + JSON.stringify(url) + ";"
             );
           }
           if (key) {
             h = h.replace(
-              'const FILE_SUPABASE_ANON_KEY = "YOUR_ANON_KEY";',
+              /const FILE_SUPABASE_ANON_KEY = "[^"]*";/,
               "const FILE_SUPABASE_ANON_KEY = " + JSON.stringify(key) + ";"
             );
           }

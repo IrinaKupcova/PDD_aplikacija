@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="PDD — Pakalpojumu dizaina daļa; prombūtnes, Supabase" />
+    <meta name="description" content="PDD — Pakalpojumu dizaina daļa; prombūtnes un darba plānošana" />
     <title>PDD aplikācija</title>
     <!--
       BEZ SERVERA: atver šo failu pārlūkā (file:///…) vai kopē uz jebkuru tīmekļa vietu.
-      1) Noklusējums: uzreiz atvērts skats (<code>TIKAI_VIENKARSI_SKATS = true</code>). Ieslēgt Supabase: iestatīt false un aizpildīt API.
+      1) Tiešsaistei: <code>TIKAI_VIENKARSI_SKATS = false</code> un projekta URL + publiskā atslēga failā. Vietējā parole: <code>LocalPasswordScreen</code>. Ātra demo: <code>TIKAI_VIENKARSI_SKATS = true</code>.
       2) Palaižot no file:// dažās vecākās sistēmās bloķē trešo pušu moduļus — tad lieto
          to pašu failu caur https (piem. GitHub Pages) vai pārlūka iestatījumos atļauj file piekļuvi.
     -->
@@ -225,12 +225,17 @@
       const LS_LOCAL_NAME = "pdd_local_display_name";
       const LS_ABS = "pdd_local_absences";
       const LS_TYPES = "pdd_local_types";
+      const LS_LOCAL_CITS = "pdd_local_cits_requests";
+      const LS_MANAGER_EMAIL = "pdd_manager_notify_email";
+      const LS_ACTING_NAME = "pdd_acting_manager_name";
+      const LS_ACTING_EMAIL = "pdd_acting_manager_email";
+      const DEFAULT_MANAGER_EMAIL = "katrina.jirgensone@vid.gov.lv";
 
-      /** true: tūlīt moduļu skats — bez API, paroles un ielogošanās. false: Supabase vai lokālā parole. */
-      const TIKAI_VIENKARSI_SKATS = true;
+      /** true: tūlīt moduļu skats. false: tiešsaistes konts (URL+atslēga failā) vai lokālā parole. */
+      const TIKAI_VIENKARSI_SKATS = false;
 
-      // Supabase (vēlāk): ja abi aizpildīti un TIKAI_VIENKARSI_SKATS = false, lieto mākoni.
-      const FILE_SUPABASE_URL = "https://YOUR_PROJECT.supabase.co";
+      // Publisko atslēgu kopē: Supabase Dashboard → Project Settings → API → anon public (ne service_role).
+      const FILE_SUPABASE_URL = "https://fdnkvecgqetmwilwolgt.supabase.co";
       const FILE_SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
 
       const LS_URL = "pdd_supabase_url";
@@ -246,19 +251,96 @@
         return { url, key };
       }
 
+      function normalizeProjectUrl(url) {
+        return String(url || "")
+          .trim()
+          .replace(/\/+$/, "");
+      }
+
+      /** Projekta adrese: https://xxxx.supabase.co (bez liekām slīpsvītrām beigās). */
+      function isValidSupabaseProjectUrl(url) {
+        const u = normalizeProjectUrl(url);
+        return /^https:\/\/[a-z0-9][a-z0-9-]*\.supabase\.co$/i.test(u);
+      }
+
+      /** Publiskā (anon) JWT atslēga — parasti gara, sākas ar eyJ, trīs segmenti. */
+      function isValidSupabaseAnonKey(key) {
+        const k = String(key || "").trim().replace(/\s+/g, "");
+        if (k.length < 80 || !k.startsWith("eyJ")) return false;
+        const parts = k.split(".");
+        return parts.length === 3 && parts[0].length > 0 && parts[1].length > 0 && parts[2].length > 0;
+      }
+
       function configured() {
         if (TIKAI_VIENKARSI_SKATS) return false;
         const { url, key } = loadConfig();
-        return (
-          Boolean(url && key) &&
-          !String(url).includes("YOUR_PROJECT") &&
-          !String(key).includes("YOUR_ANON")
-        );
+        const u = String(url || "");
+        const k = String(key || "");
+        if (!u || !k) return false;
+        if (u.includes("YOUR_PROJECT") || k.includes("YOUR_ANON")) return false;
+        if (!isValidSupabaseProjectUrl(u)) return false;
+        if (!isValidSupabaseAnonKey(k)) return false;
+        return true;
       }
 
       const html = htm.bind(React.createElement);
       const __cfg = loadConfig();
-      const supabase = configured() ? createClient(__cfg.url, __cfg.key) : null;
+      const supabase = configured()
+        ? createClient(normalizeProjectUrl(__cfg.url), String(__cfg.key).trim().replace(/\s+/g, ""))
+        : null;
+
+      function readCitsTokenFromUrl() {
+        try {
+          return new URL(window.location.href).searchParams.get("cits") || "";
+        } catch {
+          return "";
+        }
+      }
+
+      function stripCitsFromUrl() {
+        try {
+          const u = new URL(window.location.href);
+          u.searchParams.delete("cits");
+          window.history.replaceState({}, "", u.pathname + u.search + u.hash);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      function isCitsSaskanotsTypeName(name) {
+        return /cits\s*\(\s*saskaņots\s*\)/i.test(String(name || ""));
+      }
+
+      async function fetchAbsenceFormUsers(supabaseClient, options) {
+        const { localMode, localUser } = options;
+        if (localMode) return localUser ? [localUser] : [];
+        if (!supabaseClient) return [];
+        const r = await supabaseClient
+          .from("users")
+          .select("id, full_name")
+          .order("full_name", { ascending: true });
+        if (r.error) {
+          console.error(r.error);
+          return [];
+        }
+        return r.data ?? [];
+      }
+
+      function getLocalCitsRequests() {
+        return JSON.parse(localStorage.getItem(LS_LOCAL_CITS) || "[]");
+      }
+
+      function setLocalCitsRequests(rows) {
+        localStorage.setItem(LS_LOCAL_CITS, JSON.stringify(rows));
+      }
+
+      function effectiveManagerEmail() {
+        const acting = localStorage.getItem(LS_ACTING_EMAIL);
+        if (acting && acting.includes("@")) return acting.trim();
+        const saved = localStorage.getItem(LS_MANAGER_EMAIL);
+        if (saved && saved.includes("@")) return saved.trim();
+        return DEFAULT_MANAGER_EMAIL;
+      }
 
       function isLocalMode() {
         return !configured();
@@ -320,7 +402,7 @@
         return html`
           <div class="auth-box" style=${{ maxWidth: "420px" }}>
             <h1>PDD — ieeja</h1>
-            <p class="app-sub">Pagaidu režīms: dati tikai šajā pārlūkā, bez Supabase.</p>
+            <p class="app-sub">Pagaidu režīms: dati tikai šajā pārlūkā.</p>
             <form class="stack" onSubmit=${submit}>
               <div class="field">
                 <label for="loc-name">Vārds (kalendāram)</label>
@@ -353,12 +435,14 @@
               Noklusējuma parole ir <code>pdd</code> — nomaini to konstantē
               <code>PAGAIDU_PAROLE</code> šajā HTML.
             </p>
-            <details style=${{ marginTop: "1rem", fontSize: "0.85rem", color: "var(--muted)" }}>
-              <summary style=${{ cursor: "pointer" }}>Supabase (vēlāk, ar API)</summary>
+            <details style=${{ marginTop: "0.85rem", fontSize: "0.8rem", color: "var(--muted)" }}>
+              <summary style=${{ cursor: "pointer" }}>Problēmas ar tiešsaistes pieslēgšanos?</summary>
               <p style=${{ marginTop: "0.5rem" }}>
-                Kad būs gatavs: ieraksti šajā HTML <code>FILE_SUPABASE_URL</code> un
-                <code>FILE_SUPABASE_ANON_KEY</code>, vai GitHub Secrets + Pages. SQL:
-                <code>supabase/migrations/…</code>
+                Ja iepriekš saglabāta nepareiza projekta adrese vai atslēga, atver pārlūka izstrādātāja rīkus
+                (F12) → Application → Local Storage, dzēs ierakstus
+                <code>pdd_supabase_url</code> un <code>pdd_supabase_anon_key</code>, tad pārlādē lapu. Pēc tam
+                jābūt derīgai adresei <code>https://…supabase.co</code> un garai publiskajai atslēgai lapas
+                konfigurācijā vai GitHub izvietošanā.
               </p>
             </details>
           </div>
@@ -429,7 +513,7 @@
           let cancelled = false;
           setLoading(true);
           supabase
-            .from("profiles")
+            .from("users")
             .select("*")
             .eq("id", userId)
             .maybeSingle()
@@ -447,50 +531,77 @@
         return { profile, loading };
       }
 
-      function formatSupabaseAuthError(raw) {
-        const m = raw ? String(raw) : "";
-        if (!m) return m;
-        if (/invalid api key|invalid jwt|jwt (is )?invalid|malformed|apikey|401/i.test(m)) {
+      /** Lietotājam — īsas ziņas latviski; tehniskās detaļas tikai konsolē ([auth]). */
+      function authUserMessage(raw) {
+        const m = raw ? String(raw).toLowerCase() : "";
+        if (/signups not allowed|signup.*disabled|email signups.*disabled/i.test(m)) {
+          console.error("[auth]", raw);
+          return "Jaunu kontu reģistrācija šajā vidē ir izslēgta. Izmanto „Ieiet”, ja konts jau izveidots, vai sazinies ar administratoru.";
+        }
+        if (
+          /invalid api key|invalid api|invalid jwt|jwt expired|malformed|apikey|401|403 forbidden|failed to fetch|network|load failed|err_network/i.test(
+            m
+          )
+        ) {
+          console.error("[auth]", raw);
           return (
-            m +
-            " — Pārbaudi Supabase → Project Settings → API: 1) Project URL kā https://xxxx.supabase.co, 2) zem Project API keys kopē " +
-            "tieši anon public atslēgu (garš teksts, sākas ar eyJ…), ne service_role slepeno atslēgu, " +
-            "3) URL un atslēga no viena projekta, bez liekām atstarpēm. Ja testē no file://, pamēģini to pašu lapu caur HTTPS (GitHub Pages)."
+            "Neizdevās savienoties ar datu serveri. Mēģini vēlāk vai ziņo administratoram. " +
+            "Ja uzturi lapu: pārlūkā atver izstrādātāja rīkus (F12) → Console — tur ir ieraksts [auth]; bieži vaina ir nepareizā publiskajā atslēgā, citā projekta adresē, pauzētā projektā vai nepareizā vietnes adresē e-pasta apstiprinājumam."
           );
         }
-        return m;
+        if (/invalid login|invalid credentials|wrong password|email not confirmed|email address not confirmed/i.test(m)) {
+          if (/email not confirmed|not confirmed/i.test(m)) {
+            return "Lūdzu vispirms apstiprini e-pastu — atver vēstuli un spied uz saites, tad mēģini ielogoties.";
+          }
+          return "Nepareizs e-pasts vai parole, vai konts vēl nav apstiprināts.";
+        }
+        if (/user already registered|already been registered|already exists/i.test(m)) {
+          return "Šim e-pastam konts jau pastāv. Izmanto „Ieiet”.";
+        }
+        if (/password|weak|least.*6|6 characters/i.test(m)) {
+          return "Parolei jābūt vismaz 6 rakstzīmēm.";
+        }
+        if (/rate limit|too many requests/i.test(m)) {
+          return "Pārāk daudz mēģinājumu. Uzgaidi brīdi un mēģini vēlreiz.";
+        }
+        console.warn("[auth]", raw);
+        return "Neizdevās. Mēģini vēlreiz.";
       }
 
       function AuthScreen() {
         const [mode, setMode] = useState("signin");
         const [email, setEmail] = useState("");
         const [password, setPassword] = useState("");
-        const [fullName, setFullName] = useState("");
         const [busy, setBusy] = useState(false);
         const [message, setMessage] = useState(null);
         async function onSubmit(e) {
           e.preventDefault();
           setMessage(null);
           if (!supabase) {
-            setMessage("Supabase nav pieejams.");
+            setMessage("Pieteikšanās šobrīd nav pieejama.");
             return;
           }
           setBusy(true);
           try {
             if (mode === "signup") {
               const { error } = await supabase.auth.signUp({
-                email,
+                email: email.trim(),
                 password,
-                options: { data: { full_name: fullName || email.split("@")[0] } },
+                options: {
+                  emailRedirectTo: window.location.origin + window.location.pathname,
+                },
               });
-              if (error) setMessage(formatSupabaseAuthError(error.message));
+              if (error) setMessage(authUserMessage(error.message));
               else
                 setMessage(
-                  "Konts izveidots. Ja ir ieslēgta e-pasta apstiprināšana, pārbaudi pastkasti."
+                  "Uz tavu e-pastu nosūtīta apstiprināšanas saite. Atver vēstuli, apstiprini e-pastu, pēc tam šeit spied „Ieiet” ar to pašu e-pastu un paroli."
                 );
             } else {
-              const { error } = await supabase.auth.signInWithPassword({ email, password });
-              if (error) setMessage(formatSupabaseAuthError(error.message));
+              const { error } = await supabase.auth.signInWithPassword({
+                email: email.trim(),
+                password,
+              });
+              if (error) setMessage(authUserMessage(error.message));
             }
           } finally {
             setBusy(false);
@@ -499,6 +610,10 @@
         return html`
           <div class="auth-box">
             <h1>PDD — Pieslēgšanās</h1>
+            <p style=${{ margin: "0 0 1rem", fontSize: "0.88rem", color: "var(--muted)" }}>
+              Tikai <strong>e-pasts</strong> un <strong>parole</strong>. Reģistrējoties vispirms
+              apstiprini e-pastu, tad ielogojies.
+            </p>
             <div class="row" style=${{ marginBottom: "1rem" }}>
               <button
                 type="button"
@@ -516,20 +631,6 @@
               </button>
             </div>
             <form class="stack" onSubmit=${onSubmit}>
-              ${mode === "signup"
-                ? html`
-                    <div class="field">
-                      <label for="name">Vārds, uzvārds</label>
-                      <input
-                        id="name"
-                        class="input"
-                        value=${fullName}
-                        onChange=${(ev) => setFullName(ev.target.value)}
-                        autoComplete="name"
-                      />
-                    </div>
-                  `
-                : null}
               <div class="field">
                 <label for="email">E-pasts</label>
                 <input
@@ -550,14 +651,12 @@
                   class="input"
                   required
                   minLength=${6}
-                  title="Parolei jābūt vismaz 6 rakstzīmēm garai (īsākas Supabase nepieņem)."
+                  title="Vismaz 6 rakstzīmes"
                   value=${password}
                   onChange=${(ev) => setPassword(ev.target.value)}
                   autoComplete=${mode === "signup" ? "new-password" : "current-password"}
                 />
-                <span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                  Vismaz 6 rakstzīmes — īsāku nevar (pārlūka un Supabase prasība).
-                </span>
+                <span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}>Vismaz 6 rakstzīmes.</span>
               </div>
               <button type="submit" class="btn btn-primary" disabled=${busy}>
                 ${busy ? "…" : mode === "signup" ? "Izveidot kontu" : "Ieiet"}
@@ -566,18 +665,6 @@
             ${message
               ? html`<p style=${{ marginTop: "1rem", color: "var(--muted)", whiteSpace: "pre-wrap" }}>${message}</p>`
               : null}
-            <p
-              style=${{
-                marginTop: "1rem",
-                fontSize: "0.78rem",
-                color: "var(--muted)",
-                borderTop: "1px solid var(--border)",
-                paddingTop: "0.75rem",
-              }}
-            >
-              Atslēgas vieta: Supabase Studio → tavs projekts →
-              <strong> Project Settings → API</strong>.
-            </p>
           </div>
         `;
       }
@@ -670,13 +757,17 @@
         `;
       }
 
-      function AbsenceRequestForm({ userId, onCreated }) {
+      function AbsenceRequestForm({ userId, role, onCreated }) {
         const [types, setTypes] = useState([]);
         const [typeId, setTypeId] = useState("");
         const [startDate, setStartDate] = useState("");
         const [endDate, setEndDate] = useState("");
         const [comment, setComment] = useState("");
         const [busy, setBusy] = useState(false);
+        const [users, setUsers] = useState([]);
+        const [selectedUserId, setSelectedUserId] = useState("");
+        const isManager = role === "manager" || role === "admin";
+        const typeOptions = types.filter((t) => !isCitsSaskanotsTypeName(t.name));
         useEffect(() => {
           if (isLocalMode()) {
             setTypes(getLocalTypes());
@@ -691,16 +782,41 @@
               setTypes(data ?? []);
             });
         }, []);
+        useEffect(() => {
+          let cancelled = false;
+          (async () => {
+            const list = await fetchAbsenceFormUsers(supabase, {
+              localMode: isLocalMode(),
+              localUser: { id: userId, full_name: localDisplayName() },
+            });
+            if (cancelled) return;
+            if (isManager) {
+              setUsers(list);
+            } else {
+              const self = list.find((u) => String(u.id) === String(userId));
+              setUsers(self ? [self] : [{ id: userId, full_name: localDisplayName() }]);
+            }
+            const pick =
+              list.find((u) => String(u.id) === String(userId))?.id ?? list[0]?.id ?? "";
+            setSelectedUserId((prev) => {
+              if (isManager && prev && list.some((u) => String(u.id) === String(prev))) return prev;
+              return pick;
+            });
+          })();
+          return () => {
+            cancelled = true;
+          };
+        }, [userId, isManager]);
         async function handleSubmit(e) {
           e.preventDefault();
-          if (!typeId) return;
+          if (!typeId || !selectedUserId) return;
           setBusy(true);
           try {
             if (isLocalMode()) {
               const rows = getLocalAbsences();
               rows.push({
                 id: crypto.randomUUID(),
-                user_id: userId,
+                user_id: selectedUserId,
                 type_id: Number(typeId),
                 start_date: startDate,
                 end_date: endDate,
@@ -711,7 +827,7 @@
               setLocalAbsences(rows);
             } else {
               const { error } = await supabase.from("prombutnes_dati").insert({
-                user_id: userId,
+                user_id: selectedUserId,
                 type_id: Number(typeId),
                 start_date: startDate,
                 end_date: endDate,
@@ -727,6 +843,7 @@
             setEndDate("");
             setComment("");
             setTypeId("");
+            if (!isManager) setSelectedUserId(userId);
             onCreated();
           } finally {
             setBusy(false);
@@ -734,8 +851,35 @@
         }
         return html`
           <div class="list-panel">
-            <h2>Piefiksēt/ saskaņot/ atcelt prombūtni</h2>
+            <h2>Parastā prombūtne</h2>
+            <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
+              Veidu <strong>Cits (saskaņots)</strong> šeit nevar izvēlēties — tam ir atsevišķa sadaļa
+              zemāk.
+            </p>
             <form class="stack" onSubmit=${handleSubmit}>
+              <div class="field">
+                <label for="employee">Darbinieks</label>
+                <select
+                  id="employee"
+                  class="select"
+                  required
+                  disabled=${!isManager}
+                  value=${selectedUserId}
+                  onChange=${(ev) => setSelectedUserId(ev.target.value)}
+                >
+                  <option value="">Izvēlies darbinieku</option>
+                  ${users.map(
+                    (u) => html`
+                      <option key=${u.id} value=${u.id}>${u.full_name ?? u.id}</option>
+                    `
+                  )}
+                </select>
+                ${!isManager
+                  ? html`<span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}
+                    >Tikai savs konts. Vadītājs var iesniegt arī citiem.</span
+                  >`
+                  : null}
+              </div>
               <div class="field">
                 <label for="ptype">Veids</label>
                 <select
@@ -746,7 +890,7 @@
                   onChange=${(ev) => setTypeId(ev.target.value)}
                 >
                   <option value="">Izvēlies veidu</option>
-                  ${types.map(
+                  ${typeOptions.map(
                     (t) => html`
                       <option key=${t.id} value=${t.id}>${t.name}</option>
                     `
@@ -795,6 +939,538 @@
         `;
       }
 
+      function CitsManagerSettings() {
+        const [defEmail, setDefEmail] = useState(() => localStorage.getItem(LS_MANAGER_EMAIL) || "");
+        const [actingName, setActingName] = useState(() => localStorage.getItem(LS_ACTING_NAME) || "");
+        const [actingEmail, setActingEmail] = useState(() => localStorage.getItem(LS_ACTING_EMAIL) || "");
+        const [open, setOpen] = useState(false);
+        function save(e) {
+          e.preventDefault();
+          if (defEmail.trim()) localStorage.setItem(LS_MANAGER_EMAIL, defEmail.trim());
+          else localStorage.removeItem(LS_MANAGER_EMAIL);
+          if (actingName.trim()) localStorage.setItem(LS_ACTING_NAME, actingName.trim());
+          else localStorage.removeItem(LS_ACTING_NAME);
+          if (actingEmail.trim()) localStorage.setItem(LS_ACTING_EMAIL, actingEmail.trim());
+          else localStorage.removeItem(LS_ACTING_EMAIL);
+          alert("Saglabāts šajā pārlūkā.");
+        }
+        return html`
+          <div class="list-panel" style=${{ marginTop: "0.85rem" }}>
+            <button
+              type="button"
+              class="btn btn-ghost btn-small"
+              style=${{ marginBottom: open ? "0.65rem" : 0 }}
+              onClick=${() => setOpen(!open)}
+            >
+              ${open ? "▼" : "▶"} Vadītāja e-pasts un aizvietotājs
+            </button>
+            ${open
+              ? html`
+                  <p style=${{ margin: "0 0 0.65rem", fontSize: "0.82rem", color: "var(--muted)" }}>
+                    Noklusējums: <code>${DEFAULT_MANAGER_EMAIL}</code>. Ja norādi aizvietotāja e-pastu,
+                    paziņojumi par „Cits (saskaņots)” sūtīti uz aizvietotāju.
+                  </p>
+                  <form class="stack" onSubmit=${save}>
+                    <div class="field">
+                      <label for="mgr-def">Pastāvīgā vadītāja e-pasts (pēc izvēles)</label>
+                      <input
+                        id="mgr-def"
+                        type="email"
+                        class="input"
+                        value=${defEmail}
+                        onChange=${(ev) => setDefEmail(ev.target.value)}
+                        placeholder=${DEFAULT_MANAGER_EMAIL}
+                      />
+                    </div>
+                    <div class="field">
+                      <label for="act-n">Vadītāja pienākumu izpildītājs — vārds, uzvārds</label>
+                      <input
+                        id="act-n"
+                        class="input"
+                        value=${actingName}
+                        onChange=${(ev) => setActingName(ev.target.value)}
+                        placeholder="Piemēram, Jānis Bērziņš"
+                      />
+                    </div>
+                    <div class="field">
+                      <label for="act-e">Vadītāja pienākumu izpildītājs — e-pasts</label>
+                      <input
+                        id="act-e"
+                        type="email"
+                        class="input"
+                        value=${actingEmail}
+                        onChange=${(ev) => setActingEmail(ev.target.value)}
+                        placeholder="ja tukšs — tiek lietots noklusējuma vadītājs"
+                      />
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-small">Saglabāt</button>
+                  </form>
+                `
+              : null}
+          </div>
+        `;
+      }
+
+      function CitsSaskanotsForm({ userId, onCreated }) {
+        const [startDate, setStartDate] = useState("");
+        const [endDate, setEndDate] = useState("");
+        const [comment, setComment] = useState("");
+        const [busy, setBusy] = useState(false);
+        async function submit(e) {
+          e.preventDefault();
+          const to = effectiveManagerEmail();
+          if (!to) {
+            alert("Nav norādīts vadītāja e-pasts.");
+            return;
+          }
+          setBusy(true);
+          try {
+            if (isLocalMode()) {
+              const token = crypto.randomUUID();
+              const rows = getLocalCitsRequests();
+              rows.push({
+                id: crypto.randomUUID(),
+                user_id: userId,
+                start_date: startDate,
+                end_date: endDate,
+                comment: comment.trim() || null,
+                notify_email: to,
+                approval_token: token,
+                status: "pending_manager",
+                created_at: new Date().toISOString(),
+              });
+              setLocalCitsRequests(rows);
+              const base = window.location.href.split("?")[0];
+              const link = `${base}?cits=${token}`;
+              alert(
+                "Vietējā režīmā e-pasts netiek nosūtīts. Nosūti vadītājam saiti manuāli:\n\n" + link
+              );
+              setStartDate("");
+              setEndDate("");
+              setComment("");
+              onCreated();
+              return;
+            }
+            const { data: ins, error: insErr } = await supabase
+              .from("pdd_cits_requests")
+              .insert({
+                user_id: userId,
+                start_date: startDate,
+                end_date: endDate,
+                comment: comment.trim() || null,
+                notify_email: to,
+              })
+              .select("id")
+              .single();
+            if (insErr) {
+              alert(insErr.message);
+              return;
+            }
+            const appBase = window.location.href.split("?")[0];
+            const { data: fnData, error: fnErr } = await supabase.functions.invoke("notify-cits-manager", {
+              body: { request_id: ins.id, app_base_url: appBase },
+            });
+            if (fnErr) {
+              console.error(fnErr);
+              alert(
+                "Pieteikums saglabāts, bet e-pasta funkcija nav pieejama (pārbaudi Edge Function „notify-cits-manager”)."
+              );
+            } else if (fnData?.skipped) {
+              alert(fnData.message || "E-pasts nav nosūtīts — skatīt konsoli.");
+            } else if (fnData?.link) {
+              alert("Nosūtīts uz " + to + ". Saite arī: " + fnData.link);
+            }
+            setStartDate("");
+            setEndDate("");
+            setComment("");
+            onCreated();
+          } finally {
+            setBusy(false);
+          }
+        }
+        return html`
+          <div class="list-panel" style=${{ marginTop: "0.85rem" }}>
+            <h2>Cits (saskaņots) — īpašais ceļš</h2>
+            <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
+              Izvēlies periodu; pieprasījums un saite uz apstiprināšanu tiek nosūtīta uz vadītāja e-pastu
+              (<strong>${effectiveManagerEmail()}</strong>).
+            </p>
+            <form class="stack" onSubmit=${submit}>
+              <div class="row" style=${{ gap: "0.75rem" }}>
+                <div class="field" style=${{ flex: "1 1 140px" }}>
+                  <label for="cstart">No</label>
+                  <input
+                    id="cstart"
+                    type="date"
+                    class="input"
+                    required
+                    value=${startDate}
+                    onChange=${(ev) => setStartDate(ev.target.value)}
+                  />
+                </div>
+                <div class="field" style=${{ flex: "1 1 140px" }}>
+                  <label for="cend">Līdz</label>
+                  <input
+                    id="cend"
+                    type="date"
+                    class="input"
+                    required
+                    value=${endDate}
+                    onChange=${(ev) => setEndDate(ev.target.value)}
+                  />
+                </div>
+              </div>
+              <div class="field">
+                <label for="ccom">Komentārs</label>
+                <textarea
+                  id="ccom"
+                  class="textarea"
+                  value=${comment}
+                  onChange=${(ev) => setComment(ev.target.value)}
+                  placeholder="Piemēram, iemesls"
+                />
+              </div>
+              <button type="submit" class="btn btn-primary" disabled=${busy}>
+                ${busy ? "Sūta…" : "Sūtīt vadītājam"}
+              </button>
+            </form>
+            <${CitsManagerSettings} />
+          </div>
+        `;
+      }
+
+      function CitsPublicApprove({ token, onDone }) {
+        const [preview, setPreview] = useState(null);
+        const [err, setErr] = useState(null);
+        const [busy, setBusy] = useState(false);
+        useEffect(() => {
+          let cancelled = false;
+          (async () => {
+            if (!token) return;
+            if (isLocalMode()) {
+              const rows = getLocalCitsRequests();
+              const r = rows.find((x) => x.approval_token === token && x.status === "pending_manager");
+              if (!r) {
+                if (!cancelled) setErr("Nederīgs vai jau apstiprināts pieprasījums.");
+                return;
+              }
+              if (!cancelled)
+                setPreview({
+                  start_date: r.start_date,
+                  end_date: r.end_date,
+                  employee_name: localDisplayName(),
+                  comment: r.comment || "",
+                  ok: true,
+                });
+              return;
+            }
+            const { data, error } = await supabase.rpc("pdd_cits_preview", { p_token: token });
+            if (cancelled) return;
+            if (error) {
+              setErr(error.message);
+              return;
+            }
+            const row = Array.isArray(data) ? data[0] : data;
+            if (!row?.ok) setErr("Nederīgs vai jau apstiprināts pieprasījums.");
+            else setPreview(row);
+          })();
+          return () => {
+            cancelled = true;
+          };
+        }, [token]);
+        async function approve() {
+          setBusy(true);
+          try {
+            if (isLocalMode()) {
+              const rows = getLocalCitsRequests();
+              const r = rows.find((x) => x.approval_token === token && x.status === "pending_manager");
+              if (!r) {
+                setErr("Nav atrasts.");
+                return;
+              }
+              const types = getLocalTypes();
+              const cits = types.find((t) => isCitsSaskanotsTypeName(t.name));
+              if (!cits) {
+                setErr("Nav veida „Cits (saskaņots)” lokālajos datos.");
+                return;
+              }
+              const abs = getLocalAbsences();
+              abs.push({
+                id: crypto.randomUUID(),
+                user_id: r.user_id,
+                type_id: cits.id,
+                start_date: r.start_date,
+                end_date: r.end_date,
+                comment: r.comment,
+                status: "approved",
+                created_at: new Date().toISOString(),
+                approved_at: new Date().toISOString(),
+              });
+              setLocalAbsences(abs);
+              setLocalCitsRequests(
+                rows.map((x) =>
+                  x.approval_token === token ? { ...x, status: "approved" } : x
+                )
+              );
+              stripCitsFromUrl();
+              onDone();
+              return;
+            }
+            const { error } = await supabase.rpc("pdd_approve_cits_token", { p_token: token });
+            if (error) {
+              alert(error.message);
+              return;
+            }
+            stripCitsFromUrl();
+            onDone();
+          } finally {
+            setBusy(false);
+          }
+        }
+        return html`
+          <div class="auth-box" style=${{ maxWidth: "480px" }}>
+            <h1 style=${{ fontSize: "1.15rem" }}>„Cits (saskaņots)” — apstiprinājums</h1>
+            ${err
+              ? html`<p style=${{ color: "#f87171" }}>${err}</p>`
+              : !preview
+                ? html`<p style=${{ color: "var(--muted)" }}>Ielādē…</p>`
+                : html`
+                    <div class="stack" style=${{ gap: "0.5rem" }}>
+                      <p><strong>${preview.employee_name}</strong></p>
+                      <p style=${{ margin: 0, fontSize: "0.9rem" }}>
+                        ${preview.start_date} — ${preview.end_date}
+                      </p>
+                      ${preview.comment
+                        ? html`<p style=${{ margin: 0 }}>${preview.comment}</p>`
+                        : null}
+                      <button type="button" class="btn btn-primary" disabled=${busy} onClick=${approve}>
+                        ${busy ? "…" : "Apstiprināt prombūtni"}
+                      </button>
+                    </div>
+                  `}
+            <button type="button" class="btn btn-ghost btn-small" style=${{ marginTop: "1rem" }} onClick=${onDone}>
+              Aizvērt
+            </button>
+          </div>
+        `;
+      }
+
+      function AbsenceRecordsPanel({ userId, role, absences, types, onRefresh }) {
+        const isManager = role === "manager" || role === "admin";
+        const [editing, setEditing] = useState(null);
+        const [delId, setDelId] = useState(null);
+        const [form, setForm] = useState({ type_id: "", start_date: "", end_date: "", comment: "" });
+        const list = isManager ? absences : absences.filter((a) => a.user_id === userId);
+        function openEdit(a) {
+          setEditing(a.id);
+          setForm({
+            type_id: String(a.type_id),
+            start_date: a.start_date,
+            end_date: a.end_date,
+            comment: a.comment || "",
+          });
+        }
+        async function saveEdit(e) {
+          e.preventDefault();
+          if (!editing) return;
+          if (isLocalMode()) {
+            const rows = getLocalAbsences().map((r) =>
+              r.id === editing
+                ? {
+                    ...r,
+                    type_id: Number(form.type_id),
+                    start_date: form.start_date,
+                    end_date: form.end_date,
+                    comment: form.comment.trim() || null,
+                  }
+                : r
+            );
+            setLocalAbsences(rows);
+            setEditing(null);
+            onRefresh();
+            return;
+          }
+          const { error } = await supabase
+            .from("prombutnes_dati")
+            .update({
+              type_id: Number(form.type_id),
+              start_date: form.start_date,
+              end_date: form.end_date,
+              comment: form.comment.trim() || null,
+            })
+            .eq("id", editing);
+          if (error) alert(error.message);
+          else {
+            setEditing(null);
+            onRefresh();
+          }
+        }
+        async function confirmDelete() {
+          if (!delId) return;
+          if (isLocalMode()) {
+            setLocalAbsences(getLocalAbsences().filter((r) => r.id !== delId));
+            setDelId(null);
+            onRefresh();
+            return;
+          }
+          const { error } = await supabase.from("prombutnes_dati").delete().eq("id", delId);
+          if (error) alert(error.message);
+          else {
+            setDelId(null);
+            onRefresh();
+          }
+        }
+        const typeOptionsEmployee = types.filter((t) => !isCitsSaskanotsTypeName(t.name));
+        const typeOptionsEdit = isManager ? types : typeOptionsEmployee;
+        return html`
+          <div class="list-panel">
+            <h2>${isManager ? "Visi prombūtnes ieraksti (vadītājs)" : "Mani ieraksti — labot / dzēst"}</h2>
+            ${list.length === 0
+              ? html`<p style=${{ margin: 0, color: "var(--muted)" }}>Nav ierakstu.</p>`
+              : list.map((a) => {
+                  const own = String(a.user_id) === String(userId);
+                  const canEdit = isManager || (own && a.status === "pending");
+                  const canDelete = isManager || own;
+                  return html`
+                    <div key=${a.id} class="abs-item">
+                      <div class="row" style=${{ justifyContent: "space-between" }}>
+                        <strong>${a.employee?.full_name ?? a.user_id}</strong>
+                        <span
+                          class=${`badge ${a.status === "pending" ? "badge-pending" : a.status === "approved" ? "badge-approved" : "badge-rejected"}`}
+                        >
+                          ${a.status === "pending" ? "Gaida" : a.status === "approved" ? "Apstiprināts" : "Noraidīts"}
+                        </span>
+                      </div>
+                      <div style=${{ fontSize: "0.85rem", color: "var(--muted)" }}>
+                        ${a.type?.name} · ${a.start_date} — ${a.end_date}
+                      </div>
+                      ${a.comment ? html`<p style=${{ margin: "0.35rem 0 0", fontSize: "0.88rem" }}>${a.comment}</p>` : null}
+                      <div class="row" style=${{ marginTop: "0.5rem", gap: "0.35rem" }}>
+                        ${canEdit
+                          ? html`
+                              <button type="button" class="btn btn-small btn-ghost" onClick=${() => openEdit(a)}>
+                                Labot
+                              </button>
+                            `
+                          : null}
+                        ${canDelete
+                          ? html`
+                              <button type="button" class="btn btn-small btn-danger" onClick=${() => setDelId(a.id)}>
+                                Dzēst
+                              </button>
+                            `
+                          : null}
+                      </div>
+                    </div>
+                  `;
+                })}
+            ${editing
+              ? html`
+                  <div
+                    style=${{
+                      position: "fixed",
+                      inset: 0,
+                      background: "rgba(0,0,0,0.45)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      zIndex: 50,
+                      padding: "1rem",
+                    }}
+                    onClick=${() => setEditing(null)}
+                  >
+                    <div
+                      class="list-panel"
+                      style=${{ maxWidth: "400px", width: "100%" }}
+                      onClick=${(ev) => ev.stopPropagation()}
+                    >
+                      <h3 style=${{ margin: "0 0 0.65rem", fontSize: "1rem" }}>Labot ierakstu</h3>
+                      <form class="stack" onSubmit=${saveEdit}>
+                        <div class="field">
+                          <label>Veids</label>
+                          <select
+                            class="select"
+                            required
+                            value=${form.type_id}
+                            onChange=${(ev) => setForm((f) => ({ ...f, type_id: ev.target.value }))}
+                          >
+                            ${typeOptionsEdit.map(
+                              (t) => html`<option key=${t.id} value=${t.id}>${t.name}</option>`
+                            )}
+                          </select>
+                        </div>
+                        <div class="row" style=${{ gap: "0.75rem" }}>
+                          <div class="field" style=${{ flex: 1 }}>
+                            <label>No</label>
+                            <input
+                              type="date"
+                              class="input"
+                              required
+                              value=${form.start_date}
+                              onChange=${(ev) => setForm((f) => ({ ...f, start_date: ev.target.value }))}
+                            />
+                          </div>
+                          <div class="field" style=${{ flex: 1 }}>
+                            <label>Līdz</label>
+                            <input
+                              type="date"
+                              class="input"
+                              required
+                              value=${form.end_date}
+                              onChange=${(ev) => setForm((f) => ({ ...f, end_date: ev.target.value }))}
+                            />
+                          </div>
+                        </div>
+                        <div class="field">
+                          <label>Komentārs</label>
+                          <textarea
+                            class="textarea"
+                            value=${form.comment}
+                            onChange=${(ev) => setForm((f) => ({ ...f, comment: ev.target.value }))}
+                          />
+                        </div>
+                        <div class="row">
+                          <button type="submit" class="btn btn-primary btn-small">Saglabāt</button>
+                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => setEditing(null)}>
+                            Atcelt
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                `
+              : null}
+            ${delId
+              ? html`
+                  <div
+                    style=${{
+                      position: "fixed",
+                      inset: 0,
+                      background: "rgba(0,0,0,0.45)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      zIndex: 50,
+                    }}
+                  >
+                    <div class="list-panel" style=${{ maxWidth: "360px" }}>
+                      <p>Dzēst šo ierakstu?</p>
+                      <div class="row">
+                        <button type="button" class="btn btn-danger btn-small" onClick=${confirmDelete}>
+                          Jā, dzēst
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => setDelId(null)}>
+                          Nē
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                `
+              : null}
+          </div>
+        `;
+      }
+
       function ManagerApprovals({ currentUserId, onChanged }) {
         const [pending, setPending] = useState([]);
         const [busyId, setBusyId] = useState(null);
@@ -822,7 +1498,7 @@
             console.error(error);
             return;
           }
-          const { data: profs } = await supabase.from("profiles").select("id, full_name");
+          const { data: profs } = await supabase.from("users").select("id, full_name");
           const pmap = new Map((profs ?? []).map((p) => [p.id, p]));
           const list = (rows ?? []).map((r) => ({
             ...r,
@@ -919,7 +1595,22 @@
       function PrombutnesSection({ userId, role, onBack }) {
         const [month, setMonth] = useState(() => new Date());
         const [absences, setAbsences] = useState([]);
+        const [typesList, setTypesList] = useState([]);
         const [error, setError] = useState(null);
+        useEffect(() => {
+          if (isLocalMode()) {
+            setTypesList(getLocalTypes());
+            return;
+          }
+          supabase
+            .from("prombutnes_veidi")
+            .select("*")
+            .order("sort_order", { ascending: true })
+            .then(({ data, error }) => {
+              if (error) console.error(error);
+              setTypesList(data ?? []);
+            });
+        }, []);
         const refresh = useCallback(async () => {
           setError(null);
           if (isLocalMode()) {
@@ -943,7 +1634,7 @@
             setError(qErr.message);
             return;
           }
-          const { data: profs, error: pErr } = await supabase.from("profiles").select("id, full_name");
+          const { data: profs, error: pErr } = await supabase.from("users").select("id, full_name");
           if (pErr) setError(pErr.message);
           const pmap = new Map((profs ?? []).map((p) => [p.id, p]));
           const list = (rows ?? []).map((r) => ({
@@ -957,7 +1648,6 @@
           void refresh();
         }, [refresh]);
         const isManager = role === "manager" || role === "admin";
-        const mine = absences.filter((a) => a.user_id === userId);
         return html`
           <section class="stack" style=${{ gap: "1.25rem" }}>
             <div class="row" style=${{ justifyContent: "space-between", alignItems: "center" }}>
@@ -974,35 +1664,23 @@
               : null}
             <div class="prombutnes-grid">
               <${AbsenceCalendar} month=${month} onMonthChange=${setMonth} absences=${absences} />
-              <${AbsenceRequestForm} userId=${userId} onCreated=${() => void refresh()} />
+              <div class="stack" style=${{ gap: "0.85rem" }}>
+                <${AbsenceRequestForm}
+                  userId=${userId}
+                  role=${role}
+                  onCreated=${() => void refresh()}
+                />
+                <${CitsSaskanotsForm} userId=${userId} onCreated=${() => void refresh()} />
+              </div>
             </div>
             ${isManager ? html`<${ManagerApprovals} currentUserId=${userId} onChanged=${() => void refresh()} />` : null}
-            <div class="list-panel">
-              <h2>Mani pieteikumi</h2>
-              ${mine.length === 0
-                ? html`<p style=${{ margin: 0, color: "var(--muted)" }}>Vēl nav iesniegumu.</p>`
-                : mine.map(
-                    (a) => html`
-                      <div key=${a.id} class="abs-item">
-                        <div class="row" style=${{ justifyContent: "space-between" }}>
-                          <span>${a.type?.name}</span>
-                          <span
-                            class=${`badge ${a.status === "pending" ? "badge-pending" : a.status === "approved" ? "badge-approved" : "badge-rejected"}`}
-                          >
-                            ${a.status === "pending"
-                              ? "Gaida"
-                              : a.status === "approved"
-                                ? "Apstiprināts"
-                                : "Noraidīts"}
-                          </span>
-                        </div>
-                        <div style=${{ fontSize: "0.85rem", color: "var(--muted)" }}>
-                          ${a.start_date} — ${a.end_date}
-                        </div>
-                      </div>
-                    `
-                  )}
-            </div>
+            <${AbsenceRecordsPanel}
+              userId=${userId}
+              role=${role}
+              absences=${absences}
+              types=${typesList}
+              onRefresh=${refresh}
+            />
           </section>
         `;
       }
@@ -1011,6 +1689,7 @@
         const { session, loading } = useSession();
         const { profile } = useProfile(session?.user?.id);
         const [view, setView] = useState("home");
+        const [citsToken, setCitsToken] = useState(() => readCitsTokenFromUrl());
         const title = useMemo(
           () => html`
             <div>
@@ -1020,6 +1699,21 @@
           `,
           []
         );
+
+        if (citsToken) {
+          return html`
+            <div class="app-shell">
+              ${title}
+              <${CitsPublicApprove}
+                token=${citsToken}
+                onDone=${() => {
+                  setCitsToken("");
+                  stripCitsFromUrl();
+                }}
+              />
+            </div>
+          `;
+        }
 
         async function signOut() {
           if (TIKAI_VIENKARSI_SKATS) {

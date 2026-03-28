@@ -10,7 +10,7 @@ useEffect(() => {
       }
   
       const { data, error } = await supabase
-        .from("users") // vai "profiles", ja tā ir tava reālā tabula
+        .from("users")
         .select("id, full_name");
   
       if (error) {
