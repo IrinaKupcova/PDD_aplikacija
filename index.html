@@ -916,12 +916,22 @@
                 <div>
                   <button
                     type="button"
-                    class=${`app-nav-link ${view === "prombutnes" ? "active" : ""}`}
+                  class=${`app-nav-link ${view === "prombutnes" && promSub !== "teamUsers" ? "active" : ""}`}
                     onClick=${() => onChangeView("prombutnes")}
                   >
                     Prombūtnes
                   </button>
-                  ${view === "prombutnes"
+                <button
+                  type="button"
+                  class=${`app-nav-link ${view === "prombutnes" && promSub === "teamUsers" ? "active" : ""}`}
+                  onClick=${() => {
+                    onChangeView("prombutnes");
+                    onPromSubChange("teamUsers");
+                  }}
+                >
+                  Komandas lietotāji
+                </button>
+                ${view === "prombutnes" && promSub !== "teamUsers"
                     ? html`
                         <div class="app-nav-sub" role="group" aria-label="Prombūtnes apakšsadaļas">
                           <button
@@ -937,13 +947,6 @@
                             onClick=${() => onPromSubChange("request")}
                           >
                             Prombūtnes pieteikums
-                          </button>
-                          <button
-                            type="button"
-                            class=${`app-nav-sublink ${promSub === "teamUsers" ? "active" : ""}`}
-                            onClick=${() => onPromSubChange("teamUsers")}
-                          >
-                            Komandas lietotāji
                           </button>
                           ${showPromDeputyTab
                             ? html`
