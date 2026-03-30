@@ -1512,17 +1512,19 @@
                 );
                 const base = window.location.href.split("?")[0];
                 const link = `${base}?cits=${token}`;
-                const subject = encodeURIComponent("Gaida prombūtnes saskaņojumu");
-                const body = encodeURIComponent(
-                  `Gaida prombūtnes saskaņojumu.\n\nDarbinieks: ${selectedUserId}\nPeriods: ${startDate} — ${endDate}\n\nSaite: ${link}`
-                );
-                const mailto = `mailto:${encodeURIComponent(String(to).trim())}?subject=${subject}&body=${body}`;
+                const draft =
+                  `Kam: ${String(to).trim()}\n` +
+                  `Temats: Gaida prombūtnes saskaņojumu\n\n` +
+                  `Gaida prombūtnes saskaņojumu.\n` +
+                  `Darbinieks: ${selectedUserId}\n` +
+                  `Periods: ${startDate} — ${endDate}\n\n` +
+                  `Saite: ${link}`;
                 try {
-                  window.open(mailto, "_blank");
+                  await navigator.clipboard.writeText(draft);
+                  alert("Saskaņošanas e-pasta saturs nokopēts starpliktuvē. Ielīmē to savā e-pastā.\n\nSaite:\n" + link);
                 } catch {
-                  /* ignore */
+                  alert("Nokopē automātiski neizdevās. Izmanto šo saiti saskaņošanai:\n\n" + link);
                 }
-                alert("Sagatavota e-pasta ziņa ar saiti saskaņošanai:\n\n" + link);
               } else {
                 const { data: ins, error: insErr } = await supabase
                   .from("pdd_cits_requests")
@@ -2782,6 +2784,13 @@
         function clearFilters() {
           setFilters({ name: "", type: "", start: "", end: "", comment: "", status: "" });
         }
+        const myNameForFilter = useMemo(() => {
+          const own = (absences ?? []).find((a) => String(a.user_id) === String(userId));
+          if (own?.employee) return userShownFromFull(userDisplayName(own.employee));
+          return localDisplayName();
+        }, [absences, userId]);
+        const myFilterActive =
+          String(filters?.name ?? "").trim().toLowerCase() === String(myNameForFilter ?? "").trim().toLowerCase();
         function ensureHistoryOpen() {
           if (!historyOpen) onToggleHistory();
         }
@@ -2849,10 +2858,8 @@
         const isAdmin = String(role || "").toLowerCase() === "admin";
         const anyActions = filteredList.some((a) => {
           const own = String(a.user_id) === String(userId);
-          const typeName = a.type?.name ?? a.type_id ?? "";
-          const isCitsType = isCitsSaskanotsTypeName(typeName);
-          const canEdit = isAdmin || (own && a.status === "pending" && !isCitsType);
-          const canDelete = isAdmin || (own && a.status === "pending" && !isCitsType);
+          const canEdit = isAdmin || own;
+          const canDelete = isAdmin || own;
           return canEdit || canDelete;
         });
         const colCount = anyActions ? 7 : 6;
@@ -2975,6 +2982,17 @@
                   : null}
                 <button type="button" class="btn btn-primary btn-small" onClick=${onToggleHistory}>
                   ${historyOpen ? "Slēpt ierakstus (tikai galvenes)" : "Rādīt ierakstus"}
+                </button>
+                <button
+                  type="button"
+                  class=${`btn btn-small ${myFilterActive ? "btn-danger" : "btn-ghost"}`}
+                  onClick=${() => {
+                    if (myFilterActive) clearFilter("name");
+                    else applyFilter("name", myNameForFilter);
+                    ensureHistoryOpen();
+                  }}
+                >
+                  Tikai mani
                 </button>
                 <!-- (nav) -->
               </div>
@@ -3161,9 +3179,8 @@
                       <tbody>
                         ${visibleList.map((a) => {
                           const own = String(a.user_id) === String(userId);
-                          const isCitsType = isCitsSaskanotsTypeName(typeName);
-                          const canEdit = isAdmin || (own && a.status === "pending" && !isCitsType);
-                          const canDelete = isAdmin || (own && a.status === "pending" && !isCitsType);
+                          const canEdit = isAdmin || own;
+                          const canDelete = isAdmin || own;
                           const userFull = userDisplayName(a.employee);
                           const userParts = String(userFull).split(/\s+/).filter(Boolean);
                           const userShown =
@@ -3174,6 +3191,7 @@
                                 : `${userParts[0]} ${userParts[userParts.length - 1]}`;
                           const hi = highlightAbsenceId && String(highlightAbsenceId) === String(a.id);
                           const typeName = a.type?.name ?? a.type_id ?? "—";
+                          const isCitsType = isCitsSaskanotsTypeName(typeName);
                           const statusText = isCitsType
                             ? (a.status === "approved" ? "saskaņots" : "gaida")
                             : "bez saskaņošanas";
