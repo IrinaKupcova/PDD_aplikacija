@@ -16,13 +16,13 @@
       :root {
         color-scheme: light dark;
         --bg: hsl(161, 66%, 89%);
-        --surface:  #5cb6a7;
-        --surface2: #43a185;
-        --border: #0a8070;
+        --surface:  #75ccbd;
+        --surface2: #63c2a5;
+        --border: #4ab3a5;
         --text: #01171d;
         --muted: #020c1b;
         --accent: #5ae694;
-        --accent-dim: #22806b;
+        --accent-dim: #6ed8c1;
         --radius: 12px;
         font-family: "Segoe UI", system-ui, sans-serif;
         line-height: 1.5;
@@ -1519,9 +1519,16 @@
                   `Darbinieks: ${selectedUserId}\n` +
                   `Periods: ${startDate} — ${endDate}\n\n` +
                   `Saite: ${link}`;
+                const subject = encodeURIComponent("Gaida prombūtnes saskaņojumu");
+                const body = encodeURIComponent(
+                  `Gaida prombūtnes saskaņojumu.\nDarbinieks: ${selectedUserId}\nPeriods: ${startDate} — ${endDate}\n\nSaite: ${link}`
+                );
+                const mailto = `mailto:${encodeURIComponent(String(to).trim())}?subject=${subject}&body=${body}`;
                 try {
+                  window.location.href = mailto;
+                  // Fallback: lai darbinieks var nosūtīt arī tad, ja lokālais e-pasta klients nav konfigurēts.
                   await navigator.clipboard.writeText(draft);
-                  alert("Saskaņošanas e-pasta saturs nokopēts starpliktuvē. Ielīmē to savā e-pastā.\n\nSaite:\n" + link);
+                  alert("Atvērta e-pasta nosūtīšana. Ja e-pasta klients neatveras, saturs ir nokopēts starpliktuvē.\n\nSaite:\n" + link);
                 } catch {
                   alert("Nokopē automātiski neizdevās. Izmanto šo saiti saskaņošanai:\n\n" + link);
                 }
