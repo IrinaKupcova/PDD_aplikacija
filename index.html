@@ -369,6 +369,8 @@
 
     <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
     <script src="./Komanda.js"></script>
+    <script src="./Filtr.js"></script>
+    <script src="./Zinas.js"></script>
 
     <script type="module">
       import React, { useState, useEffect, useCallback, useMemo } from "https://esm.sh/react@19.0.0";
@@ -424,8 +426,8 @@
         return s && s.includes("@") ? s : "";
       }
 
-      /** true: tūlīt moduļu skats. false: tiešsaistes konts (URL+atslēga failā) vai lokālā parole. */
-      const TIKAI_VIENKARSI_SKATS = true;
+      /** true: "tikai demo" (nav Supabase). false: Supabase (Realtime sinhronizācija ar DB). */
+      const TIKAI_VIENKARSI_SKATS = false;
 
       // Publisko atslēgu kopē: Supabase → Project Settings → API → anon public (ne service_role).
       // Ja atslēga „pazuda” pēc rediģēšanas — ielīmē to atkal šeit (viena rinda, sākas ar eyJ…).
@@ -973,6 +975,13 @@
                       `
                     : null}
                 </div>
+                <button
+                  type="button"
+                  class=${`app-nav-link ${view === "zinas" ? "active" : ""}`}
+                  onClick=${() => onChangeView("zinas")}
+                >
+                  Ziņas
+                </button>
               </div>
             </aside>
             <div class="app-main">
@@ -1479,12 +1488,8 @@
         });
         const [busy, setBusy] = useState(false);
         const [delId, setDelId] = useState(null);
-        const isLocalTeams = TIKAI_VIENKARSI_SKATS || !supabase;
-        const currentUser = (users ?? []).find((u) => String(u.id) === String(currentUserId)) ?? (users ?? [])[0];
-        const currentEmail = currentUser?.email ?? userImail(currentUser);
-        const [chatToId, setChatToId] = useState(null);
-        const [chatText, setChatText] = useState("");
-        const [chatMsgs, setChatMsgs] = useState([]);
+        // Ziņas ir atsevišķā navigācijā (`Ziņas`), tāpēc šajā panelī tās netiek renderētas.
+        const isLocalTeams = false;
         const total = users?.length ?? 0;
         const totalPages = Math.max(1, Math.ceil(total / TEAM_PAGE_SIZE) || 1);
         const safePage = Math.min(page, totalPages - 1);
@@ -1499,44 +1504,6 @@
           setPage((p) => Math.min(p, tp - 1));
         }, [users?.length]);
 
-        useEffect(() => {
-          if (!isLocalTeams) return;
-          if (!users || users.length === 0) return;
-          if (chatToId) return;
-          const others = (users ?? []).filter((u) => String(u.id) !== String(currentUserId));
-          const first = others[0] ?? null;
-          if (first?.id) setChatToId(first.id);
-        }, [isLocalTeams, users?.length, currentUserId, chatToId]);
-
-        useEffect(() => {
-          if (!isLocalTeams) return;
-          if (!chatToId || !currentEmail) return;
-          const toUser = (users ?? []).find((u) => String(u.id) === String(chatToId));
-          const toEmail = toUser?.email ?? userImail(toUser);
-          if (!toEmail) return;
-          const key = window.KOMANDA?.conversationKey?.(currentEmail, toEmail) ?? "";
-          if (!key) return;
-          setChatMsgs(window.KOMANDA?.loadMessages?.(key) ?? []);
-        }, [isLocalTeams, chatToId, currentEmail, users]);
-
-        function sendChat() {
-          if (!isLocalTeams) return;
-          const toUser = (users ?? []).find((u) => String(u.id) === String(chatToId));
-          const toEmail = toUser?.email ?? userImail(toUser);
-          const text = String(chatText || "").trim();
-          if (!toEmail || !text || !currentEmail) return;
-          const msg = window.KOMANDA?.addMessage?.({
-            fromEmail: currentEmail,
-            toEmail,
-            text,
-            ts: new Date().toISOString(),
-          });
-          if (!msg) return;
-          setChatText("");
-          const key = window.KOMANDA?.conversationKey?.(currentEmail, toEmail) ?? "";
-          if (!key) return;
-          setChatMsgs(window.KOMANDA?.loadMessages?.(key) ?? []);
-        }
         function openEdit(u) {
           setEditing(u.id);
           setForm({
@@ -2341,12 +2308,60 @@
         const [editing, setEditing] = useState(null);
         const [delId, setDelId] = useState(null);
         const [form, setForm] = useState({ type_id: "", start_date: "", end_date: "", comment: "" });
+        const [filtersOpen, setFiltersOpen] = useState(false);
+        const [filters, setFilters] = useState({
+          name: "",
+          type: "",
+          start: "",
+          end: "",
+          comment: "",
+          status: "",
+        });
+        const filterActive = window.PDDFiltr?.anyActive
+          ? window.PDDFiltr.anyActive(filters)
+          : Object.values(filters ?? {}).some((v) => String(v ?? "").trim() !== "");
+        function userShownFromFull(userFull) {
+          const uf = userFull ?? "—";
+          const userParts = String(uf).split(/\s+/).filter(Boolean);
+          return uf === "—"
+            ? "—"
+            : userParts.length <= 2
+              ? uf
+              : `${userParts[0]} ${userParts[userParts.length - 1]}`;
+        }
+        function clearFilters() {
+          setFilters({ name: "", type: "", start: "", end: "", comment: "", status: "" });
+        }
         const sortedList = useMemo(() => {
           const list = approverView ? absences : absences.filter((a) => a.user_id === userId);
           return [...list].sort((a, b) =>
             String(b.created_at || "").localeCompare(String(a.created_at || ""))
           );
         }, [absences, approverView, userId]);
+        const filteredList = useMemo(() => {
+          const includesMatch =
+            window.PDDFiltr?.includesMatch ??
+            ((value, query) => {
+              const q = String(query ?? "").toLowerCase().trim();
+              if (!q) return true;
+              const v = String(value ?? "").toLowerCase();
+              return v.includes(q);
+            });
+          const f = filters ?? {};
+          return sortedList.filter((a) => {
+            const userFull = userDisplayName(a.employee);
+            const userShown = userShownFromFull(userFull);
+            const typeName = a.type?.name ?? a.type_id ?? "";
+            const statusText = absenceStatusLv(a.status);
+            if (f.name && !includesMatch(userShown, f.name)) return false;
+            if (f.type && !includesMatch(typeName, f.type)) return false;
+            if (f.start && !includesMatch(a.start_date ?? "", f.start)) return false;
+            if (f.end && !includesMatch(a.end_date ?? "", f.end)) return false;
+            if (f.comment && !includesMatch(a.comment ?? "", f.comment)) return false;
+            if (f.status && !includesMatch(statusText, f.status)) return false;
+            return true;
+          });
+        }, [sortedList, filters, approverView, userId]);
         const anyActions = sortedList.some((a) => {
           const own = String(a.user_id) === String(userId);
           const canEdit = approverView || (own && a.status === "pending");
@@ -2363,7 +2378,7 @@
             });
           });
           return () => window.cancelAnimationFrame(h);
-        }, [highlightAbsenceId, historyOpen, sortedList.length]);
+        }, [highlightAbsenceId, historyOpen, filteredList.length]);
         function openEdit(a) {
           setEditing(a.id);
           setForm({
@@ -2425,6 +2440,22 @@
         }
         const typeOptionsEmployee = types.filter((t) => !isCitsSaskanotsTypeName(t.name));
         const typeOptionsEdit = approverView ? types : typeOptionsEmployee;
+        const includesMatch =
+          window.PDDFiltr?.includesMatch ??
+          ((value, query) => {
+            const q = String(query ?? "").toLowerCase().trim();
+            if (!q) return true;
+            const v = String(value ?? "").toLowerCase();
+            return v.includes(q);
+          });
+        function maybeMark(value, query) {
+          const text = value ?? "—";
+          if (!query) return text;
+          if (includesMatch(text, query)) {
+            return html`<mark style=${{ background: "rgba(244,63,94,0.18)", padding: "0 3px", borderRadius: "6px" }}>${text}</mark>`;
+          }
+          return text;
+        }
         return html`
           <div class="list-panel" id="prombutnes-history-anchor">
             <div
@@ -2443,12 +2474,66 @@
                 <button type="button" class="btn btn-primary btn-small" onClick=${onToggleHistory}>
                   ${historyOpen ? "Slēpt ierakstus (tikai galvenes)" : "Rādīt ierakstus"}
                 </button>
+                <button
+                  type="button"
+                  class=${`btn btn-small ${filterActive ? "btn-danger" : "btn-ghost"}`}
+                  onClick=${() => setFiltersOpen((o) => !o)}
+                  title="Filtrēt pēc vārdiem (atbilstība)"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <path d="M21 21l-4.3-4.3"></path>
+                  </svg>
+                </button>
               </div>
             </div>
             <p style=${{ margin: "0.35rem 0 0.65rem", fontSize: "0.78rem", color: "var(--muted)", lineHeight: 1.4 }}>
               Kolonnas atbilst <code>public.prombutnes_dati</code> (ierakstu rindas var paslēpt — redzamas paliek
               tabulas galvenes).
             </p>
+            ${filtersOpen
+              ? html`
+                  <div class="list-panel" style=${{
+                    marginTop: "0.2rem",
+                    marginBottom: "0.7rem",
+                    padding: "0.9rem",
+                    background: "var(--bg)",
+                  }}>
+                    <div class="row" style=${{ justifyContent: "space-between", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
+                      <h3 style=${{ margin: 0, fontSize: "0.95rem" }}>Filtri</h3>
+                      <button type="button" class="btn btn-ghost btn-small" onClick=${clearFilters}>
+                        Notīrīt filtrus
+                      </button>
+                    </div>
+                    <div class="row" style=${{ gap: "0.7rem", flexWrap: "wrap", marginTop: "0.85rem" }}>
+                      <div class="field" style=${{ flex: "1 1 220px" }}>
+                        <label>Vārds, uzvārds</label>
+                        <input class="input" value=${filters.name} onChange=${(e) => setFilters((f) => ({ ...f, name: e.target.value }))} placeholder="meklēt..." />
+                      </div>
+                      <div class="field" style=${{ flex: "1 1 220px" }}>
+                        <label>Prombūtnes veids</label>
+                        <input class="input" value=${filters.type} onChange=${(e) => setFilters((f) => ({ ...f, type: e.target.value }))} placeholder="meklēt..." />
+                      </div>
+                      <div class="field" style=${{ flex: "1 1 200px" }}>
+                        <label>Sākuma datums</label>
+                        <input class="input" value=${filters.start} onChange=${(e) => setFilters((f) => ({ ...f, start: e.target.value }))} placeholder="YYYY-MM-DD..." />
+                      </div>
+                      <div class="field" style=${{ flex: "1 1 200px" }}>
+                        <label>Beigu datums</label>
+                        <input class="input" value=${filters.end} onChange=${(e) => setFilters((f) => ({ ...f, end: e.target.value }))} placeholder="YYYY-MM-DD..." />
+                      </div>
+                      <div class="field" style=${{ flex: "1 1 260px" }}>
+                        <label>Komentārs</label>
+                        <input class="input" value=${filters.comment} onChange=${(e) => setFilters((f) => ({ ...f, comment: e.target.value }))} placeholder="meklēt..." />
+                      </div>
+                      <div class="field" style=${{ flex: "1 1 170px" }}>
+                        <label>Status</label>
+                        <input class="input" value=${filters.status} onChange=${(e) => setFilters((f) => ({ ...f, status: e.target.value }))} placeholder="gaida/apstiprināts..." />
+                      </div>
+                    </div>
+                  </div>
+                `
+              : null}
             <div class="hist-table-wrap table-wrap">
               <table class="hist-table">
                 <thead>
@@ -2462,10 +2547,10 @@
                     ${anyActions ? html`<th>—</th>` : null}
                   </tr>
                 </thead>
-                ${historyOpen && sortedList.length
+                ${historyOpen && filteredList.length
                   ? html`
                       <tbody>
-                        ${sortedList.map((a) => {
+                        ${filteredList.map((a) => {
                           const own = String(a.user_id) === String(userId);
                           const canEdit = approverView || (own && a.status === "pending");
                           const canDelete = approverView || own;
@@ -2478,22 +2563,26 @@
                                 ? userFull
                                 : `${userParts[0]} ${userParts[userParts.length - 1]}`;
                           const hi = highlightAbsenceId && String(highlightAbsenceId) === String(a.id);
+                          const typeName = a.type?.name ?? a.type_id ?? "—";
+                          const statusText = absenceStatusLv(a.status);
                           return html`
                             <tr
                               key=${a.id}
                               id=${`hist-row-${a.id}`}
                               class=${hi ? "hist-row-highlight" : ""}
                             >
-                              <td>${userShown}</td>
-                              <td>${a.type?.name ?? a.type_id ?? "—"}</td>
-                              <td>${a.start_date ?? "—"}</td>
-                              <td>${a.end_date ?? "—"}</td>
-                              <td style=${{ maxWidth: "140px", wordBreak: "break-word" }}>${a.comment ?? "—"}</td>
+                              <td>${maybeMark(userShown, filters.name)}</td>
+                              <td>${maybeMark(typeName, filters.type)}</td>
+                              <td>${maybeMark(a.start_date ?? "—", filters.start)}</td>
+                              <td>${maybeMark(a.end_date ?? "—", filters.end)}</td>
+                              <td style=${{ maxWidth: "140px", wordBreak: "break-word" }}>
+                                ${maybeMark(a.comment ?? "—", filters.comment)}
+                              </td>
                               <td>
                                 <span
                                   class=${`badge ${a.status === "pending" ? "badge-pending" : a.status === "approved" ? "badge-approved" : "badge-rejected"}`}
                                 >
-                                  ${absenceStatusLv(a.status)}
+                                  ${maybeMark(statusText, filters.status)}
                                 </span>
                               </td>
                               ${anyActions
@@ -2887,6 +2976,189 @@
         `;
       }
 
+      function ZinasPanel({ currentUserId }) {
+        const [teamUsers, setTeamUsers] = useState([]);
+        const [chatToId, setChatToId] = useState(null);
+        const [chatText, setChatText] = useState("");
+        const [chatMsgs, setChatMsgs] = useState([]);
+
+        useEffect(() => {
+          let ch = null;
+          let cancelled = false;
+
+          async function loadUsers() {
+            if (cancelled) return;
+            if (isLocalMode() || !supabase) {
+              const list = window.KOMANDA?.loadTeamUsers?.() ?? [];
+              setTeamUsers(Array.isArray(list) ? list : []);
+              return;
+            }
+            const { data, error } = await supabase
+              .from("users")
+              .select("*")
+              .order(COL_USER_NAME, { ascending: true });
+            if (error) {
+              console.warn("[Ziņas] users load error", error);
+              return;
+            }
+            setTeamUsers(data ?? []);
+          }
+
+          void loadUsers();
+
+          // Realtime tikai lietotāju sarakstam (lai “Adresāts” saraksts nesakrīt).
+          if (!isLocalMode() && supabase) {
+            ch = supabase
+              .channel("pdd-users-live-zinas")
+              .on("postgres_changes", { event: "*", schema: "public", table: "users" }, () => {
+                void loadUsers();
+              })
+              .subscribe();
+          }
+
+          return () => {
+            cancelled = true;
+            if (ch) void supabase.removeChannel(ch);
+          };
+        }, []);
+
+        const currentUser = useMemo(
+          () => teamUsers.find((u) => String(u.id) === String(currentUserId)) ?? null,
+          [teamUsers, currentUserId]
+        );
+
+        const currentEmail = currentUser?.email ?? (currentUser ? userImail(currentUser) : "");
+        const others = useMemo(
+          () => teamUsers.filter((u) => String(u.id) !== String(currentUserId)),
+          [teamUsers, currentUserId]
+        );
+
+        useEffect(() => {
+          if (!others.length) {
+            if (chatToId) setChatToId(null);
+            return;
+          }
+          if (!chatToId || !others.some((u) => String(u.id) === String(chatToId))) {
+            setChatToId(others[0].id);
+          }
+        }, [chatToId, others]);
+
+        const toUser = useMemo(() => {
+          if (!chatToId) return null;
+          return teamUsers.find((u) => String(u.id) === String(chatToId)) ?? null;
+        }, [chatToId, teamUsers]);
+
+        const toEmail = toUser?.email ?? (toUser ? userImail(toUser) : "");
+        const convoKey = window.ZINAS?.conversationKey ? window.ZINAS.conversationKey(currentEmail, toEmail) : "";
+
+        useEffect(() => {
+          if (!window.ZINAS?.loadMessages) return;
+          if (!convoKey) {
+            setChatMsgs([]);
+            return;
+          }
+          setChatMsgs(window.ZINAS.loadMessages(convoKey));
+        }, [convoKey]);
+
+        function sendChat() {
+          const add = window.ZINAS?.addMessage;
+          if (!add) return;
+          if (!currentEmail || !toEmail) return;
+          if (!chatText.trim()) return;
+
+          add({ fromEmail: currentEmail, toEmail, text: chatText.trim(), ts: new Date().toISOString() });
+          const key = window.ZINAS.conversationKey(currentEmail, toEmail);
+          setChatMsgs(window.ZINAS.loadMessages(key));
+          setChatText("");
+        }
+
+        return html`
+          <section aria-labelledby="zinas-title">
+            <h2 id="zinas-title" class="app-sub" style=${{ marginBottom: "0.8rem" }}>
+              Ziņas
+            </h2>
+
+            <div class="list-panel">
+              <div class="row" style=${{ gap: "0.75rem", alignItems: "flex-end", flexWrap: "wrap" }}>
+                <div class="field" style=${{ flex: "1 1 280px" }}>
+                  <label>Adresāts</label>
+                  <select class="select" value=${chatToId ?? ""} onChange=${(e) => setChatToId(e.target.value || null)}>
+                    ${others.map((u) => {
+                      const em = u.email ?? userImail(u);
+                      return html`<option key=${u.id} value=${u.id}>${u["Vārds uzvārds"] ?? u.full_name ?? "—"} · ${em}</option>`;
+                    })}
+                  </select>
+                </div>
+              </div>
+
+              <div
+                style=${{
+                  maxHeight: "260px",
+                  overflow: "auto",
+                  padding: "0.6rem",
+                  background: "var(--bg)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "10px",
+                  marginTop: "0.85rem",
+                  marginBottom: "0.85rem",
+                }}
+              >
+                ${chatMsgs.length === 0
+                  ? html`<p style=${{ margin: 0, color: "var(--muted)", fontStyle: "italic" }}>Nav ziņu.</p>`
+                  : chatMsgs.map((m) => {
+                      const isMe = m.fromEmail === currentEmail;
+                      return html`
+                        <div style=${{ marginBottom: "0.55rem", textAlign: isMe ? "right" : "left" }}>
+                          <div style=${{ fontSize: "0.78rem", color: "var(--muted)", marginBottom: "0.15rem" }}>
+                            ${isMe ? "Tu" : "No"}: ${m.fromEmail}
+                          </div>
+                          <div
+                            style=${{
+                              display: "inline-block",
+                              padding: "0.45rem 0.6rem",
+                              borderRadius: "10px",
+                              background: isMe ? "rgba(56,189,248,0.16)" : "rgba(148,163,184,0.10)",
+                              border: `1px solid ${isMe ? "rgba(56,189,248,0.35)" : "var(--border)"}`,
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
+                            ${m.text}
+                          </div>
+                          <div style=${{ fontSize: "0.7rem", color: "var(--muted)", marginTop: "0.15rem" }}>
+                            ${m.ts ? String(m.ts).replace("T", " ").slice(0, 16) : ""}
+                          </div>
+                        </div>
+                      `;
+                    })}
+              </div>
+
+              <div class="stack">
+                <textarea
+                  class="textarea"
+                  value=${chatText}
+                  onChange=${(e) => setChatText(e.target.value)}
+                  placeholder="Ieraksti ziņu…"
+                />
+                <div class="row" style=${{ justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    class="btn btn-primary"
+                    disabled=${!chatText.trim() || !chatToId}
+                    onClick=${sendChat}
+                  >
+                    Sūtīt
+                  </button>
+                </div>
+              </div>
+
+              <p style=${{ marginTop: "0.65rem", fontSize: "0.8rem", color: "var(--muted)" }}>
+                Ziņas tiek glabātas lokāli šajā pārlūkā.
+              </p>
+            </div>
+          </section>
+        `;
+      }
+
       function App() {
         const { session, loading } = useSession();
         const { profile, loading: profileLoading } = useProfile(session?.user?.id);
@@ -3065,12 +3337,14 @@
                     setPromSub("calendar");
                   }}
                 />`
-              : html`<${PrombutnesSection}
-                  userId=${session.user.id}
-                  role=${profile?.role ?? "employee"}
-                  promSub=${promSub}
-                  setPromSub=${setPromSub}
-                />`}
+              : view === "zinas"
+                ? html`<${ZinasPanel} currentUserId=${session.user.id} />`
+                : html`<${PrombutnesSection}
+                    userId=${session.user.id}
+                    role=${profile?.role ?? "employee"}
+                    promSub=${promSub}
+                    setPromSub=${setPromSub}
+                  />`}
           </${AppShellWithNav}>
         `;
       }
