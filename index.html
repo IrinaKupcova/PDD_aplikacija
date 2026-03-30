@@ -370,7 +370,6 @@
     <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
     <script src="./Komanda.js"></script>
     <script src="./Filtr.js"></script>
-    <script src="./Zinas.js"></script>
 
     <script type="module">
       import React, { useState, useEffect, useCallback, useMemo } from "https://esm.sh/react@19.0.0";
@@ -975,13 +974,6 @@
                       `
                     : null}
                 </div>
-                <button
-                  type="button"
-                  class=${`app-nav-link ${view === "zinas" ? "active" : ""}`}
-                  onClick=${() => onChangeView("zinas")}
-                >
-                  Ziņas
-                </button>
               </div>
             </aside>
             <div class="app-main">
@@ -2440,6 +2432,10 @@
         }
         const typeOptionsEmployee = types.filter((t) => !isCitsSaskanotsTypeName(t.name));
         const typeOptionsEdit = approverView ? types : typeOptionsEmployee;
+        const typeNameOptions = useMemo(() => {
+          const names = (types ?? []).map((t) => t.name).filter(Boolean);
+          return Array.from(new Set(names)).sort((a, b) => String(a).localeCompare(String(b)));
+        }, [types]);
         const includesMatch =
           window.PDDFiltr?.includesMatch ??
           ((value, query) => {
@@ -2491,49 +2487,6 @@
               Kolonnas atbilst <code>public.prombutnes_dati</code> (ierakstu rindas var paslēpt — redzamas paliek
               tabulas galvenes).
             </p>
-            ${filtersOpen
-              ? html`
-                  <div class="list-panel" style=${{
-                    marginTop: "0.2rem",
-                    marginBottom: "0.7rem",
-                    padding: "0.9rem",
-                    background: "var(--bg)",
-                  }}>
-                    <div class="row" style=${{ justifyContent: "space-between", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
-                      <h3 style=${{ margin: 0, fontSize: "0.95rem" }}>Filtri</h3>
-                      <button type="button" class="btn btn-ghost btn-small" onClick=${clearFilters}>
-                        Notīrīt filtrus
-                      </button>
-                    </div>
-                    <div class="row" style=${{ gap: "0.7rem", flexWrap: "wrap", marginTop: "0.85rem" }}>
-                      <div class="field" style=${{ flex: "1 1 220px" }}>
-                        <label>Vārds, uzvārds</label>
-                        <input class="input" value=${filters.name} onChange=${(e) => setFilters((f) => ({ ...f, name: e.target.value }))} placeholder="meklēt..." />
-                      </div>
-                      <div class="field" style=${{ flex: "1 1 220px" }}>
-                        <label>Prombūtnes veids</label>
-                        <input class="input" value=${filters.type} onChange=${(e) => setFilters((f) => ({ ...f, type: e.target.value }))} placeholder="meklēt..." />
-                      </div>
-                      <div class="field" style=${{ flex: "1 1 200px" }}>
-                        <label>Sākuma datums</label>
-                        <input class="input" value=${filters.start} onChange=${(e) => setFilters((f) => ({ ...f, start: e.target.value }))} placeholder="YYYY-MM-DD..." />
-                      </div>
-                      <div class="field" style=${{ flex: "1 1 200px" }}>
-                        <label>Beigu datums</label>
-                        <input class="input" value=${filters.end} onChange=${(e) => setFilters((f) => ({ ...f, end: e.target.value }))} placeholder="YYYY-MM-DD..." />
-                      </div>
-                      <div class="field" style=${{ flex: "1 1 260px" }}>
-                        <label>Komentārs</label>
-                        <input class="input" value=${filters.comment} onChange=${(e) => setFilters((f) => ({ ...f, comment: e.target.value }))} placeholder="meklēt..." />
-                      </div>
-                      <div class="field" style=${{ flex: "1 1 170px" }}>
-                        <label>Status</label>
-                        <input class="input" value=${filters.status} onChange=${(e) => setFilters((f) => ({ ...f, status: e.target.value }))} placeholder="gaida/apstiprināts..." />
-                      </div>
-                    </div>
-                  </div>
-                `
-              : null}
             <div class="hist-table-wrap table-wrap">
               <table class="hist-table">
                 <thead>
@@ -2546,6 +2499,73 @@
                     <th>Status</th>
                     ${anyActions ? html`<th>—</th>` : null}
                   </tr>
+                  ${filtersOpen
+                    ? html`
+                        <tr class="hist-filter-row">
+                          <th>
+                            <div class="row" style=${{ gap: "0.5rem", alignItems: "center" }}>
+                              <input
+                                class="input"
+                                value=${filters.name}
+                                onChange=${(e) => setFilters((f) => ({ ...f, name: e.target.value }))}
+                                placeholder="meklēt..."
+                                style=${{ flex: "1 1 auto" }}
+                              />
+                              <button type="button" class="btn btn-ghost btn-small" onClick=${clearFilters} title="Notīrīt visus filtrus">
+                                Notīrīt
+                              </button>
+                            </div>
+                          </th>
+                          <th>
+                            <select
+                              class="select"
+                              value=${filters.type}
+                              onChange=${(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
+                            >
+                              <option value="">Visi</option>
+                              ${typeNameOptions.map((n) => html`<option key=${n} value=${n}>${n}</option>`)}
+                            </select>
+                          </th>
+                          <th>
+                            <input
+                              class="input"
+                              value=${filters.start}
+                              onChange=${(e) => setFilters((f) => ({ ...f, start: e.target.value }))}
+                              placeholder="YYYY-MM-DD..."
+                            />
+                          </th>
+                          <th>
+                            <input
+                              class="input"
+                              value=${filters.end}
+                              onChange=${(e) => setFilters((f) => ({ ...f, end: e.target.value }))}
+                              placeholder="YYYY-MM-DD..."
+                            />
+                          </th>
+                          <th>
+                            <input
+                              class="input"
+                              value=${filters.comment}
+                              onChange=${(e) => setFilters((f) => ({ ...f, comment: e.target.value }))}
+                              placeholder="meklēt..."
+                            />
+                          </th>
+                          <th>
+                            <select
+                              class="select"
+                              value=${filters.status}
+                              onChange=${(e) => setFilters((f) => ({ ...f, status: e.target.value }))}
+                            >
+                              <option value="">Visi</option>
+                              <option value="gaida">gaida</option>
+                              <option value="apstiprināts">apstiprināts</option>
+                              <option value="noraidīts">noraidīts</option>
+                            </select>
+                          </th>
+                          ${anyActions ? html`<th></th>` : null}
+                        </tr>
+                      `
+                    : null}
                 </thead>
                 ${historyOpen && filteredList.length
                   ? html`
@@ -3337,9 +3357,7 @@
                     setPromSub("calendar");
                   }}
                 />`
-              : view === "zinas"
-                ? html`<${ZinasPanel} currentUserId=${session.user.id} />`
-                : html`<${PrombutnesSection}
+              : html`<${PrombutnesSection}
                     userId=${session.user.id}
                     role=${profile?.role ?? "employee"}
                     promSub=${promSub}
