@@ -432,7 +432,7 @@
       }
 
       /** true: "tikai demo" (nav Supabase). false: Supabase (Realtime sinhronizācija ar DB). */
-      const TIKAI_VIENKARSI_SKATS = true;
+      const TIKAI_VIENKARSI_SKATS = false;
 
       // Publisko atslēgu kopē: Supabase → Project Settings → API → anon public (ne service_role).
       // Ja atslēga „pazuda” pēc rediģēšanas — ielīmē to atkal šeit (viena rinda, sākas ar eyJ…).
@@ -650,8 +650,9 @@
         return manager ? String(manager.id) === String(sessionUserId) : false;
       }
 
-      /** Cits saskaņošana: tikai pamatvadītājs vai aktīvais aizvietotājs. */
+      /** Cits saskaņošana: vadītājs (admin) vienmēr vai aktīvais aizvietotājs. */
       function userCanApproveAbsences(profileRole, sessionUserId, deputyUserId) {
+        if (String(profileRole || "").toLowerCase() === "admin") return true;
         if (isDefaultManagerUser(sessionUserId)) return true;
         if (
           deputyUserId &&
@@ -663,6 +664,7 @@
       }
 
       function isLocalMode() {
+        if (ADMIN_AUTO_ENTER && sessionStorage.getItem(LS_LOCAL_OK) === "1") return true;
         return !configured();
       }
 
@@ -728,13 +730,12 @@
       }
 
       function localSessionActive() {
-        if (ADMIN_AUTO_ENTER && TIKAI_VIENKARSI_SKATS) return true;
+        if (ADMIN_AUTO_ENTER && isLocalMode()) return true;
         return sessionStorage.getItem(LS_LOCAL_OK) === "1";
       }
 
       function ensureLocalAdminSession() {
         if (!ADMIN_AUTO_ENTER) return;
-        if (!TIKAI_VIENKARSI_SKATS) return;
         if (sessionStorage.getItem(LS_LOCAL_USER_ID)) return;
         const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
         const list = Array.isArray(users) ? users : [];
@@ -750,7 +751,6 @@
 
       function LocalEmailLoginScreen() {
         const [teamUsers, setTeamUsers] = useState([]);
-        const [pickedId, setPickedId] = useState(() => sessionStorage.getItem(LS_LOCAL_USER_ID) || "");
         const [email, setEmail] = useState(() => sessionStorage.getItem(LS_LOCAL_EMAIL) || "");
         const [err, setErr] = useState(null);
 
@@ -758,36 +758,22 @@
           const list = window.KOMANDA?.loadTeamUsers?.() ?? [];
           const arr = Array.isArray(list) ? list : [];
           setTeamUsers(arr);
-          if (!pickedId && arr.length) setPickedId(String(arr[0].id));
         }, []);
-
-        const pickedUser = useMemo(
-          () => teamUsers.find((u) => String(u.id) === String(pickedId)) ?? null,
-          [teamUsers, pickedId]
-        );
 
         function submit(e) {
           e.preventDefault();
           setErr(null);
 
-          if (!pickedUser) {
-            setErr("Izvēlies lietotāju no Komandas.");
-            return;
-          }
           const entered = String(email || "").trim().toLowerCase();
-          const expected = String(pickedUser.email ?? pickedUser["i-mail"] ?? pickedUser["e-pasts"] ?? "")
-            .trim()
-            .toLowerCase();
           if (!entered || !entered.includes("@")) {
-            setErr("Ievadi e-pastu.");
+            setErr("Ievadi darba e-pastu.");
             return;
           }
-          if (!expected || !expected.includes("@")) {
-            setErr("Šim lietotājam Komandā nav e-pasta.");
-            return;
-          }
-          if (entered !== expected) {
-            setErr("E-pasts nesakrīt ar Komandas sarakstu.");
+          const pickedUser =
+            teamUsers.find((u) => String(u.email ?? u["i-mail"] ?? u["e-pasts"] ?? "").trim().toLowerCase() === entered) ??
+            null;
+          if (!pickedUser) {
+            setErr("Šis e-pasts nav atrasts Komandas tabulā.");
             return;
           }
 
@@ -804,15 +790,6 @@
             <p class="app-sub">Pagaidu režīms: dati tikai šajā pārlūkā.</p>
             <form class="stack" onSubmit=${submit}>
               <div class="field">
-                <label for="loc-user">Vārds uzvārds</label>
-                <select id="loc-user" class="select" value=${pickedId} onChange=${(e) => setPickedId(e.target.value)} required>
-                  ${teamUsers.map((u) => {
-                    const label = u[COL_USER_NAME] ?? u.full_name ?? u["Vārds uzvārds"] ?? "—";
-                    return html`<option key=${u.id} value=${u.id}>${label}</option>`;
-                  })}
-                </select>
-              </div>
-              <div class="field">
                 <label for="loc-email">e-pasts</label>
                 <input
                   id="loc-email"
@@ -820,7 +797,7 @@
                   class="input"
                   value=${email}
                   onChange=${(ev) => setEmail(ev.target.value)}
-                  placeholder=${pickedUser ? (pickedUser.email ?? pickedUser["i-mail"] ?? "") : "ievadi e-pastu"}
+                  placeholder="ievadi darba e-pastu"
                   required
                   autoComplete="email"
                 />
@@ -846,6 +823,9 @@
         const [session, setSession] = useState(null);
         const [loading, setLoading] = useState(true);
         useEffect(() => {
+          if (ADMIN_AUTO_ENTER) {
+            ensureLocalAdminSession();
+          }
           if (TIKAI_VIENKARSI_SKATS) {
             ensureLocalAdminSession();
             const uid = sessionStorage.getItem(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
@@ -855,6 +835,7 @@
             return;
           }
           if (isLocalMode()) {
+            ensureLocalAdminSession();
             if (localSessionActive()) {
               const uid = sessionStorage.getItem(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
               const em = sessionStorage.getItem(LS_LOCAL_EMAIL) || "demo@local";
@@ -960,13 +941,10 @@
           if (/email not confirmed|not confirmed/i.test(m)) {
             return "Lūdzu vispirms apstiprini e-pastu — atver vēstuli un spied uz saites, tad mēģini ielogoties.";
           }
-          return "Nepareizs e-pasts vai parole, vai konts vēl nav apstiprināts.";
+          return "Nepareizs e-pasts vai konts vēl nav apstiprināts.";
         }
         if (/user already registered|already been registered|already exists/i.test(m)) {
           return "Šim e-pastam konts jau pastāv. Izmanto „Ieiet”.";
-        }
-        if (/password|weak|least.*6|6 characters/i.test(m)) {
-          return "Parolei jābūt vismaz 6 rakstzīmēm.";
         }
         if (/rate limit|too many requests/i.test(m)) {
           return "Pārāk daudz mēģinājumu. Uzgaidi brīdi un mēģini vēlreiz.";
@@ -976,9 +954,7 @@
       }
 
       function AuthScreen() {
-        const [mode, setMode] = useState("signin");
         const [email, setEmail] = useState("");
-        const [password, setPassword] = useState("");
         const [busy, setBusy] = useState(false);
         const [message, setMessage] = useState(null);
         async function onSubmit(e) {
@@ -990,26 +966,14 @@
           }
           setBusy(true);
           try {
-            if (mode === "signup") {
-              const { error } = await supabase.auth.signUp({
-                email: email.trim(),
-                password,
-                options: {
-                  emailRedirectTo: window.location.origin + window.location.pathname,
-                },
-              });
-              if (error) setMessage(authUserMessage(error.message));
-              else
-                setMessage(
-                  "Uz tavu e-pastu nosūtīta apstiprināšanas saite. Atver vēstuli, apstiprini e-pastu, pēc tam šeit spied „Ieiet” ar to pašu e-pastu un paroli."
-                );
-            } else {
-              const { error } = await supabase.auth.signInWithPassword({
-                email: email.trim(),
-                password,
-              });
-              if (error) setMessage(authUserMessage(error.message));
-            }
+            const { error } = await supabase.auth.signInWithOtp({
+              email: email.trim(),
+              options: {
+                emailRedirectTo: window.location.origin + window.location.pathname,
+              },
+            });
+            if (error) setMessage(authUserMessage(error.message));
+            else setMessage("Saite ielogoties nosūtīta uz e-pastu. Atver vēstuli un spied uz saites.");
           } finally {
             setBusy(false);
           }
@@ -1018,25 +982,8 @@
           <div class="auth-box">
             <h1>PDD — Pieslēgšanās</h1>
             <p style=${{ margin: "0 0 1rem", fontSize: "0.88rem", color: "var(--muted)" }}>
-              Tikai <strong>e-pasts</strong> un <strong>parole</strong>. Reģistrējoties vispirms
-              apstiprini e-pastu, tad ielogojies.
+              Tikai <strong>darba e-pasts</strong>. Parole nav nepieciešama.
             </p>
-            <div class="row" style=${{ marginBottom: "1rem" }}>
-              <button
-                type="button"
-                class=${`btn btn-small ${mode === "signin" ? "btn-primary" : "btn-ghost"}`}
-                onClick=${() => setMode("signin")}
-              >
-                Ieiet
-              </button>
-              <button
-                type="button"
-                class=${`btn btn-small ${mode === "signup" ? "btn-primary" : "btn-ghost"}`}
-                onClick=${() => setMode("signup")}
-              >
-                Reģistrēties
-              </button>
-            </div>
             <form class="stack" onSubmit=${onSubmit}>
               <div class="field">
                 <label for="email">E-pasts</label>
@@ -1050,23 +997,8 @@
                   autoComplete="email"
                 />
               </div>
-              <div class="field">
-                <label for="password">Parole</label>
-                <input
-                  id="password"
-                  type="password"
-                  class="input"
-                  required
-                  minLength=${6}
-                  title="Vismaz 6 rakstzīmes"
-                  value=${password}
-                  onChange=${(ev) => setPassword(ev.target.value)}
-                  autoComplete=${mode === "signup" ? "new-password" : "current-password"}
-                />
-                <span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}>Vismaz 6 rakstzīmes.</span>
-              </div>
               <button type="submit" class="btn btn-primary" disabled=${busy}>
-                ${busy ? "…" : mode === "signup" ? "Izveidot kontu" : "Ieiet"}
+                ${busy ? "…" : "Nosūtīt ielogošanās saiti"}
               </button>
             </form>
             ${message
@@ -3444,9 +3376,12 @@
               email: u.email ?? u["e-pasts"] ?? u["i-mail"] ?? "",
             }));
             setTeamUsers(users);
-            setDeputyUserId(null);
-            setDeputyValidFrom(null);
-            setDeputyValidTo(null);
+            const localDeputyId = localStorage.getItem(LS_LOCAL_DEPUTY_USER_ID);
+            const localFrom = localStorage.getItem(LS_LOCAL_DEPUTY_FROM);
+            const localTo = localStorage.getItem(LS_LOCAL_DEPUTY_TO);
+            setDeputyUserId(localDeputyId ? String(localDeputyId) : null);
+            setDeputyValidFrom(localFrom || null);
+            setDeputyValidTo(localTo || null);
             return;
           }
           const { error: rpcErr } = await supabase.rpc("pdd_cleanup_expired_deputy");
