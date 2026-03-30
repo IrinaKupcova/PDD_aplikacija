@@ -431,6 +431,30 @@
         return s && s.includes("@") ? s : "";
       }
 
+      function normalizeUserRole(rawRole) {
+        return String(rawRole ?? "").trim().toLowerCase() === "admin" ? "admin" : "user";
+      }
+
+      function normalizeTeamUserRecord(u) {
+        const name = String(
+          u?.[COL_USER_NAME] ?? u?.full_name ?? u?.["Vārds uzvārds"] ?? u?.["Vārds, uzvārds"] ?? ""
+        ).trim();
+        const email = String(
+          u?.email ?? u?.[COL_USER_IMAIL] ?? u?.["e-pasts"] ?? u?.["e-mail"] ?? u?.["i-mail"] ?? ""
+        ).trim();
+        const amats = String(u?.[COL_USER_AMATS] ?? u?.Amats ?? u?.amats ?? "").trim();
+        return {
+          ...u,
+          id: String(u?.id ?? ""),
+          [COL_USER_NAME]: name,
+          full_name: name || null,
+          [COL_USER_IMAIL]: email || null,
+          email: email || null,
+          [COL_USER_AMATS]: amats || null,
+          role: normalizeUserRole(u?.role),
+        };
+      }
+
       /** true: "tikai demo" (nav Supabase). false: Supabase (Realtime sinhronizācija ar DB). */
       const TIKAI_VIENKARSI_SKATS = false;
 
@@ -572,7 +596,7 @@
           console.error(r.error);
           return [];
         }
-        return r.data ?? [];
+          return (r.data ?? []).map(normalizeTeamUserRecord);
       }
 
       function getLocalCitsRequests() {
@@ -1752,7 +1776,7 @@
           [COL_USER_NAME]: v || null,
           [COL_USER_IMAIL]: i || null,
           [COL_USER_AMATS]: a || null,
-          role,
+          role: normalizeUserRole(role),
           full_name: v || null,
           email: i || null,
         };
@@ -1891,7 +1915,7 @@
             <h2 style=${{ margin: "0 0 0.25rem", fontSize: "1rem" }}>Komanda</h2>
             <p style=${{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--muted)" }}>
               Šī ir pamata lietotāju tabula. Šeit nosaki lomas (piemēram, <code>admin</code> vai
-              <code>employee</code>) un piekļuves tiesības.
+              <code>user</code>) un piekļuves tiesības.
             </p>
             ${canAdmin
               ? html`
@@ -3387,7 +3411,7 @@
             .select("*")
             .order(COL_USER_NAME, { ascending: true });
           if (uErr) console.error(uErr);
-          setTeamUsers(urows ?? []);
+          setTeamUsers((urows ?? []).map(normalizeTeamUserRecord));
           const { data: drow, error: dErr } = await supabase
             .from("pdd_deputy_state")
             .select("deputy_user_id, deputy_valid_from, deputy_valid_to")
