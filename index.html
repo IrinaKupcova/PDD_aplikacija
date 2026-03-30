@@ -1008,21 +1008,40 @@
               setMessage("Ievadi korektu darba e-pastu.");
               return;
             }
-            const { data, error } = await supabase.from("users").select("*");
-            if (error) {
-              setMessage(authUserMessage(error.message));
-              return;
+            let uid = "";
+            const { data: rpcRows, error: rpcErr } = await supabase.rpc("pdd_lookup_user_by_email", {
+              p_email: entered,
+            });
+            if (!rpcErr && Array.isArray(rpcRows) && rpcRows.length > 0) {
+              const r0 = rpcRows[0];
+              uid = String(r0?.user_id ?? r0?.pdd_lookup_user_by_email ?? "").trim();
             }
-            const list = Array.isArray(data) ? data : [];
-            const user =
-              list.find((u) => String(u?.email ?? u?.["i-mail"] ?? u?.["e-mail"] ?? "").trim().toLowerCase() === entered) ??
-              null;
-            if (!user) {
-              setMessage("Šis e-pasts nav atrasts Komandas tabulā.");
-              return;
+            if (!uid) {
+              const { data, error } = await supabase.from("users").select("*");
+              if (error) {
+                setMessage(authUserMessage(error.message));
+                return;
+              }
+              const list = Array.isArray(data) ? data : [];
+              const user =
+                list.find(
+                  (u) => String(u?.email ?? u?.["i-mail"] ?? u?.["e-mail"] ?? u?.["e-pasts"] ?? "").trim().toLowerCase() === entered
+                ) ?? null;
+              if (!user) {
+                if (rpcErr) {
+                  setMessage(
+                    authUserMessage(rpcErr.message) +
+                      "\n\nJa esi administrators: palaid Supabase SQL skriptu `pdd_lookup_user_by_email` (migration)."
+                  );
+                } else {
+                  setMessage("Šis e-pasts nav atrasts Komandas tabulā.");
+                }
+                return;
+              }
+              uid = String(user.id);
             }
             sessionStorage.setItem(LS_LOCAL_OK, "1");
-            sessionStorage.setItem(LS_LOCAL_USER_ID, String(user.id));
+            sessionStorage.setItem(LS_LOCAL_USER_ID, uid);
             sessionStorage.setItem(LS_LOCAL_EMAIL, entered);
             location.reload();
           } finally {
