@@ -1,4 +1,4 @@
-// Pēc „Cits (ar saskaņojumu)” apstiprināšanas — e-pasts pieteicējam (public.users.email).
+// Pēc „Cits (ar vadītāja saskaņojumu)” apstiprināšanas — e-pasts pieteicējam (public.users.email).
 // Secrets: RESEND_API_KEY, RESEND_FROM (kā notify-cits-manager)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
@@ -126,7 +126,7 @@ Deno.serve(async (req) => {
 
     const html = `
       <p>Sveiki, <strong>${employee}</strong>,</p>
-      <p>Jūsu prombūtnes pieprasījums ar veidu <strong>Cits (ar saskaņojumu)</strong> ir <strong>apstiprināts</strong>.</p>
+      <p>Jūsu prombūtnes pieprasījums ar veidu <strong>Cits (ar vadītāja saskaņojumu)</strong> ir <strong>apstiprināts</strong>.</p>
       <p>Periods: <strong>${row.start_date}</strong> — <strong>${row.end_date}</strong></p>
       ${row.comment ? `<p>Komentārs: ${String(row.comment).replace(/</g, "&lt;")}</p>` : ""}
       <p>Ar cieņu,<br/>PDD</p>
@@ -141,7 +141,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         from,
         to: [toEmail],
-        subject: `PDD: apstiprināts — Cits (ar saskaņojumu) (${row.start_date}–${row.end_date})`,
+        subject: `PDD: apstiprināts — Cits (ar vadītāja saskaņojumu) (${row.start_date}–${row.end_date})`,
         html,
       }),
     });

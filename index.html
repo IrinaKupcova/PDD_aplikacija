@@ -15,14 +15,14 @@
     <style>
       :root {
         color-scheme: light dark;
-        --bg: #c3f5e6;
-        --surface:  #3db7bb;
-        --surface2: #52b4c5;
-        --border: #136e39;
+        --bg: hsl(161, 66%, 89%);
+        --surface:  #5cb6a7;
+        --surface2: #43a185;
+        --border: #0a8070;
         --text: #01171d;
         --muted: #020c1b;
         --accent: #5ae694;
-        --accent-dim: #17acc0;
+        --accent-dim: #22806b;
         --radius: 12px;
         font-family: "Segoe UI", system-ui, sans-serif;
         line-height: 1.5;
@@ -369,6 +369,7 @@
 
     <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
     <script src="./Komanda.js"></script>
+    <script src="./Kalendars.js"></script>
     <script src="./Filtr.js"></script>
 
     <script type="module">
@@ -394,9 +395,14 @@
       const LOCAL_USER_ID = "local-user-1";
       const LS_LOCAL_OK = "pdd_local_ok";
       const LS_LOCAL_NAME = "pdd_local_display_name";
+      const LS_LOCAL_USER_ID = "pdd_local_user_id";
+      const LS_LOCAL_EMAIL = "pdd_local_email";
+      /** Adminam: atļaut atvērt bez ielogošanās (lokāli). */
+      const ADMIN_AUTO_ENTER = true;
       const LS_ABS = "pdd_local_absences";
       const LS_TYPES = "pdd_local_types";
       const LS_LOCAL_CITS = "pdd_local_cits_requests";
+      const LS_CHANGE_LOG = "pdd_change_log_v1";
       const LS_LOCAL_DEPUTY_USER_ID = "pdd_local_deputy_user_id";
       const LS_LOCAL_DEPUTY_FROM = "pdd_local_deputy_from";
       const LS_LOCAL_DEPUTY_TO = "pdd_local_deputy_to";
@@ -409,7 +415,7 @@
       const COL_USER_NAME = "Vārds uzvārds";
       const COL_USER_IMAIL = "i-mail";
       const COL_USER_AMATS = "Amats";
-      const TEAM_PAGE_SIZE = 10;
+      const TEAM_PAGE_SIZE = 20;
 
       function userDisplayName(u) {
         if (!u) return "—";
@@ -426,12 +432,12 @@
       }
 
       /** true: "tikai demo" (nav Supabase). false: Supabase (Realtime sinhronizācija ar DB). */
-      const TIKAI_VIENKARSI_SKATS = false;
+      const TIKAI_VIENKARSI_SKATS = true;
 
       // Publisko atslēgu kopē: Supabase → Project Settings → API → anon public (ne service_role).
       // Ja atslēga „pazuda” pēc rediģēšanas — ielīmē to atkal šeit (viena rinda, sākas ar eyJ…).
       const FILE_SUPABASE_URL = "https://fdnkvecgqetmwilwolgt.supabase.co";
-      const FILE_SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
+      const FILE_SUPABASE_ANON_KEY = "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
 
       const LS_URL = "pdd_supabase_url";
       const LS_KEY = "pdd_supabase_anon_key";
@@ -461,9 +467,21 @@
       /** Publiskā (anon) JWT atslēga — parasti gara, sākas ar eyJ, trīs segmenti. */
       function isValidSupabaseAnonKey(key) {
         const k = String(key || "").trim().replace(/\s+/g, "");
-        if (k.length < 80 || !k.startsWith("eyJ")) return false;
-        const parts = k.split(".");
-        return parts.length === 3 && parts[0].length > 0 && parts[1].length > 0 && parts[2].length > 0;
+        if (!k) return false;
+
+        // Vecais formāts: JWT (eyJ...).
+        if (k.startsWith("eyJ")) {
+          if (k.length < 80) return false;
+          const parts = k.split(".");
+          return parts.length === 3 && parts[0].length > 0 && parts[1].length > 0 && parts[2].length > 0;
+        }
+
+        // Jaunais Supabase "sb_*" publishable keys formāts (piem., sb_publishable_...).
+        if (/^sb_[a-z_]+/i.test(k)) {
+          return k.length >= 30;
+        }
+
+        return false;
       }
 
       function configured() {
@@ -506,6 +524,8 @@
         const n = String(name || "");
         return (
           /cits\s*\(\s*saskaņots\s*\)/i.test(n) ||
+          /cits\s*\(\s*vajag\s+vadītāja\s+saskaņojumu\s*\)/i.test(n) ||
+          /cits\s*\(\s*ar\s+saskaņošanu\s*\)/i.test(n) ||
           /cits\s*\(\s*ar\s+saskaņojumu\s*\)/i.test(n)
         );
       }
@@ -521,7 +541,22 @@
 
       async function fetchAbsenceFormUsers(supabaseClient, options) {
         const { localMode, localUser } = options;
-        if (localMode) return localUser ? [localUser] : [];
+        if (localMode) {
+          const list = window.KOMANDA?.loadTeamUsers?.() ?? [];
+          const arr = Array.isArray(list) ? list : [];
+          if (arr.length) {
+            return arr
+              .map((u) => ({
+                ...u,
+                id: String(u.id),
+                [COL_USER_NAME]: u[COL_USER_NAME] ?? u.full_name ?? u["Vārds uzvārds"] ?? "",
+                [COL_USER_IMAIL]: u[COL_USER_IMAIL] ?? u.email ?? u["i-mail"] ?? "",
+                [COL_USER_AMATS]: u[COL_USER_AMATS] ?? u.Amats ?? "",
+              }))
+              .sort((a, b) => String(userDisplayName(a)).localeCompare(String(userDisplayName(b))));
+          }
+          return localUser ? [localUser] : [];
+        }
         if (!supabaseClient) return [];
         const r = await supabaseClient
           .from("users")
@@ -542,18 +577,76 @@
         localStorage.setItem(LS_LOCAL_CITS, JSON.stringify(rows));
       }
 
+      function localCitsStatusLabel(st) {
+        if (st === "approved") return "Apstiprināts";
+        if (st === "cancelled") return "Noraidīts";
+        return "Gaida";
+      }
+
+      function currentLocalActor() {
+        const nm = sessionStorage.getItem(LS_LOCAL_NAME) || localDisplayName();
+        const em = sessionStorage.getItem(LS_LOCAL_EMAIL) || "";
+        const uid = sessionStorage.getItem(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
+        return { id: uid, name: nm, email: em };
+      }
+
+      function getChangeLog() {
+        const raw = localStorage.getItem(LS_CHANGE_LOG);
+        if (!raw) return [];
+        try {
+          const arr = JSON.parse(raw);
+          return Array.isArray(arr) ? arr : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function pushChangeLog(action, details) {
+        const actor = currentLocalActor();
+        const logs = getChangeLog();
+        logs.unshift({
+          id: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random(),
+          ts: new Date().toISOString(),
+          action: String(action || ""),
+          details: String(details || ""),
+          actor_name: actor.name || "—",
+          actor_email: actor.email || "",
+          actor_id: actor.id || "",
+        });
+        // paturam pēdējos 1500 ierakstus
+        localStorage.setItem(LS_CHANGE_LOG, JSON.stringify(logs.slice(0, 1500)));
+      }
+
       function resolveNotifyEmail(teamUsers, deputyUserId) {
         if (deputyUserId && teamUsers?.length) {
           const d = teamUsers.find((u) => String(u.id) === String(deputyUserId));
           const em = userImail(d);
           if (em) return em;
         }
+        if (teamUsers?.length) {
+          const manager = teamUsers.find((u) => {
+            const n = userDisplayName(u).toLowerCase().trim();
+            return n === "katrīna jirgensone";
+          });
+          const em = userImail(manager);
+          if (em) return em;
+        }
         return DEFAULT_MANAGER_EMAIL;
       }
 
-      /** Gaidošo akceptu / Cits apstiprinājums: vadītājs, admin vai aktīvais Prombūtnes apstiprinātājs. */
+      function isDefaultManagerUser(sessionUserId) {
+        if (!sessionUserId) return false;
+        const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
+        const list = Array.isArray(users) ? users : [];
+        const manager = list.find(
+          (u) => userDisplayName(u).toLowerCase().trim() === DEFAULT_MANAGER_NAME.toLowerCase().trim()
+        );
+        return manager ? String(manager.id) === String(sessionUserId) : false;
+      }
+
+      /** Cits saskaņošana: tikai pamatvadītājs vai aktīvais aizvietotājs. */
       function userCanApproveAbsences(profileRole, sessionUserId, deputyUserId) {
-        if (profileRole === "manager" || profileRole === "admin") return true;
+        if (isDefaultManagerUser(sessionUserId)) return true;
         if (
           deputyUserId &&
           sessionUserId &&
@@ -583,7 +676,7 @@
           { id: 4, name: "Mācības", color: "#059669", sort_order: 4 },
           { id: 5, name: "Slimības lapa", color: "#dc2626", sort_order: 5 },
           { id: 6, name: "Neapmaksāta prombūtne", color: "#ca8a04", sort_order: 6 },
-          { id: 7, name: "Cits (ar saskaņojumu)", color: "#64748b", sort_order: 7 },
+          { id: 7, name: "Cits (ar vadītāja saskaņojumu)", color: "#64748b", sort_order: 7 },
         ];
         localStorage.setItem(LS_TYPES, JSON.stringify(seed));
       }
@@ -594,7 +687,22 @@
       }
 
       function getLocalAbsences() {
-        return JSON.parse(localStorage.getItem(LS_ABS) || "[]");
+        const rows = JSON.parse(localStorage.getItem(LS_ABS) || "[]");
+        if (!Array.isArray(rows) || rows.length === 0) return Array.isArray(rows) ? rows : [];
+
+        // Retention: dzēšam prombūtnes, kuras beigušās senāk par 3 mēnešiem.
+        try {
+          const cutoff = format(subMonths(new Date(), 3), "yyyy-MM-dd");
+          const kept = rows.filter((r) => {
+            const end = String(r?.end_date ?? "");
+            if (!end) return true;
+            return end >= cutoff;
+          });
+          if (kept.length !== rows.length) localStorage.setItem(LS_ABS, JSON.stringify(kept));
+          return kept;
+        } catch {
+          return rows;
+        }
       }
 
       function setLocalAbsences(rows) {
@@ -602,22 +710,74 @@
       }
 
       function localSessionActive() {
+        if (ADMIN_AUTO_ENTER && TIKAI_VIENKARSI_SKATS) return true;
         return sessionStorage.getItem(LS_LOCAL_OK) === "1";
       }
 
-      function LocalPasswordScreen() {
-        const [pw, setPw] = useState("");
-        const [name, setName] = useState(() => sessionStorage.getItem(LS_LOCAL_NAME) || "");
+      function ensureLocalAdminSession() {
+        if (!ADMIN_AUTO_ENTER) return;
+        if (!TIKAI_VIENKARSI_SKATS) return;
+        if (sessionStorage.getItem(LS_LOCAL_USER_ID)) return;
+        const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
+        const list = Array.isArray(users) ? users : [];
+        const admin = list.find((u) => String(u?.role ?? "").toLowerCase() === "admin") ?? list[0];
+        if (!admin) return;
+        sessionStorage.setItem(LS_LOCAL_OK, "1");
+        sessionStorage.setItem(LS_LOCAL_USER_ID, String(admin.id));
+        const em = String(admin.email ?? admin["i-mail"] ?? admin["e-pasts"] ?? "").trim();
+        if (em) sessionStorage.setItem(LS_LOCAL_EMAIL, em);
+        const nm = String(admin[COL_USER_NAME] ?? admin.full_name ?? admin["Vārds uzvārds"] ?? "").trim();
+        if (nm) sessionStorage.setItem(LS_LOCAL_NAME, nm);
+      }
+
+      function LocalEmailLoginScreen() {
+        const [teamUsers, setTeamUsers] = useState([]);
+        const [pickedId, setPickedId] = useState(() => sessionStorage.getItem(LS_LOCAL_USER_ID) || "");
+        const [email, setEmail] = useState(() => sessionStorage.getItem(LS_LOCAL_EMAIL) || "");
         const [err, setErr] = useState(null);
+
+        useEffect(() => {
+          const list = window.KOMANDA?.loadTeamUsers?.() ?? [];
+          const arr = Array.isArray(list) ? list : [];
+          setTeamUsers(arr);
+          if (!pickedId && arr.length) setPickedId(String(arr[0].id));
+        }, []);
+
+        const pickedUser = useMemo(
+          () => teamUsers.find((u) => String(u.id) === String(pickedId)) ?? null,
+          [teamUsers, pickedId]
+        );
+
         function submit(e) {
           e.preventDefault();
           setErr(null);
-          if (pw !== PAGAIDU_PAROLE) {
-            setErr("Nepareiza parole.");
+
+          if (!pickedUser) {
+            setErr("Izvēlies lietotāju no Komandas.");
             return;
           }
+          const entered = String(email || "").trim().toLowerCase();
+          const expected = String(pickedUser.email ?? pickedUser["i-mail"] ?? pickedUser["e-pasts"] ?? "")
+            .trim()
+            .toLowerCase();
+          if (!entered || !entered.includes("@")) {
+            setErr("Ievadi e-pastu.");
+            return;
+          }
+          if (!expected || !expected.includes("@")) {
+            setErr("Šim lietotājam Komandā nav e-pasta.");
+            return;
+          }
+          if (entered !== expected) {
+            setErr("E-pasts nesakrīt ar Komandas sarakstu.");
+            return;
+          }
+
           sessionStorage.setItem(LS_LOCAL_OK, "1");
-          if (name.trim()) sessionStorage.setItem(LS_LOCAL_NAME, name.trim());
+          sessionStorage.setItem(LS_LOCAL_USER_ID, String(pickedUser.id));
+          sessionStorage.setItem(LS_LOCAL_EMAIL, entered);
+          const nm = pickedUser[COL_USER_NAME] ?? pickedUser.full_name ?? pickedUser["Vārds uzvārds"] ?? "";
+          if (String(nm || "").trim()) sessionStorage.setItem(LS_LOCAL_NAME, String(nm).trim());
           location.reload();
         }
         return html`
@@ -626,36 +786,30 @@
             <p class="app-sub">Pagaidu režīms: dati tikai šajā pārlūkā.</p>
             <form class="stack" onSubmit=${submit}>
               <div class="field">
-                <label for="loc-name">Vārds (kalendāram)</label>
-                <input
-                  id="loc-name"
-                  class="input"
-                  value=${name}
-                  onChange=${(ev) => setName(ev.target.value)}
-                  placeholder="Piemēram, Jānis"
-                  autoComplete="name"
-                />
+                <label for="loc-user">Vārds uzvārds</label>
+                <select id="loc-user" class="select" value=${pickedId} onChange=${(e) => setPickedId(e.target.value)} required>
+                  ${teamUsers.map((u) => {
+                    const label = u[COL_USER_NAME] ?? u.full_name ?? u["Vārds uzvārds"] ?? "—";
+                    return html`<option key=${u.id} value=${u.id}>${label}</option>`;
+                  })}
+                </select>
               </div>
               <div class="field">
-                <label for="loc-pw">Parole</label>
+                <label for="loc-email">e-pasts</label>
                 <input
-                  id="loc-pw"
-                  type="password"
+                  id="loc-email"
+                  type="email"
                   class="input"
-                  value=${pw}
-                  onChange=${(ev) => setPw(ev.target.value)}
-                  placeholder="Noklusējums: pdd"
+                  value=${email}
+                  onChange=${(ev) => setEmail(ev.target.value)}
+                  placeholder=${pickedUser ? (pickedUser.email ?? pickedUser["i-mail"] ?? "") : "ievadi e-pastu"}
                   required
-                  autoComplete="current-password"
+                  autoComplete="email"
                 />
               </div>
               ${err ? html`<p style=${{ color: "var(--danger, #f87171)", margin: 0 }}>${err}</p>` : null}
               <button type="submit" class="btn btn-primary">Ieiet</button>
             </form>
-            <p style=${{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "1rem" }}>
-              Noklusējuma parole ir <code>pdd</code> — nomaini to konstantē
-              <code>PAGAIDU_PAROLE</code> šajā HTML.
-            </p>
             <details style=${{ marginTop: "0.85rem", fontSize: "0.8rem", color: "var(--muted)" }}>
               <summary style=${{ cursor: "pointer" }}>Problēmas ar tiešsaistes pieslēgšanos?</summary>
               <p style=${{ marginTop: "0.5rem" }}>
@@ -675,13 +829,18 @@
         const [loading, setLoading] = useState(true);
         useEffect(() => {
           if (TIKAI_VIENKARSI_SKATS) {
-            setSession({ user: { id: LOCAL_USER_ID, email: "local@pdd" } });
+            ensureLocalAdminSession();
+            const uid = sessionStorage.getItem(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
+            const em = sessionStorage.getItem(LS_LOCAL_EMAIL) || "local@pdd";
+            setSession({ user: { id: uid, email: em } });
             setLoading(false);
             return;
           }
           if (isLocalMode()) {
             if (localSessionActive()) {
-              setSession({ user: { id: LOCAL_USER_ID, email: "demo@local" } });
+              const uid = sessionStorage.getItem(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
+              const em = sessionStorage.getItem(LS_LOCAL_EMAIL) || "demo@local";
+              setSession({ user: { id: uid, email: em } });
             } else {
               setSession(null);
             }
@@ -719,14 +878,17 @@
           }
           if (isLocalMode()) {
             const ln = localDisplayName();
+            const uid = sessionStorage.getItem(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
+            const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
+            const me = (Array.isArray(users) ? users : []).find((u) => String(u.id) === String(uid)) ?? null;
             setProfile({
-              id: LOCAL_USER_ID,
-              full_name: ln,
-              [COL_USER_NAME]: ln,
-              [COL_USER_IMAIL]: "demo@local",
-              [COL_USER_AMATS]: "",
-              email: null,
-              role: "manager",
+              id: uid,
+              full_name: me?.full_name ?? me?.[COL_USER_NAME] ?? ln,
+              [COL_USER_NAME]: me?.[COL_USER_NAME] ?? me?.full_name ?? ln,
+              [COL_USER_IMAIL]: me?.[COL_USER_IMAIL] ?? me?.email ?? sessionStorage.getItem(LS_LOCAL_EMAIL) ?? "",
+              [COL_USER_AMATS]: me?.[COL_USER_AMATS] ?? me?.Amats ?? "",
+              email: me?.email ?? sessionStorage.getItem(LS_LOCAL_EMAIL) ?? null,
+              role: me?.role ?? "user",
               created_at: null,
             });
             setLoading(false);
@@ -919,10 +1081,9 @@
                 </button>
                 <button
                   type="button"
-                  class=${`app-nav-link ${view === "prombutnes" && promSub === "teamUsers" ? "active" : ""}`}
+                  class=${`app-nav-link ${view === "team" ? "active" : ""}`}
                   onClick=${() => {
-                    onChangeView("prombutnes");
-                    onPromSubChange("teamUsers");
+                    onChangeView("team");
                   }}
                 >
                   Komanda
@@ -930,12 +1091,12 @@
                 <div>
                   <button
                     type="button"
-                  class=${`app-nav-link ${view === "prombutnes" && promSub !== "teamUsers" ? "active" : ""}`}
+                  class=${`app-nav-link ${view === "prombutnes" ? "active" : ""}`}
                     onClick=${() => onChangeView("prombutnes")}
                   >
                     Prombūtnes
                   </button>
-                ${view === "prombutnes" && promSub !== "teamUsers"
+                ${view === "prombutnes"
                     ? html`
                         <div class="app-nav-sub" role="group" aria-label="Prombūtnes apakšsadaļas">
                           <button
@@ -952,6 +1113,13 @@
                           >
                             Prombūtnes pieteikums
                           </button>
+                          <button
+                            type="button"
+                            class=${`app-nav-sublink ${promSub === "history" ? "active" : ""}`}
+                            onClick=${() => onPromSubChange("history")}
+                          >
+                            Prombūtnes vēsture
+                          </button>
                           ${showPromDeputyTab
                             ? html`
                                 <button
@@ -965,10 +1133,10 @@
                             : null}
                           <button
                             type="button"
-                            class=${`app-nav-sublink ${promSub === "teamUsers" ? "active" : ""}`}
-                            onClick=${() => onPromSubChange("teamUsers")}
+                            class=${`app-nav-sublink ${promSub === "changes" ? "active" : ""}`}
+                            onClick=${() => onPromSubChange("changes")}
                           >
-                            Komanda
+                            Auditācijas vēsture
                           </button>
                         </div>
                       `
@@ -993,7 +1161,7 @@
             <div class="card-grid">
               <button type="button" class="card" onClick=${onOpenPrombutnes}>
                 <h3>Prombūtnes</h3>
-                <p>Kalendārs, pieteikums un apstiprinātāja maiņa; „Cits (ar saskaņojumu)” — caur e-pastu.</p>
+                <p>Kalendārs, pieteikums un apstiprinātāja maiņa; „Cits (ar vadītāja saskaņojumu)” — caur e-pastu.</p>
               </button>
               <div class="card" style=${{ opacity: 0.65, cursor: "default" }}>
                 <h3>Modulis2</h3>
@@ -1041,7 +1209,7 @@
         };
       }
 
-      function AbsenceCalendar({ month, onMonthChange, absences, caption, onPickAbsence }) {
+      function AbsenceCalendar({ month, onMonthChange, absences, caption, onPickAbsence, onPickDay }) {
         const start = startOfWeek(startOfMonth(month), { weekStartsOn: 1 });
         const end = endOfWeek(endOfMonth(month), { weekStartsOn: 1 });
         const days = eachDayOfInterval({ start, end });
@@ -1078,7 +1246,24 @@
                     key=${d.toISOString()}
                     class=${`cal-cell ${!inMonth ? "cal-cell-out" : ""} ${isToday(d) ? "cal-cell-today" : ""}`}
                   >
-                    <div class="cal-day-num">${format(d, "d")}</div>
+                    <div class="row" style=${{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.2rem" }}>
+                      <div class="cal-day-num">${format(d, "d")}</div>
+                      ${onPickDay && inMonth
+                        ? html`
+                            <button
+                              type="button"
+                              class="btn btn-ghost btn-small"
+                              title="Pieteikt prombūtni šai dienai"
+                              onClick=${(ev) => {
+                                ev.stopPropagation();
+                                onPickDay(d);
+                              }}
+                            >
+                              Pieteikt
+                            </button>
+                          `
+                        : null}
+                    </div>
                     ${items.map((a) => html`
                       <span
                         key=${a.id}
@@ -1123,7 +1308,7 @@
         `;
       }
 
-      function AbsenceRequestForm({ userId, role, onCreated, notifyEmail }) {
+      function AbsenceRequestForm({ userId, role, onCreated, notifyEmail, presetDate, onConsumePreset, canApproveRequests }) {
         const [types, setTypes] = useState([]);
         const [typeId, setTypeId] = useState("");
         const [startDate, setStartDate] = useState("");
@@ -1132,7 +1317,9 @@
         const [busy, setBusy] = useState(false);
         const [users, setUsers] = useState([]);
         const [selectedUserId, setSelectedUserId] = useState("");
-        const isManager = role === "manager" || role === "admin";
+        const [citsRows, setCitsRows] = useState([]);
+        const [decisionReason, setDecisionReason] = useState({});
+        const isManager = role === "admin";
         useEffect(() => {
           if (isLocalMode()) {
             setTypes(getLocalTypes());
@@ -1162,32 +1349,12 @@
               },
             });
             if (cancelled) return;
-            if (isManager) {
-              setUsers(list);
-            } else {
-              const self = list.find((u) => String(u.id) === String(userId));
-              setUsers(
-                self
-                  ? [self]
-                  : [
-                      {
-                        id: userId,
-                        full_name: locName,
-                        [COL_USER_NAME]: locName,
-                        [COL_USER_IMAIL]: "demo@local",
-                        [COL_USER_AMATS]: "",
-                      },
-                    ]
-              );
-            }
+            setUsers(list);
             const uid = String(userId);
             const defaultId =
               list.find((u) => String(u.id) === uid)?.id ?? list[0]?.id ?? "";
             setSelectedUserId((prev) => {
-              if (isManager) {
-                if (prev && list.some((u) => String(u.id) === String(prev))) return prev;
-                return defaultId;
-              }
+              if (prev && list.some((u) => String(u.id) === String(prev))) return prev;
               return defaultId;
             });
           })();
@@ -1195,6 +1362,81 @@
             cancelled = true;
           };
         }, [userId, isManager]);
+        useEffect(() => {
+          if (!presetDate) return;
+          setStartDate(presetDate);
+          setEndDate(presetDate);
+          onConsumePreset?.();
+        }, [presetDate, onConsumePreset]);
+        useEffect(() => {
+          if (!isLocalMode()) return;
+          setCitsRows(getLocalCitsRequests());
+        }, []);
+
+        const citsVisibleRows = useMemo(() => {
+          const all = citsRows ?? [];
+          return all
+            .filter((r) => canApproveRequests || String(r.user_id) === String(userId))
+            .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+        }, [citsRows, canApproveRequests, userId]);
+
+        function refreshLocalCitsRows() {
+          const rows = getLocalCitsRequests();
+          setCitsRows(rows);
+          return rows;
+        }
+
+        function getTokenLink(token) {
+          const base = window.location.href.split("?")[0];
+          return `${base}?cits=${token}`;
+        }
+
+        async function decideLocalCits(row, decision) {
+          const reason = String(decisionReason[row.id] ?? "").trim();
+          const rows = getLocalCitsRequests();
+          const idx = rows.findIndex((x) => String(x.id) === String(row.id));
+          if (idx < 0) return;
+          const nextStatus = decision === "approve" ? "approved" : "cancelled";
+          rows[idx] = {
+            ...rows[idx],
+            status: nextStatus,
+            decision_reason: reason || null,
+            decided_at: new Date().toISOString(),
+            decided_by: userId,
+          };
+          setLocalCitsRequests(rows);
+          setDecisionReason((m) => ({ ...m, [row.id]: "" }));
+
+          const types2 = getLocalTypes();
+          const citsType = types2.find((t) => isCitsSaskanotsTypeName(t.name));
+          const abs = getLocalAbsences();
+          const pIdx = abs.findIndex(
+            (x) =>
+              citsType &&
+              Number(x.type_id) === Number(citsType.id) &&
+              String(x.user_id) === String(row.user_id) &&
+              String(x.start_date) === String(row.start_date) &&
+              String(x.end_date) === String(row.end_date) &&
+              String(x.comment ?? "") === String(row.comment ?? "") &&
+              String(x.status) === "pending"
+          );
+          if (decision === "approve") {
+            const nowIso = new Date().toISOString();
+            if (pIdx >= 0) {
+              abs[pIdx] = { ...abs[pIdx], status: "approved", approved_at: nowIso, approved_by: userId };
+            }
+          } else if (pIdx >= 0) {
+            // Noraidīts: noņemam pending ierakstu no kalendāra.
+            abs.splice(pIdx, 1);
+          }
+          setLocalAbsences(abs);
+          refreshLocalCitsRows();
+          onCreated?.();
+          pushChangeLog(
+            decision === "approve" ? "prombutne.cits_apstiprinats" : "prombutne.cits_noraidits",
+            `${row.user_id}: ${row.start_date} — ${row.end_date}${reason ? ` (${reason})` : ""}`
+          );
+        }
         async function handleSubmit(e) {
           e.preventDefault();
           if (!typeId || !selectedUserId) return;
@@ -1211,6 +1453,7 @@
               if (isLocalMode()) {
                 const token = crypto.randomUUID();
                 const rows = getLocalCitsRequests();
+                const nowIso = new Date().toISOString();
                 rows.push({
                   id: crypto.randomUUID(),
                   user_id: selectedUserId,
@@ -1220,14 +1463,48 @@
                   notify_email: to,
                   approval_token: token,
                   status: "pending_manager",
-                  created_at: new Date().toISOString(),
+                  created_at: nowIso,
+                  decision_reason: null,
+                  decided_at: null,
+                  decided_by: null,
                 });
                 setLocalCitsRequests(rows);
-                const base = window.location.href.split("?")[0];
-                alert(
-                  "Vietējā režīmā e-pasts netiek nosūtīts. Nosūti saskaņotājam saiti:\n\n" +
-                    `${base}?cits=${token}`
+                setCitsRows(rows);
+                // Lokāli "Cits (ar vadītāja saskaņojumu)" uzreiz redzams kalendārā kā gaidošs ieraksts.
+                const absRows = getLocalAbsences();
+                const citsType = (types ?? []).find((t) => isCitsSaskanotsTypeName(t.name));
+                if (citsType?.id) {
+                  absRows.push({
+                    id: crypto.randomUUID(),
+                    user_id: selectedUserId,
+                    type_id: Number(citsType.id),
+                    start_date: startDate,
+                    end_date: endDate,
+                    comment: comment.trim() || null,
+                    status: "pending",
+                    approved_by: null,
+                    approved_at: null,
+                    created_at: nowIso,
+                  });
+                  setLocalAbsences(absRows);
+                }
+                pushChangeLog(
+                  "prombutne.cits_pieteikts",
+                  `Darbinieks ${selectedUserId}: ${startDate} — ${endDate}`
                 );
+                const base = window.location.href.split("?")[0];
+                const link = `${base}?cits=${token}`;
+                const subject = encodeURIComponent("Gaida prombūtnes saskaņojumu");
+                const body = encodeURIComponent(
+                  `Gaida prombūtnes saskaņojumu.\n\nDarbinieks: ${selectedUserId}\nPeriods: ${startDate} — ${endDate}\n\nSaite: ${link}`
+                );
+                const mailto = `mailto:${encodeURIComponent(String(to).trim())}?subject=${subject}&body=${body}`;
+                try {
+                  window.open(mailto, "_blank");
+                } catch {
+                  /* ignore */
+                }
+                alert("Sagatavota e-pasta ziņa ar saiti saskaņošanai:\n\n" + link);
               } else {
                 const { data: ins, error: insErr } = await supabase
                   .from("pdd_cits_requests")
@@ -1263,7 +1540,7 @@
               setEndDate("");
               setComment("");
               setTypeId("");
-              if (!isManager) setSelectedUserId(userId);
+              setSelectedUserId((prev) => prev || userId);
               onCreated();
               return;
             }
@@ -1283,6 +1560,10 @@
                 created_at: nowIso,
               });
               setLocalAbsences(rows);
+              pushChangeLog(
+                "prombutne.pievienota",
+                `Darbinieks ${selectedUserId}: ${startDate} — ${endDate}`
+              );
             } else {
               const nowIso = new Date().toISOString();
               const { error } = await supabase.from("prombutnes_dati").insert({
@@ -1304,7 +1585,7 @@
             setEndDate("");
             setComment("");
             setTypeId("");
-            if (!isManager) setSelectedUserId(userId);
+            setSelectedUserId((prev) => prev || userId);
             onCreated();
           } finally {
             setBusy(false);
@@ -1314,7 +1595,7 @@
           <div class="list-panel">
             <h2>Prombūtnes pieteikums</h2>
             <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
-              <strong>Cits (ar saskaņojumu)</strong> — obligāta e-pasta saskaņošana: pieprasījums un saite uz
+              <strong>Cits (ar vadītāja saskaņojumu)</strong> — obligāta e-pasta saskaņošana: pieprasījums un saite uz
               <strong>${notifyEmail}</strong>. Pārējie veidi tiek ierakstīti kā apstiprināti un uzreiz redzami
               kalendārā (bez atsevišķa akcepta soļa šeit).
             </p>
@@ -1325,22 +1606,18 @@
                   id="employee"
                   class="select"
                   required
-                  disabled=${!isManager}
                   value=${selectedUserId}
                   onChange=${(ev) => setSelectedUserId(ev.target.value)}
                 >
-                  <option value="">Izvēlies darbinieku</option>
                   ${users.map(
                     (u) => html`
-                      <option key=${u.id} value=${u.id}>${formatUserSelectLabel(u)}</option>
+                      <option key=${u.id} value=${u.id}>${userDisplayName(u)}</option>
                     `
                   )}
                 </select>
-                ${!isManager
-                  ? html`<span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}
-                    >Tikai savs konts. Vadītājs var iesniegt arī citiem.</span
-                  >`
-                  : null}
+                <span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}>
+                  Pēc noklusējuma izvēlēts tavs vārds, bet vari pārslēgt uz citu.
+                </span>
               </div>
               <div class="field">
                 <label for="ptype">Veids</label>
@@ -1397,6 +1674,81 @@
                 ${busy ? "Sūta…" : "Iesniegt"}
               </button>
             </form>
+            ${isLocalMode()
+              ? html`
+                  <div class="list-panel" style=${{ marginTop: "0.9rem", background: "var(--bg)" }}>
+                    <h3 style=${{ margin: "0 0 0.5rem", fontSize: "0.95rem" }}>Saskaņošanas pieprasījumi</h3>
+                    <div class="table-wrap">
+                      <table class="hist-table">
+                        <thead>
+                          <tr>
+                            <th>Darbinieks</th>
+                            <th>Periods</th>
+                            <th>Statuss</th>
+                            <th>Iemesls</th>
+                            ${canApproveRequests ? html`<th>Darbība</th>` : null}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${citsVisibleRows.length
+                            ? citsVisibleRows.map((r) => {
+                                const emp = users.find((u) => String(u.id) === String(r.user_id));
+                                const status = localCitsStatusLabel(r.status);
+                                const pending = r.status === "pending_manager";
+                                return html`
+                                  <tr key=${r.id}>
+                                    <td>${emp ? userDisplayName(emp) : r.user_id}</td>
+                                    <td>${r.start_date} — ${r.end_date}</td>
+                                    <td>
+                                      <span class=${`badge ${pending ? "badge-pending" : r.status === "approved" ? "badge-approved" : "badge-rejected"}`}>
+                                        ${status}
+                                      </span>
+                                    </td>
+                                    <td>${r.decision_reason ?? "—"}</td>
+                                    ${canApproveRequests
+                                      ? html`
+                                          <td>
+                                            ${pending
+                                              ? html`
+                                                  <div class="stack">
+                                                    <input
+                                                      class="input"
+                                                      placeholder="Iemesls (pēc izvēles)"
+                                                      value=${decisionReason[r.id] ?? ""}
+                                                      onChange=${(e) =>
+                                                        setDecisionReason((m) => ({ ...m, [r.id]: e.target.value }))
+                                                      }
+                                                    />
+                                                    <div class="row" style=${{ gap: "0.35rem" }}>
+                                                      <button type="button" class="btn btn-danger btn-small" onClick=${() => decideLocalCits(r, "approve")}>
+                                                        Apstiprināt
+                                                      </button>
+                                                      <button type="button" class="btn btn-ghost btn-small" onClick=${() => decideLocalCits(r, "reject")}>
+                                                        Noraidīt
+                                                      </button>
+                                                    </div>
+                                                  </div>
+                                                `
+                                              : html`<span style=${{ color: "var(--muted)", fontSize: "0.82rem" }}>Apstrādāts</span>`}
+                                          </td>
+                                        `
+                                      : null}
+                                  </tr>
+                                `;
+                              })
+                            : html`
+                                <tr>
+                                  <td colspan=${canApproveRequests ? 5 : 4} style=${{ color: "var(--muted)", fontStyle: "italic" }}>
+                                    Nav pieprasījumu.
+                                  </td>
+                                </tr>
+                              `}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                `
+              : null}
           </div>
         `;
       }
@@ -1404,10 +1756,8 @@
       /** Izvēlnēm: kā DB — Vārds uzvārds, i-mail, loma. */
       function formatUserSelectLabel(u) {
         const name = userDisplayName(u);
-        const em = userImail(u);
-        const role = u?.role && u.role !== "employee" ? ` · ${u.role}` : "";
-        if (em) return `${name} — ${em}${role}`;
-        return `${name}${role} (nav e-pasta)`;
+        const role = u?.role && u.role !== "user" ? ` · ${u.role}` : "";
+        return `${name}${role}`;
       }
 
       // Komanda: parādām tikai Vārds uzvārds, e-pasts un Amats.
@@ -1468,7 +1818,7 @@
           vardUzv: "",
           imail: "",
           amats: "",
-          role: "employee",
+          role: "user",
         });
         const [addOpen, setAddOpen] = useState(false);
         const [addForm, setAddForm] = useState({
@@ -1476,11 +1826,10 @@
           vardUzv: "",
           imail: "",
           amats: "",
-          role: "employee",
+          role: "user",
         });
         const [busy, setBusy] = useState(false);
         const [delId, setDelId] = useState(null);
-        // Ziņas ir atsevišķā navigācijā (`Ziņas`), tāpēc šajā panelī tās netiek renderētas.
         const isLocalTeams = false;
         const total = users?.length ?? 0;
         const totalPages = Math.max(1, Math.ceil(total / TEAM_PAGE_SIZE) || 1);
@@ -1502,7 +1851,7 @@
             vardUzv: u[COL_USER_NAME] ?? u.full_name ?? "",
             imail: userImail(u),
             amats: u[COL_USER_AMATS] ?? "",
-            role: u.role ?? "employee",
+            role: u.role ?? "user",
           });
         }
         async function saveEdit(e) {
@@ -1513,6 +1862,7 @@
             const payload = buildUserRowPayload(form.vardUzv, form.imail, form.amats, form.role);
             if (TIKAI_VIENKARSI_SKATS || !supabase) {
               window.KOMANDA?.upsertTeamUser?.({ id: editing, ...payload });
+              pushChangeLog("komanda.labot", `Lietotājs ${editing} atjaunināts`);
               setEditing(null);
               await onReload();
               return;
@@ -1541,8 +1891,9 @@
             const payload = buildUserRowPayload(addForm.vardUzv, addForm.imail, addForm.amats, addForm.role);
             if (isLocal) {
               window.KOMANDA?.upsertTeamUser?.({ id, ...payload });
+              pushChangeLog("komanda.pievienot", `Lietotājs ${id} pievienots`);
               setAddOpen(false);
-              setAddForm({ id: "", vardUzv: "", imail: "", amats: "", role: "employee" });
+              setAddForm({ id: "", vardUzv: "", imail: "", amats: "", role: "user" });
               await onReload();
               return;
             }
@@ -1552,7 +1903,7 @@
               return;
             }
             setAddOpen(false);
-            setAddForm({ id: "", vardUzv: "", imail: "", amats: "", role: "employee" });
+            setAddForm({ id: "", vardUzv: "", imail: "", amats: "", role: "user" });
             await onReload();
           } finally {
             setBusy(false);
@@ -1564,6 +1915,7 @@
           try {
             if (TIKAI_VIENKARSI_SKATS || !supabase) {
               window.KOMANDA?.deleteTeamUser?.(delId);
+              pushChangeLog("komanda.dzest", `Lietotājs ${delId} dzēsts`);
               setDelId(null);
               await onReload();
               return;
@@ -1583,12 +1935,8 @@
           <div class="list-panel team-users-panel">
             <h2 style=${{ margin: "0 0 0.25rem", fontSize: "1rem" }}>Komanda</h2>
             <p style=${{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--muted)" }}>
-              Dati no <code>public.users</code>. Sinhronizācija ar datubāzi — izmaiņas redzamas visiem (ieslēdz
-              Supabase Realtime šīm tabulām: <code>users</code>, <code>prombutnes_dati</code>,
-              <code>pdd_deputy_state</code>, <code>pdd_cits_requests</code>).
-              ${canAdmin
-                ? " Vadītājs var pievienot rindu tikai tad, ja lietotājs jau pastāv Authentication (tas pats UUID)."
-                : ""}
+              Šī ir pamata lietotāju tabula. Šeit nosaki lomas (piemēram, <code>admin</code> vai
+              <code>employee</code>) un piekļuves tiesības.
             </p>
             ${canAdmin
               ? html`
@@ -1646,8 +1994,7 @@
                               value=${addForm.role}
                               onChange=${(ev) => setAddForm((f) => ({ ...f, role: ev.target.value }))}
                             >
-                              <option value="employee">employee</option>
-                              <option value="manager">manager</option>
+                              <option value="user">user</option>
                               <option value="admin">admin</option>
                             </select>
                           </div>
@@ -1877,8 +2224,7 @@
                             value=${form.role}
                             onChange=${(ev) => setForm((f) => ({ ...f, role: ev.target.value }))}
                           >
-                            <option value="employee">employee</option>
-                            <option value="manager">manager</option>
+                            <option value="user">user</option>
                             <option value="admin">admin</option>
                           </select>
                         </div>
@@ -1979,11 +2325,7 @@
               return;
             }
             await onDeputyChange();
-            setMsg(
-              nextId
-                ? "Apstiprinātājs saglabāts — apstiprinājumi un „Cits (ar saskaņojumu)” uz izvēlētā e-pastu norādītajā periodā."
-                : "Atiestatīts uz pamatvadītāju."
-            );
+              setMsg(nextId ? "Apstiprinātājs saglabāts norādītajam periodam." : "Atiestatīts uz pamatvadītāju.");
           } finally {
             setBusy(false);
           }
@@ -2039,14 +2381,14 @@
                   value=${sel}
                   onChange=${(ev) => setSel(ev.target.value)}
                 >
-                  <option value=${DEPUTY_OPT_MANAGER}>
-                    Vadītājs — ${DEFAULT_MANAGER_NAME} (${DEFAULT_MANAGER_EMAIL})
-                  </option>
-                  ${teamUsers.map(
-                    (u) => html`
-                      <option key=${u.id} value=${u.id}>${formatUserSelectLabel(u)}</option>
-                    `
-                  )}
+                  <option value=${DEPUTY_OPT_MANAGER}>Vadītājs — ${DEFAULT_MANAGER_NAME}</option>
+                  ${teamUsers
+                    .filter((u) => userDisplayName(u).toLowerCase().trim() !== DEFAULT_MANAGER_NAME.toLowerCase().trim())
+                    .map(
+                      (u) => html`
+                        <option key=${u.id} value=${u.id}>${formatUserSelectLabel(u)}</option>
+                      `
+                    )}
                 </select>
               </div>
               ${showPeriod
@@ -2095,6 +2437,7 @@
         const [preview, setPreview] = useState(null);
         const [err, setErr] = useState(null);
         const [busy, setBusy] = useState(false);
+        const [rejectReason, setRejectReason] = useState("");
         const [deputyUserId, setDeputyUserId] = useState(null);
         const [deputyLoaded, setDeputyLoaded] = useState(false);
         useEffect(() => {
@@ -2125,13 +2468,11 @@
             cancelled = true;
           };
         }, [sessionUserId]);
-        const canApprove = isLocalMode()
-          ? TIKAI_VIENKARSI_SKATS || localSessionActive()
-          : Boolean(
-              sessionUserId &&
-                deputyLoaded &&
-                userCanApproveAbsences(profileRole ?? "employee", sessionUserId, deputyUserId)
-            );
+        const canApprove = Boolean(
+          sessionUserId &&
+            (isLocalMode() ? true : deputyLoaded) &&
+            userCanApproveAbsences(profileRole ?? "user", sessionUserId, deputyUserId)
+        );
         useEffect(() => {
           let cancelled = false;
           (async () => {
@@ -2156,7 +2497,7 @@
               return;
             }
             if (!sessionUserId || !deputyLoaded) return;
-            if (!userCanApproveAbsences(profileRole ?? "employee", sessionUserId, deputyUserId)) {
+            if (!userCanApproveAbsences(profileRole ?? "user", sessionUserId, deputyUserId)) {
               if (!cancelled)
                 setErr(
                   "Apstiprināt drīkst tikai vadītājs, administrators vai norādītais Prombūtnes apstiprinātājs. Ielogojies ar atbilstošu kontu."
@@ -2194,27 +2535,46 @@
               const types = getLocalTypes();
               const cits = types.find((t) => isCitsSaskanotsTypeName(t.name));
               if (!cits) {
-                setErr("Nav veida „Cits (ar saskaņojumu)” lokālajos datos.");
+                setErr("Nav veida „Cits (ar vadītāja saskaņojumu)” lokālajos datos.");
                 return;
               }
               const abs = getLocalAbsences();
-              abs.push({
-                id: crypto.randomUUID(),
-                user_id: r.user_id,
-                type_id: cits.id,
-                start_date: r.start_date,
-                end_date: r.end_date,
-                comment: r.comment,
-                status: "approved",
-                created_at: new Date().toISOString(),
-                approved_at: new Date().toISOString(),
-              });
+              const nowIso = new Date().toISOString();
+              const idx = abs.findIndex(
+                (x) =>
+                  String(x.user_id) === String(r.user_id) &&
+                  Number(x.type_id) === Number(cits.id) &&
+                  String(x.start_date) === String(r.start_date) &&
+                  String(x.end_date) === String(r.end_date) &&
+                  String(x.comment ?? "") === String(r.comment ?? "") &&
+                  String(x.status) === "pending"
+              );
+              if (idx >= 0) {
+                abs[idx] = {
+                  ...abs[idx],
+                  status: "approved",
+                  approved_at: nowIso,
+                };
+              } else {
+                abs.push({
+                  id: crypto.randomUUID(),
+                  user_id: r.user_id,
+                  type_id: cits.id,
+                  start_date: r.start_date,
+                  end_date: r.end_date,
+                  comment: r.comment,
+                  status: "approved",
+                  created_at: nowIso,
+                  approved_at: nowIso,
+                });
+              }
               setLocalAbsences(abs);
               setLocalCitsRequests(
                 rows.map((x) =>
                   x.approval_token === token ? { ...x, status: "approved" } : x
                 )
               );
+              pushChangeLog("prombutne.cits_apstiprinats", `Cits pieprasījums ${token} apstiprināts`);
               stripCitsFromUrl();
               onDone();
               return;
@@ -2234,9 +2594,66 @@
             setBusy(false);
           }
         }
+        async function reject() {
+          if (!canApprove) {
+            alert("Noraidīt drīkst tikai vadītājs, administrators vai Prombūtnes apstiprinātājs.");
+            return;
+          }
+          setBusy(true);
+          try {
+            if (isLocalMode()) {
+              const rows = getLocalCitsRequests();
+              const r = rows.find((x) => x.approval_token === token && x.status === "pending_manager");
+              if (!r) {
+                setErr("Nav atrasts.");
+                return;
+              }
+              const reason = String(rejectReason || "").trim();
+              setLocalCitsRequests(
+                rows.map((x) =>
+                  x.approval_token === token
+                    ? {
+                        ...x,
+                        status: "cancelled",
+                        decision_reason: reason || null,
+                        decided_at: new Date().toISOString(),
+                        decided_by: sessionUserId ?? null,
+                      }
+                    : x
+                )
+              );
+              const types = getLocalTypes();
+              const cits = types.find((t) => isCitsSaskanotsTypeName(t.name));
+              if (cits) {
+                const abs = getLocalAbsences().filter(
+                  (x) =>
+                    !(
+                      Number(x.type_id) === Number(cits.id) &&
+                      String(x.user_id) === String(r.user_id) &&
+                      String(x.start_date) === String(r.start_date) &&
+                      String(x.end_date) === String(r.end_date) &&
+                      String(x.comment ?? "") === String(r.comment ?? "") &&
+                      String(x.status) === "pending"
+                    )
+                );
+                setLocalAbsences(abs);
+              }
+              pushChangeLog(
+                "prombutne.cits_noraidits",
+                `${r.user_id}: ${r.start_date} — ${r.end_date}${reason ? ` (${reason})` : ""}`
+              );
+              stripCitsFromUrl();
+              onDone();
+              return;
+            }
+            alert("Noraidīšana tiešsaistes režīmā nav konfigurēta bez backend funkcijas.");
+          } finally {
+            setBusy(false);
+          }
+        }
         return html`
           <div class="auth-box" style=${{ maxWidth: "480px" }}>
-            <h1 style=${{ fontSize: "1.15rem" }}>„Cits (ar saskaņojumu)” — apstiprinājums</h1>
+            <h1 style=${{ fontSize: "1.15rem" }}>„Cits (ar vadītāja saskaņojumu)” — apstiprinājums</h1>
             ${err
               ? html`<p style=${{ color: "#f87171" }}>${err}</p>`
               : !preview
@@ -2250,8 +2667,17 @@
                       ${preview.comment
                         ? html`<p style=${{ margin: 0 }}>${preview.comment}</p>`
                         : null}
-                      <button type="button" class="btn btn-primary" disabled=${busy || !canApprove} onClick=${approve}>
+                      <button type="button" class="btn btn-danger" disabled=${busy || !canApprove} onClick=${approve}>
                         ${busy ? "…" : "Apstiprināt prombūtni"}
+                      </button>
+                      <textarea
+                        class="textarea"
+                        value=${rejectReason}
+                        onChange=${(e) => setRejectReason(e.target.value)}
+                        placeholder="Noraidījuma iemesls (pēc izvēles)"
+                      />
+                      <button type="button" class="btn btn-ghost" disabled=${busy || !canApprove} onClick=${reject}>
+                        ${busy ? "…" : "Noraidīt"}
                       </button>
                       ${!canApprove && !isLocalMode()
                         ? html`<p style=${{ margin: 0, fontSize: "0.82rem", color: "var(--muted)" }}>
@@ -2299,8 +2725,10 @@
       }) {
         const [editing, setEditing] = useState(null);
         const [delId, setDelId] = useState(null);
-        const [form, setForm] = useState({ type_id: "", start_date: "", end_date: "", comment: "" });
         const [filtersOpen, setFiltersOpen] = useState(false);
+        const [histPage, setHistPage] = useState(0);
+        const HIST_PAGE_SIZE = 20;
+        const [form, setForm] = useState({ type_id: "", start_date: "", end_date: "", comment: "" });
         const [filters, setFilters] = useState({
           name: "",
           type: "",
@@ -2309,9 +2737,12 @@
           comment: "",
           status: "",
         });
-        const filterActive = window.PDDFiltr?.anyActive
-          ? window.PDDFiltr.anyActive(filters)
-          : Object.values(filters ?? {}).some((v) => String(v ?? "").trim() !== "");
+        const filterNameActive = String(filters?.name ?? "").trim() !== "";
+        const filterTypeActive = String(filters?.type ?? "").trim() !== "";
+        const filterStartActive = String(filters?.start ?? "").trim() !== "";
+        const filterEndActive = String(filters?.end ?? "").trim() !== "";
+        const filterCommentActive = String(filters?.comment ?? "").trim() !== "";
+        const filterStatusActive = String(filters?.status ?? "").trim() !== "";
         function userShownFromFull(userFull) {
           const uf = userFull ?? "—";
           const userParts = String(uf).split(/\s+/).filter(Boolean);
@@ -2323,6 +2754,16 @@
         }
         function clearFilters() {
           setFilters({ name: "", type: "", start: "", end: "", comment: "", status: "" });
+        }
+        function ensureHistoryOpen() {
+          if (!historyOpen) onToggleHistory();
+        }
+        function applyFilter(key, value) {
+          setFilters((prev) => ({ ...prev, [key]: value }));
+          ensureHistoryOpen();
+        }
+        function clearFilter(key) {
+          setFilters((prev) => ({ ...prev, [key]: "" }));
         }
         const sortedList = useMemo(() => {
           const list = approverView ? absences : absences.filter((a) => a.user_id === userId);
@@ -2344,7 +2785,9 @@
             const userFull = userDisplayName(a.employee);
             const userShown = userShownFromFull(userFull);
             const typeName = a.type?.name ?? a.type_id ?? "";
-            const statusText = absenceStatusLv(a.status);
+            const statusText = isCitsSaskanotsTypeName(typeName)
+              ? (a.status === "approved" ? "saskaņots" : "gaida")
+              : "bez saskaņošanas";
             if (f.name && !includesMatch(userShown, f.name)) return false;
             if (f.type && !includesMatch(typeName, f.type)) return false;
             if (f.start && !includesMatch(a.start_date ?? "", f.start)) return false;
@@ -2354,10 +2797,32 @@
             return true;
           });
         }, [sortedList, filters, approverView, userId]);
-        const anyActions = sortedList.some((a) => {
+        const historyTotal = filteredList.length;
+        const historyTotalPages = Math.max(1, Math.ceil(historyTotal / HIST_PAGE_SIZE));
+        const historySafePage = Math.max(0, Math.min(histPage, historyTotalPages - 1));
+        const visibleList = filteredList.slice(
+          historySafePage * HIST_PAGE_SIZE,
+          historySafePage * HIST_PAGE_SIZE + HIST_PAGE_SIZE
+        );
+
+        // Ja filtrēšana mainās, droši ejam uz pirmo lapu.
+        useEffect(() => {
+          setHistPage(0);
+        }, [filters, approverView, userId]);
+
+        // Ja ir iezīmēts konkrēts ieraksts, automātiski ejam uz lapu, kur tas ir redzams.
+        useEffect(() => {
+          if (!highlightAbsenceId || !historyOpen) return;
+          const idx = filteredList.findIndex((a) => String(a.id) === String(highlightAbsenceId));
+          if (idx < 0) return;
+          const p = Math.floor(idx / HIST_PAGE_SIZE);
+          setHistPage(p);
+        }, [highlightAbsenceId, historyOpen, filteredList]);
+
+        const anyActions = filteredList.some((a) => {
           const own = String(a.user_id) === String(userId);
           const canEdit = approverView || (own && a.status === "pending");
-          const canDelete = approverView || own;
+          const canDelete = approverView || (own && a.status === "pending");
           return canEdit || canDelete;
         });
         const colCount = anyActions ? 7 : 6;
@@ -2370,7 +2835,7 @@
             });
           });
           return () => window.cancelAnimationFrame(h);
-        }, [highlightAbsenceId, historyOpen, filteredList.length]);
+        }, [highlightAbsenceId, historyOpen, historySafePage, visibleList.length]);
         function openEdit(a) {
           setEditing(a.id);
           setForm({
@@ -2396,6 +2861,7 @@
                 : r
             );
             setLocalAbsences(rows);
+            pushChangeLog("prombutne.labot", `Ieraksts ${editing} labots`);
             setEditing(null);
             onRefresh();
             return;
@@ -2419,6 +2885,7 @@
           if (!delId) return;
           if (isLocalMode()) {
             setLocalAbsences(getLocalAbsences().filter((r) => r.id !== delId));
+            pushChangeLog("prombutne.dzest", `Ieraksts ${delId} dzēsts`);
             setDelId(null);
             onRefresh();
             return;
@@ -2436,6 +2903,15 @@
           const names = (types ?? []).map((t) => t.name).filter(Boolean);
           return Array.from(new Set(names)).sort((a, b) => String(a).localeCompare(String(b)));
         }, [types]);
+        const nameOptions = useMemo(() => {
+          const set = new Set();
+          (absences ?? []).forEach((a) => {
+            const userFull = userDisplayName(a.employee);
+            const shown = userShownFromFull(userFull);
+            if (shown) set.add(shown);
+          });
+          return Array.from(set).sort((a, b) => String(a).localeCompare(String(b)));
+        }, [absences]);
         const includesMatch =
           window.PDDFiltr?.includesMatch ??
           ((value, query) => {
@@ -2470,17 +2946,7 @@
                 <button type="button" class="btn btn-primary btn-small" onClick=${onToggleHistory}>
                   ${historyOpen ? "Slēpt ierakstus (tikai galvenes)" : "Rādīt ierakstus"}
                 </button>
-                <button
-                  type="button"
-                  class=${`btn btn-small ${filterActive ? "btn-danger" : "btn-ghost"}`}
-                  onClick=${() => setFiltersOpen((o) => !o)}
-                  title="Filtrēt pēc vārdiem (atbilstība)"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="11" cy="11" r="8"></circle>
-                    <path d="M21 21l-4.3-4.3"></path>
-                  </svg>
-                </button>
+                <!-- (nav) -->
               </div>
             </div>
             <p style=${{ margin: "0.35rem 0 0.65rem", fontSize: "0.78rem", color: "var(--muted)", lineHeight: 1.4 }}>
@@ -2491,89 +2957,182 @@
               <table class="hist-table">
                 <thead>
                   <tr>
-                    <th>Vārds, uzvārds</th>
-                    <th>Prombūtnes veids</th>
-                    <th>Sākuma datums</th>
-                    <th>Beigu datums</th>
-                    <th>Komentārs</th>
-                    <th>Status</th>
+                    <th>
+                      Vārds, uzvārds
+                      <button
+                        type="button"
+                        class=${`btn btn-ghost btn-small ${filterNameActive ? "btn-danger" : ""}`}
+                        title="Filtrs"
+                        onClick=${() => {
+                          if (filterNameActive) clearFilter("name");
+                          else setFiltersOpen((o) => !o);
+                          ensureHistoryOpen();
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
+                        </svg>
+                      </button>
+                    </th>
+                    <th>
+                      Prombūtnes veids
+                      <button
+                        type="button"
+                        class=${`btn btn-ghost btn-small ${filterTypeActive ? "btn-danger" : ""}`}
+                        title="Filtrs"
+                        onClick=${() => {
+                          if (filterTypeActive) clearFilter("type");
+                          else setFiltersOpen((o) => !o);
+                          ensureHistoryOpen();
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
+                        </svg>
+                      </button>
+                    </th>
+                    <th>
+                      Sākuma datums
+                      <button
+                        type="button"
+                        class=${`btn btn-ghost btn-small ${filterStartActive ? "btn-danger" : ""}`}
+                        title="Filtrs"
+                        onClick=${() => {
+                          if (filterStartActive) clearFilter("start");
+                          else setFiltersOpen((o) => !o);
+                          ensureHistoryOpen();
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
+                        </svg>
+                      </button>
+                    </th>
+                    <th>
+                      Beigu datums
+                      <button
+                        type="button"
+                        class=${`btn btn-ghost btn-small ${filterEndActive ? "btn-danger" : ""}`}
+                        title="Filtrs"
+                        onClick=${() => {
+                          if (filterEndActive) clearFilter("end");
+                          else setFiltersOpen((o) => !o);
+                          ensureHistoryOpen();
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
+                        </svg>
+                      </button>
+                    </th>
+                    <th>
+                      Komentārs
+                      <button
+                        type="button"
+                        class=${`btn btn-ghost btn-small ${filterCommentActive ? "btn-danger" : ""}`}
+                        title="Filtrs"
+                        onClick=${() => {
+                          if (filterCommentActive) clearFilter("comment");
+                          else setFiltersOpen((o) => !o);
+                          ensureHistoryOpen();
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
+                        </svg>
+                      </button>
+                    </th>
+                    <th>
+                      Status
+                      <button
+                        type="button"
+                        class=${`btn btn-ghost btn-small ${filterStatusActive ? "btn-danger" : ""}`}
+                        title="Filtrs"
+                        onClick=${() => {
+                          if (filterStatusActive) clearFilter("status");
+                          else setFiltersOpen((o) => !o);
+                          ensureHistoryOpen();
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
+                        </svg>
+                      </button>
+                    </th>
                     ${anyActions ? html`<th>—</th>` : null}
                   </tr>
                   ${filtersOpen
-                    ? html`
-                        <tr class="hist-filter-row">
-                          <th>
-                            <div class="row" style=${{ gap: "0.5rem", alignItems: "center" }}>
-                              <input
-                                class="input"
-                                value=${filters.name}
-                                onChange=${(e) => setFilters((f) => ({ ...f, name: e.target.value }))}
-                                placeholder="meklēt..."
-                                style=${{ flex: "1 1 auto" }}
-                              />
-                              <button type="button" class="btn btn-ghost btn-small" onClick=${clearFilters} title="Notīrīt visus filtrus">
-                                Notīrīt
-                              </button>
-                            </div>
-                          </th>
-                          <th>
-                            <select
-                              class="select"
-                              value=${filters.type}
-                              onChange=${(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
-                            >
-                              <option value="">Visi</option>
-                              ${typeNameOptions.map((n) => html`<option key=${n} value=${n}>${n}</option>`)}
-                            </select>
-                          </th>
-                          <th>
-                            <input
-                              class="input"
-                              value=${filters.start}
-                              onChange=${(e) => setFilters((f) => ({ ...f, start: e.target.value }))}
-                              placeholder="YYYY-MM-DD..."
-                            />
-                          </th>
-                          <th>
-                            <input
-                              class="input"
-                              value=${filters.end}
-                              onChange=${(e) => setFilters((f) => ({ ...f, end: e.target.value }))}
-                              placeholder="YYYY-MM-DD..."
-                            />
-                          </th>
-                          <th>
-                            <input
-                              class="input"
-                              value=${filters.comment}
-                              onChange=${(e) => setFilters((f) => ({ ...f, comment: e.target.value }))}
-                              placeholder="meklēt..."
-                            />
-                          </th>
-                          <th>
-                            <select
-                              class="select"
-                              value=${filters.status}
-                              onChange=${(e) => setFilters((f) => ({ ...f, status: e.target.value }))}
-                            >
-                              <option value="">Visi</option>
+                    ? html`<tr class="hist-filter-row">
+                    <th>
+                      <div class="row" style=${{ gap: "0.5rem", alignItems: "center" }}>
+                        <select
+                          class="select"
+                          value=${filters.name}
+                          onChange=${(e) => applyFilter("name", e.target.value)}
+                          style=${{ flex: "1 1 auto" }}
+                        >
+                          <option value="">Visi</option>
+                          ${nameOptions.map((n) => html`<option key=${n} value=${n}>${n}</option>`)}
+                        </select>
+                      </div>
+                    </th>
+                    <th>
+                      <select
+                        class="select"
+                        value=${filters.type}
+                        onChange=${(e) => applyFilter("type", e.target.value)}
+                      >
+                        <option value="">Visi</option>
+                        ${typeNameOptions.map((n) => html`<option key=${n} value=${n}>${n}</option>`)}
+                      </select>
+                    </th>
+                    <th>
+                      <input
+                        type="date"
+                        class="input"
+                        value=${filters.start}
+                        onChange=${(e) => applyFilter("start", e.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        type="date"
+                        class="input"
+                        value=${filters.end}
+                        onChange=${(e) => applyFilter("end", e.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        class="input"
+                        value=${filters.comment}
+                        onChange=${(e) => applyFilter("comment", e.target.value)}
+                        placeholder="meklēt..."
+                      />
+                    </th>
+                    <th>
+                      <select
+                        class="select"
+                        value=${filters.status}
+                        onChange=${(e) => applyFilter("status", e.target.value)}
+                      >
+                        <option value="">Visi</option>
+                              <option value="bez saskaņošanas">bez saskaņošanas</option>
                               <option value="gaida">gaida</option>
-                              <option value="apstiprināts">apstiprināts</option>
-                              <option value="noraidīts">noraidīts</option>
-                            </select>
-                          </th>
-                          ${anyActions ? html`<th></th>` : null}
-                        </tr>
-                      `
+                              <option value="saskaņots">saskaņots</option>
+                      </select>
+                    </th>
+                    ${anyActions ? html`<th></th>` : null}
+                  </tr>`
                     : null}
                 </thead>
-                ${historyOpen && filteredList.length
+                ${historyOpen && visibleList.length
                   ? html`
                       <tbody>
-                        ${filteredList.map((a) => {
+                        ${visibleList.map((a) => {
                           const own = String(a.user_id) === String(userId);
                           const canEdit = approverView || (own && a.status === "pending");
-                          const canDelete = approverView || own;
+                          const canDelete = approverView || (own && a.status === "pending");
                           const userFull = userDisplayName(a.employee);
                           const userParts = String(userFull).split(/\s+/).filter(Boolean);
                           const userShown =
@@ -2584,7 +3143,13 @@
                                 : `${userParts[0]} ${userParts[userParts.length - 1]}`;
                           const hi = highlightAbsenceId && String(highlightAbsenceId) === String(a.id);
                           const typeName = a.type?.name ?? a.type_id ?? "—";
-                          const statusText = absenceStatusLv(a.status);
+                          const isCitsType = isCitsSaskanotsTypeName(typeName);
+                          const statusText = isCitsType
+                            ? (a.status === "approved" ? "saskaņots" : "gaida")
+                            : "bez saskaņošanas";
+                          const statusBadgeClass = isCitsType
+                            ? (a.status === "approved" ? "badge-approved" : "badge-pending")
+                            : "badge-approved";
                           return html`
                             <tr
                               key=${a.id}
@@ -2600,7 +3165,7 @@
                               </td>
                               <td>
                                 <span
-                                  class=${`badge ${a.status === "pending" ? "badge-pending" : a.status === "approved" ? "badge-approved" : "badge-rejected"}`}
+                                  class=${`badge ${statusBadgeClass}`}
                                 >
                                   ${maybeMark(statusText, filters.status)}
                                 </span>
@@ -2643,6 +3208,42 @@
                     : null}
               </table>
             </div>
+            ${historyOpen && historyTotal > HIST_PAGE_SIZE
+              ? html`
+                  <div
+                    class="row"
+                    style=${{
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginTop: "0.65rem",
+                      flexWrap: "wrap",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <span style=${{ fontSize: "0.82rem", color: "var(--muted)" }}>
+                      Lapa ${historySafePage + 1} / ${historyTotalPages} · ${historyTotal} ieraksti
+                    </span>
+                    <div class="row" style=${{ gap: "0.35rem" }}>
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-small"
+                        disabled=${historySafePage <= 0}
+                        onClick=${() => setHistPage((p) => Math.max(0, p - 1))}
+                      >
+                        Iepriekšējā
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-small"
+                        disabled=${historySafePage >= historyTotalPages - 1}
+                        onClick=${() => setHistPage((p) => Math.min(historyTotalPages - 1, p + 1))}
+                      >
+                        Nākamā
+                      </button>
+                    </div>
+                  </div>
+                `
+              : null}
             ${editing
               ? html`
                   <div
@@ -2761,6 +3362,7 @@
         const [error, setError] = useState(null);
         const [historyOpen, setHistoryOpen] = useState(false);
         const [highlightAbsenceId, setHighlightAbsenceId] = useState(null);
+        const [requestPresetDate, setRequestPresetDate] = useState("");
         useEffect(() => {
           if (isLocalMode()) {
             setTypesList(getLocalTypes());
@@ -2894,19 +3496,25 @@
             void supabase.removeChannel(ch);
           };
         }, [loadTeamAndDeputy, refresh]);
-        const isManager = role === "manager" || role === "admin";
+        const isManager = role === "admin";
         const canApprove = userCanApproveAbsences(role, userId, deputyEffectiveId);
         useEffect(() => {
           if (promSub === "deputy" && !isManager) setPromSub("calendar");
         }, [promSub, isManager, setPromSub]);
         const promSubLabel =
           promSub === "calendar"
-            ? "Kalendārs un Prombūtnes vēsture"
+            ? "Kalendārs"
             : promSub === "request"
               ? "Prombūtnes pieteikums"
+              : promSub === "history"
+                ? "Prombūtnes vēsture"
+              : promSub === "changes"
+                  ? "Auditācijas vēsture"
               : promSub === "teamUsers"
                 ? "Komanda"
-                : "Apstiprinātāja maiņa";
+                : promSub === "deputy"
+                  ? "Apstiprinātāja maiņa"
+                  : "";
         return html`
           <section class="stack" style=${{ gap: "1.25rem" }}>
             <div>
@@ -2923,7 +3531,7 @@
                           Periods: <strong>${deputyValidFrom ?? "—"}</strong> — <strong>${deputyValidTo ?? "—"}</strong>.
                         </span>`
                       : null}
-                    „Cits (ar saskaņojumu)” saskaņošanas e-pasts: <strong>${notifyEmail}</strong>.
+                    „Cits (ar vadītāja saskaņojumu)” saskaņošanas e-pasts: <strong>${notifyEmail}</strong>.
                   </div>
                 `
               : null}
@@ -2939,25 +3547,36 @@
                       month=${month}
                       onMonthChange=${setMonth}
                       absences=${absences}
-                      caption="Komandas kalendārs. Parastie veidi reģistrējas uzreiz kā apstiprināti; „Cits (ar saskaņojumu)” — pēc e-pasta apstiprinājuma. Spied uz krāsainās iezīmes, lai atvērtu rindu tabulā zemāk."
+                      caption="Komandas kalendārs. Parastie veidi reģistrējas uzreiz kā apstiprināti; „Cits (ar vadītāja saskaņojumu)” — pēc e-pasta apstiprinājuma. Spied uz krāsainās iezīmes, lai atvērtu ierakstu vēsturē."
+                      onPickDay=${(d) => {
+                        const ymd =
+                          window.KALENDARS?.toYmd?.(d) ??
+                          format(d, "yyyy-MM-dd");
+                        setRequestPresetDate(ymd);
+                        setPromSub("request");
+                      }}
                       onPickAbsence=${(a) => {
-                        setPromSub("calendar");
+                        setPromSub("history");
                         setHistoryOpen(true);
                         setHighlightAbsenceId(a.id);
                       }}
                     />
-                    <${PrombutnesHistoryPanel}
-                      userId=${userId}
-                      absences=${absences}
-                      types=${typesList}
-                      onRefresh=${refresh}
-                      approverView=${canApprove}
-                      historyOpen=${historyOpen}
-                      onToggleHistory=${() => setHistoryOpen((o) => !o)}
-                      highlightAbsenceId=${highlightAbsenceId}
-                      onClearHighlight=${() => setHighlightAbsenceId(null)}
-                    />
                   </div>
+                `
+              : null}
+            ${promSub === "history"
+              ? html`
+                  <${PrombutnesHistoryPanel}
+                    userId=${userId}
+                    absences=${absences}
+                    types=${typesList}
+                    onRefresh=${refresh}
+                    approverView=${canApprove}
+                    historyOpen=${historyOpen}
+                    onToggleHistory=${() => setHistoryOpen((o) => !o)}
+                    highlightAbsenceId=${highlightAbsenceId}
+                    onClearHighlight=${() => setHighlightAbsenceId(null)}
+                  />
                 `
               : null}
             ${promSub === "request"
@@ -2967,6 +3586,9 @@
                     role=${role}
                     onCreated=${() => void refresh()}
                     notifyEmail=${notifyEmail}
+                    presetDate=${requestPresetDate}
+                    onConsumePreset=${() => setRequestPresetDate("")}
+                    canApproveRequests=${canApprove}
                   />
                 `
               : null}
@@ -2986,195 +3608,93 @@
               ? html`
                   <${TeamUsersDirectory}
                     users=${teamUsers}
-                    canAdmin=${TIKAI_VIENKARSI_SKATS || (isManager && !isLocalMode())}
+                    canAdmin=${String(role || "").toLowerCase() === "admin"}
                     currentUserId=${userId}
                     onReload=${reloadUsersAndViews}
                   />
                 `
               : null}
+            ${promSub === "changes"
+              ? html`<${ChangeHistoryPanel} isAdmin=${String(role || "").toLowerCase() === "admin"} />`
+              : null}
           </section>
         `;
       }
 
-      function ZinasPanel({ currentUserId }) {
-        const [teamUsers, setTeamUsers] = useState([]);
-        const [chatToId, setChatToId] = useState(null);
-        const [chatText, setChatText] = useState("");
-        const [chatMsgs, setChatMsgs] = useState([]);
+      function ChangeHistoryPanel({ isAdmin }) {
+        const [logs, setLogs] = useState([]);
+        const [page, setPage] = useState(0);
+        const PAGE_SIZE = 20;
 
         useEffect(() => {
-          let ch = null;
-          let cancelled = false;
-
-          async function loadUsers() {
-            if (cancelled) return;
-            if (isLocalMode() || !supabase) {
-              const list = window.KOMANDA?.loadTeamUsers?.() ?? [];
-              setTeamUsers(Array.isArray(list) ? list : []);
-              return;
-            }
-            const { data, error } = await supabase
-              .from("users")
-              .select("*")
-              .order(COL_USER_NAME, { ascending: true });
-            if (error) {
-              console.warn("[Ziņas] users load error", error);
-              return;
-            }
-            setTeamUsers(data ?? []);
-          }
-
-          void loadUsers();
-
-          // Realtime tikai lietotāju sarakstam (lai “Adresāts” saraksts nesakrīt).
-          if (!isLocalMode() && supabase) {
-            ch = supabase
-              .channel("pdd-users-live-zinas")
-              .on("postgres_changes", { event: "*", schema: "public", table: "users" }, () => {
-                void loadUsers();
-              })
-              .subscribe();
-          }
-
-          return () => {
-            cancelled = true;
-            if (ch) void supabase.removeChannel(ch);
-          };
+          setLogs(getChangeLog());
         }, []);
 
-        const currentUser = useMemo(
-          () => teamUsers.find((u) => String(u.id) === String(currentUserId)) ?? null,
-          [teamUsers, currentUserId]
-        );
+        const total = logs.length;
+        const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+        const safePage = Math.min(page, totalPages - 1);
+        const pageRows = logs.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
 
-        const currentEmail = currentUser?.email ?? (currentUser ? userImail(currentUser) : "");
-        const others = useMemo(
-          () => teamUsers.filter((u) => String(u.id) !== String(currentUserId)),
-          [teamUsers, currentUserId]
-        );
-
-        useEffect(() => {
-          if (!others.length) {
-            if (chatToId) setChatToId(null);
-            return;
-          }
-          if (!chatToId || !others.some((u) => String(u.id) === String(chatToId))) {
-            setChatToId(others[0].id);
-          }
-        }, [chatToId, others]);
-
-        const toUser = useMemo(() => {
-          if (!chatToId) return null;
-          return teamUsers.find((u) => String(u.id) === String(chatToId)) ?? null;
-        }, [chatToId, teamUsers]);
-
-        const toEmail = toUser?.email ?? (toUser ? userImail(toUser) : "");
-        const convoKey = window.ZINAS?.conversationKey ? window.ZINAS.conversationKey(currentEmail, toEmail) : "";
-
-        useEffect(() => {
-          if (!window.ZINAS?.loadMessages) return;
-          if (!convoKey) {
-            setChatMsgs([]);
-            return;
-          }
-          setChatMsgs(window.ZINAS.loadMessages(convoKey));
-        }, [convoKey]);
-
-        function sendChat() {
-          const add = window.ZINAS?.addMessage;
-          if (!add) return;
-          if (!currentEmail || !toEmail) return;
-          if (!chatText.trim()) return;
-
-          add({ fromEmail: currentEmail, toEmail, text: chatText.trim(), ts: new Date().toISOString() });
-          const key = window.ZINAS.conversationKey(currentEmail, toEmail);
-          setChatMsgs(window.ZINAS.loadMessages(key));
-          setChatText("");
+        if (!isAdmin) {
+          return html`
+            <section class="list-panel">
+              <h2 style=${{ margin: "0 0 0.5rem" }}>Auditācijas vēsture</h2>
+              <p style=${{ margin: 0, color: "var(--muted)" }}>
+                Šī sadaļa pieejama tikai Admin lietotājiem.
+              </p>
+            </section>
+          `;
         }
 
         return html`
-          <section aria-labelledby="zinas-title">
-            <h2 id="zinas-title" class="app-sub" style=${{ marginBottom: "0.8rem" }}>
-              Ziņas
-            </h2>
-
-            <div class="list-panel">
-              <div class="row" style=${{ gap: "0.75rem", alignItems: "flex-end", flexWrap: "wrap" }}>
-                <div class="field" style=${{ flex: "1 1 280px" }}>
-                  <label>Adresāts</label>
-                  <select class="select" value=${chatToId ?? ""} onChange=${(e) => setChatToId(e.target.value || null)}>
-                    ${others.map((u) => {
-                      const em = u.email ?? userImail(u);
-                      return html`<option key=${u.id} value=${u.id}>${u["Vārds uzvārds"] ?? u.full_name ?? "—"} · ${em}</option>`;
-                    })}
-                  </select>
-                </div>
-              </div>
-
-              <div
-                style=${{
-                  maxHeight: "260px",
-                  overflow: "auto",
-                  padding: "0.6rem",
-                  background: "var(--bg)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "10px",
-                  marginTop: "0.85rem",
-                  marginBottom: "0.85rem",
-                }}
-              >
-                ${chatMsgs.length === 0
-                  ? html`<p style=${{ margin: 0, color: "var(--muted)", fontStyle: "italic" }}>Nav ziņu.</p>`
-                  : chatMsgs.map((m) => {
-                      const isMe = m.fromEmail === currentEmail;
-                      return html`
-                        <div style=${{ marginBottom: "0.55rem", textAlign: isMe ? "right" : "left" }}>
-                          <div style=${{ fontSize: "0.78rem", color: "var(--muted)", marginBottom: "0.15rem" }}>
-                            ${isMe ? "Tu" : "No"}: ${m.fromEmail}
-                          </div>
-                          <div
-                            style=${{
-                              display: "inline-block",
-                              padding: "0.45rem 0.6rem",
-                              borderRadius: "10px",
-                              background: isMe ? "rgba(56,189,248,0.16)" : "rgba(148,163,184,0.10)",
-                              border: `1px solid ${isMe ? "rgba(56,189,248,0.35)" : "var(--border)"}`,
-                              whiteSpace: "pre-wrap",
-                            }}
-                          >
-                            ${m.text}
-                          </div>
-                          <div style=${{ fontSize: "0.7rem", color: "var(--muted)", marginTop: "0.15rem" }}>
-                            ${m.ts ? String(m.ts).replace("T", " ").slice(0, 16) : ""}
-                          </div>
-                        </div>
-                      `;
-                    })}
-              </div>
-
-              <div class="stack">
-                <textarea
-                  class="textarea"
-                  value=${chatText}
-                  onChange=${(e) => setChatText(e.target.value)}
-                  placeholder="Ieraksti ziņu…"
-                />
-                <div class="row" style=${{ justifyContent: "flex-end" }}>
-                  <button
-                    type="button"
-                    class="btn btn-primary"
-                    disabled=${!chatText.trim() || !chatToId}
-                    onClick=${sendChat}
-                  >
-                    Sūtīt
-                  </button>
-                </div>
-              </div>
-
-              <p style=${{ marginTop: "0.65rem", fontSize: "0.8rem", color: "var(--muted)" }}>
-                Ziņas tiek glabātas lokāli šajā pārlūkā.
-              </p>
+          <section class="list-panel">
+            <div class="row" style=${{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.65rem" }}>
+              <h2 style=${{ margin: 0, fontSize: "1rem" }}>Auditācijas vēsture</h2>
+              <button type="button" class="btn btn-ghost btn-small" onClick=${() => setLogs(getChangeLog())}>
+                Atjaunot
+              </button>
             </div>
+            <div class="table-wrap">
+              <table class="hist-table">
+                <thead>
+                  <tr>
+                    <th>Laiks</th>
+                    <th>Lietotājs</th>
+                    <th>Darbība</th>
+                    <th>Detaļas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${pageRows.length
+                    ? pageRows.map((r) => html`
+                        <tr key=${r.id}>
+                          <td>${r.ts ? String(r.ts).replace("T", " ").slice(0, 16) : "—"}</td>
+                          <td>${r.actor_name ?? "—"}</td>
+                          <td>${r.action ?? "—"}</td>
+                          <td>${r.details ?? "—"}</td>
+                        </tr>
+                      `)
+                    : html`
+                        <tr>
+                          <td colspan="4" style=${{ color: "var(--muted)", fontStyle: "italic" }}>Nav izmaiņu ierakstu.</td>
+                        </tr>
+                      `}
+                </tbody>
+              </table>
+            </div>
+            ${total > PAGE_SIZE
+              ? html`
+                  <div class="row" style=${{ justifyContent: "space-between", marginTop: "0.6rem" }}>
+                    <span style=${{ color: "var(--muted)", fontSize: "0.82rem" }}>
+                      Lapa ${safePage + 1} / ${totalPages} · ${total} ieraksti
+                    </span>
+                    <div class="row" style=${{ gap: "0.35rem" }}>
+                      <button type="button" class="btn btn-ghost btn-small" disabled=${safePage <= 0} onClick=${() => setPage((p) => Math.max(0, p - 1))}>Iepriekšējā</button>
+                      <button type="button" class="btn btn-ghost btn-small" disabled=${safePage >= totalPages - 1} onClick=${() => setPage((p) => Math.min(totalPages - 1, p + 1))}>Nākamā</button>
+                    </div>
+                  </div>
+                `
+              : null}
           </section>
         `;
       }
@@ -3184,7 +3704,7 @@
         const { profile, loading: profileLoading } = useProfile(session?.user?.id);
         const [view, setView] = useState("home");
         const [promSub, setPromSub] = useState("calendar");
-        const showPromDeputyTab = profile?.role === "manager" || profile?.role === "admin";
+        const showPromDeputyTab = profile?.role === "admin";
         const [citsToken, setCitsToken] = useState(() => readCitsTokenFromUrl());
         const title = useMemo(
           () => html`
@@ -3204,7 +3724,7 @@
                 <${CitsPublicApprove}
                   token=${citsToken}
                   sessionUserId=${session?.user?.id ?? null}
-                  profileRole=${profile?.role ?? "employee"}
+                  profileRole=${profile?.role ?? "user"}
                   onDone=${() => {
                     setCitsToken("");
                     stripCitsFromUrl();
@@ -3217,7 +3737,7 @@
             return html`
               <div class="app-shell">
                 ${title}
-                <${LocalPasswordScreen} />
+                <${LocalEmailLoginScreen} />
               </div>
             `;
           }
@@ -3235,7 +3755,7 @@
                 <div class="app-shell">
                   ${title}
                   <div class="banner-warn" role="alert" style=${{ marginBottom: "1rem", fontSize: "0.9rem" }}>
-                    Lai apstiprinātu „Cits (ar saskaņojumu)”, ielogojies. Apstiprināt drīkst tikai vadītājs,
+                    Lai apstiprinātu „Cits (ar vadītāja saskaņojumu)”, ielogojies. Apstiprināt drīkst tikai vadītājs,
                     administrators vai Prombūtnes apstiprinātājs.
                   </div>
                   <${AuthScreen} />
@@ -3257,7 +3777,7 @@
               <${CitsPublicApprove}
                 token=${citsToken}
                 sessionUserId=${session?.user?.id ?? null}
-                profileRole=${profile?.role ?? "employee"}
+                profileRole=${profile?.role ?? "user"}
                 onDone=${() => {
                   setCitsToken("");
                   stripCitsFromUrl();
@@ -3275,6 +3795,8 @@
           if (isLocalMode()) {
             sessionStorage.removeItem(LS_LOCAL_OK);
             sessionStorage.removeItem(LS_LOCAL_NAME);
+            sessionStorage.removeItem(LS_LOCAL_USER_ID);
+            sessionStorage.removeItem(LS_LOCAL_EMAIL);
             setView("home");
             location.reload();
             return;
@@ -3287,7 +3809,7 @@
           return html`
             <div class="app-shell">
               ${title}
-              <${LocalPasswordScreen} />
+              <${LocalEmailLoginScreen} />
             </div>
           `;
         }
@@ -3337,16 +3859,14 @@
             header=${html`
               <header class="app-header">
                 ${title}
-                ${TIKAI_VIENKARSI_SKATS
-                  ? html`<span style=${{ color: "var(--muted)", fontSize: "0.9rem" }}>Vietējā kopija — dati tikai šajā pārlūkā</span>`
-                  : html`
-                      <div class="row">
-                        <span style=${{ color: "var(--muted)", fontSize: "0.9rem" }}>
-                          ${userDisplayName(profile) !== "—" ? userDisplayName(profile) : session.user.email}
-                        </span>
-                        <button type="button" class="btn btn-ghost btn-small" onClick=${signOut}>Iziet</button>
-                      </div>
-                    `}
+                <div class="row">
+                  <span style=${{ color: "var(--muted)", fontSize: "0.9rem" }}>
+                    Iekšā: ${userDisplayName(profile) !== "—" ? userDisplayName(profile) : session.user.email}
+                    ${profile?.email || session?.user?.email ? html` · ${(profile?.email ?? session.user.email)}` : null}
+                    ${TIKAI_VIENKARSI_SKATS ? html`<span> · lokāli</span>` : null}
+                  </span>
+                  ${TIKAI_VIENKARSI_SKATS ? null : html`<button type="button" class="btn btn-ghost btn-small" onClick=${signOut}>Iziet</button>`}
+                </div>
               </header>
             `}
           >
@@ -3357,9 +3877,16 @@
                     setPromSub("calendar");
                   }}
                 />`
+              : view === "team"
+                ? html`<${PrombutnesSection}
+                    userId=${session.user.id}
+                    role=${profile?.role ?? "user"}
+                    promSub=${"teamUsers"}
+                    setPromSub=${() => {}}
+                  />`
               : html`<${PrombutnesSection}
                     userId=${session.user.id}
-                    role=${profile?.role ?? "employee"}
+                    role=${profile?.role ?? "user"}
                     promSub=${promSub}
                     setPromSub=${setPromSub}
                   />`}

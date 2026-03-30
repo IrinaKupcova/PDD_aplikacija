@@ -71,7 +71,7 @@ insert into public.prombutnes_veidi (name, color, sort_order) values
   ('Mācības', '#059669', 4),
   ('Slimības lapa', '#dc2626', 5),
   ('Neapmaksāta prombūtne', '#ca8a04', 6),
-  ('Cits (saskaņots)', '#64748b', 7)
+  ('Cits (ar vadītāja saskaņojumu)', '#64748b', 7)
 on conflict (name) do nothing;
 
 alter table public.users enable row level security;

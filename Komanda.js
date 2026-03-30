@@ -118,6 +118,8 @@
   }
 
   function normalizeUser(u) {
+    const rawRole = String(u?.role ?? "user").trim().toLowerCase();
+    const role = rawRole === "admin" ? "admin" : "user";
     const id = String(u?.id ?? "").trim() || String(u?.user_id ?? "");
     const vard = u?.["Vārds uzvārds"] ?? u?.vardUzv ?? u?.full_name ?? "";
     const amats = u?.["Amats"] ?? u?.amats ?? "";
@@ -126,7 +128,7 @@
     const full = u?.full_name ?? vard;
     return {
       id,
-      role: String(u?.role ?? "employee"),
+      role,
       full_name: String(full ?? ""),
       email: String(email ?? ""),
       created_at: u?.created_at ?? new Date().toISOString(),

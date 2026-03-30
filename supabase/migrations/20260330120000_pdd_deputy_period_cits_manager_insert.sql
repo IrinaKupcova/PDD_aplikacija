@@ -5,8 +5,8 @@ alter table public.pdd_deputy_state
   add column if not exists deputy_valid_to date;
 
 update public.prombutnes_veidi
-set name = 'Cits (ar saskaņojumu)'
-where name = 'Cits (saskaņots)';
+set name = 'Cits (ar vadītāja saskaņojumu)'
+where name ilike 'Cits (%saskaņ%';
 
 create or replace function public.pdd_can_approve_absences()
 returns boolean
@@ -70,11 +70,11 @@ begin
 
   select v.id into v_type_id
   from public.prombutnes_veidi v
-  where v.name = 'Cits (ar saskaņojumu)'
+  where v.name = 'Cits (ar vadītāja saskaņojumu)'
   limit 1;
 
   if v_type_id is null then
-    raise exception 'Nav atrasts veids „Cits (ar saskaņojumu)”';
+    raise exception 'Nav atrasts veids „Cits (ar vadītāja saskaņojumu)”';
   end if;
 
   insert into public.prombutnes_dati (

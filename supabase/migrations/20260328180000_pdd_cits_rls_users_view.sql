@@ -1,4 +1,4 @@
-  -- Paplašinājums: Cits (saskaņots), dzēšana/labošana, vadītāja insert.
+  -- Paplašinājums: Cits (ar vadītāja saskaņojumu), dzēšana/labošana, vadītāja insert.
   -- Viena lietotāju tabula: public.users (nav skata, nav public.profiles).
 
   -- Pāreja no vecās shēmas (profiles / skats users)
@@ -196,11 +196,11 @@
 
     select v.id into v_type_id
     from public.prombutnes_veidi v
-    where v.name = 'Cits (ar saskaņojumu)'
+    where v.name = 'Cits (ar vadītāja saskaņojumu)'
     limit 1;
 
     if v_type_id is null then
-      raise exception 'Nav atrasts veids „Cits (ar saskaņojumu)"';
+      raise exception 'Nav atrasts veids „Cits (ar vadītāja saskaņojumu)"';
     end if;
 
     insert into public.prombutnes_dati (

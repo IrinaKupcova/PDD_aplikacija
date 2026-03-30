@@ -138,11 +138,11 @@ begin
 
   select v.id into v_type_id
   from public.prombutnes_veidi v
-  where v.name = 'Cits (saskaņots)'
+  where v.name = 'Cits (ar vadītāja saskaņojumu)'
   limit 1;
 
   if v_type_id is null then
-    raise exception 'Nav atrasts veids „Cits (saskaņots)”';
+    raise exception 'Nav atrasts veids „Cits (ar vadītāja saskaņojumu)”';
   end if;
 
   insert into public.prombutnes_dati (
