@@ -541,9 +541,31 @@
         return {
           "Vārds uzvārds": userId,
           type: Number(typeId),
-          Sākuma_datums: startDate,
+          sakuma_datums: startDate,
           beigu_datums: endDate,
           Komentārs: comment ?? null,
+          Statuss: status,
+          approved_by: approvedBy ?? null,
+          created_at: approvedAt ?? null,
+        };
+      }
+
+      function absencePayloadLatvianUnderscoreCaps({
+        userId,
+        typeId,
+        startDate,
+        endDate,
+        comment,
+        status,
+        approvedBy,
+        approvedAt,
+      }) {
+        return {
+          "Vārds uzvārds": userId,
+          type: Number(typeId),
+          Sakuma_datums: startDate,
+          Beigu_datums: endDate,
+          Komentars: comment ?? null,
           Statuss: status,
           approved_by: approvedBy ?? null,
           created_at: approvedAt ?? null,
@@ -562,7 +584,10 @@
         if (!errLatvian) return null;
         const latvianUnderscore = absencePayloadLatvianUnderscore(fields);
         const { error: errLatvian2 } = await supabase.from("prombutnes_dati").insert(latvianUnderscore);
-        return errLatvian2 ?? errLatvian ?? errClassic ?? errDetected;
+        if (!errLatvian2) return null;
+        const latvianUnderscoreCaps = absencePayloadLatvianUnderscoreCaps(fields);
+        const { error: errLatvian3 } = await supabase.from("prombutnes_dati").insert(latvianUnderscoreCaps);
+        return errLatvian3 ?? errLatvian2 ?? errLatvian ?? errClassic ?? errDetected;
       }
 
       function userDisplayName(u) {
@@ -1784,40 +1809,20 @@
                 `Darbinieks ${selectedUserId}: ${startDate} — ${endDate}`
               );
             } else {
-              const sessionEm = (sessionStorage.getItem(LS_LOCAL_EMAIL) || "").trim().toLowerCase();
-              if (!sessionEm) {
-                alert("Lai iesniegtu, vispirms ieej ar savu darba e-pastu.");
-                return;
-              }
-              const { data: insId, error: rpcErr } = await supabase.rpc("pdd_submit_absence_session", {
-                p_actor_user_id: userId,
-                p_actor_email: sessionEm,
-                p_target_user_id: selectedUserId,
-                p_type_id: Number(typeId),
-                p_start: startDate,
-                p_end: endDate,
-                p_comment: comment.trim() || null,
+              const nowIso = new Date().toISOString();
+              const error = await insertAbsenceWithFallback({
+                userId: selectedUserId,
+                typeId: Number(typeId),
+                startDate,
+                endDate,
+                comment: comment.trim() || null,
+                status: "approved",
+                approvedBy: null,
+                approvedAt: nowIso,
               });
-              if (rpcErr || !insId) {
-                const nowIso = new Date().toISOString();
-                const error = await insertAbsenceWithFallback({
-                  userId: selectedUserId,
-                  typeId: Number(typeId),
-                  startDate,
-                  endDate,
-                  comment: comment.trim() || null,
-                  status: "approved",
-                  approvedBy: null,
-                  approvedAt: nowIso,
-                });
-                if (error) {
-                  alert(
-                    "Kļūda: " +
-                      (rpcErr?.message || error.message) +
-                      "\n\nJa esi ar e-pasta sesiju (bez Supabase Auth): palaid Supabase SQL migrāciju ar funkcijām pdd_submit_absence_session un pdd_submit_cits_request_session."
-                  );
-                  return;
-                }
+              if (error) {
+                alert("Kļūda: " + error.message);
+                return;
               }
             }
             setStartDate("");
