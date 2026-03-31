@@ -429,14 +429,14 @@
         created_at: ["created_at", "izveidots", "izveidots_at"],
       };
       const ABSENCE_COLS_RUNTIME = {
-        user_id: "user_id",
-        type_id: "type_id",
-        start_date: "start_date",
-        end_date: "end_date",
-        comment: "comment",
-        status: "status",
+        user_id: "Vārds uzvārds",   // uuid → public.users.id
+        type_id: "type",           // integer
+        start_date: "Sakuma_datums",
+        end_date: "Beigu_datums",
+        comment: "Komentārs",
+        status: "Status",
         approved_by: "approved_by",
-        approved_at: "approved_at",
+        approved_at: "created_at",
       };
 
       function pickByAliases(obj, aliases, fallback = null) {
@@ -453,8 +453,6 @@
       function detectAbsenceColumnsFromRow(row) {
         if (!row || typeof row !== "object") return;
         for (const [canon, aliases] of Object.entries(ABSENCE_ALT_KEYS)) {
-          // USER_ID vienmēr turam uz `user_id` kolonnas, nevis uz tekstu „Vārds uzvārds”.
-          if (canon === "user_id") continue;
           const hit = pickByAliases(row, aliases, undefined);
           if (hit !== undefined) {
             const key = Object.keys(row).find((k) =>
@@ -491,9 +489,9 @@
         };
       }
 
-      function absencePayloadClassic({ userId, typeId, startDate, endDate, comment, status, approvedBy, approvedAt }) {
+      function absencePayloadClassic({ userId, userName, typeId, startDate, endDate, comment, status, approvedBy, approvedAt }) {
         return {
-          user_id: userId,
+          "Vārds uzvārds": userId,
           type_id: Number(typeId),
           start_date: startDate,
           end_date: endDate,
@@ -513,11 +511,7 @@
 
       function absencePayloadDetected({ userId, userName, typeId, startDate, endDate, comment, status, approvedBy, approvedAt }) {
         return {
-          [ABSENCE_COLS_RUNTIME.user_id]: dbUserRefValue({
-            userId,
-            userName,
-            columnName: ABSENCE_COLS_RUNTIME.user_id,
-          }),
+          [ABSENCE_COLS_RUNTIME.user_id]: userId,
           [ABSENCE_COLS_RUNTIME.type_id]: Number(typeId),
           [ABSENCE_COLS_RUNTIME.start_date]: startDate,
           [ABSENCE_COLS_RUNTIME.end_date]: endDate,
@@ -1604,11 +1598,10 @@
                           }
                         }}
                       >
-                        ${(userDisplayName(a.employee).split(" ")[0] !== "—"
-                          ? userDisplayName(a.employee).split(" ")[0]
-                          : "?") +
-                          " · " +
-                          (a.type?.name ?? "")}
+                        ${userDisplayName(a.employee) !== "—"
+                          ? userDisplayName(a.employee)
+                          : "?"}{" "}
+                        · ${a.type?.name ?? ""}
                       </span>
                     `)}
                   </div>
@@ -1761,127 +1754,44 @@
                 alert("Nav derīga e-pasta adrese saskaņotājam (vadītājs vai apstiprinātājs).");
                 return;
               }
-              if (isLocalMode()) {
-                const token = crypto.randomUUID();
-                const rows = getLocalCitsRequests();
-                const nowIso = new Date().toISOString();
-                rows.push({
-                  id: crypto.randomUUID(),
-                  user_id: selectedUserId,
-                  start_date: startDate,
-                  end_date: endDate,
-                  comment: comment.trim() || null,
-                  notify_email: to,
-                  approval_token: token,
-                  status: "pending_manager",
+              const nowIso = new Date().toISOString();
+              // Saglabājam "Cits" tieši prombutnes_dati ar statusu "pending".
+              const { data: inserted, error: insErr } = await supabase
+                .from("prombutnes_dati")
+                .insert({
+                  "Vārds uzvārds": selectedUserId,
+                  type: Number(typeId),
+                  Sakuma_datums: startDate,
+                  Beigu_datums: endDate,
+                  Komentārs: comment.trim() || null,
+                  Status: "pending",
+                  approved_by: null,
                   created_at: nowIso,
-                  decision_reason: null,
-                  decided_at: null,
-                  decided_by: null,
-                });
-                setLocalCitsRequests(rows);
-                setCitsRows(rows);
-                // Lokāli "Cits (ar vadītāja saskaņojumu)" uzreiz redzams kalendārā kā gaidošs ieraksts.
-                const absRows = getLocalAbsences();
-                const citsType = (types ?? []).find((t) => isCitsSaskanotsTypeName(t.name));
-                if (citsType?.id) {
-                  absRows.push({
-                    id: crypto.randomUUID(),
-                    user_id: selectedUserId,
-                    type_id: Number(citsType.id),
-                    start_date: startDate,
-                    end_date: endDate,
-                    comment: comment.trim() || null,
-                    status: "pending",
-                    approved_by: null,
-                    approved_at: null,
-                    created_at: nowIso,
-                  });
-                  setLocalAbsences(absRows);
-                }
-                pushChangeLog(
-                  "prombutne.cits_pieteikts",
-                  `Darbinieks ${selectedUserId}: ${startDate} — ${endDate}`
+                })
+                .select("id")
+                .single();
+              if (insErr) {
+                alert("Kļūda, saglabājot pieteikumu: " + insErr.message);
+                return;
+              }
+              const rowId = inserted?.id;
+              pushChangeLog(
+                "prombutne.cits_pieteikts",
+                `Darbinieks ${selectedUserId}: ${startDate} — ${endDate}`
+              );
+              const base = window.location.href.split("?")[0];
+              const link = `${base}?citsRow=${encodeURIComponent(rowId)}`;
+              try {
+                await navigator.clipboard.writeText(link);
+                alert(
+                  "Pieteikums saglabāts.\n\nSaite uz saskaņošanu ir nokopēta starpliktuvē – ielīmē to e-pastā vadītājam:\n\n" +
+                    link
                 );
-                const base = window.location.href.split("?")[0];
-                const link = `${base}?cits=${token}`;
-                const draft =
-                  `Kam: ${String(to).trim()}\n` +
-                  `Temats: Gaida prombūtnes saskaņojumu\n\n` +
-                  `Gaida prombūtnes saskaņojumu.\n` +
-                  `Darbinieks: ${selectedUserId}\n` +
-                  `Periods: ${startDate} — ${endDate}\n\n` +
-                  `Saite: ${link}`;
-                const subject = encodeURIComponent("Gaida prombūtnes saskaņojumu");
-                const body = encodeURIComponent(
-                  `Gaida prombūtnes saskaņojumu.\nDarbinieks: ${selectedUserId}\nPeriods: ${startDate} — ${endDate}\n\nSaite: ${link}`
+              } catch {
+                alert(
+                  "Pieteikums saglabāts.\n\nNokopē automātiski neizdevās. Izmanto šo saiti saskaņošanai (ielīmē e-pastā vadītājam):\n\n" +
+                    link
                 );
-                const mailto = `mailto:${encodeURIComponent(String(to).trim())}?subject=${subject}&body=${body}`;
-                try {
-                  window.location.href = mailto;
-                  // Fallback: lai darbinieks var nosūtīt arī tad, ja lokālais e-pasta klients nav konfigurēts.
-                  await navigator.clipboard.writeText(draft);
-                  alert("Atvērta e-pasta nosūtīšana. Ja e-pasta klients neatveras, saturs ir nokopēts starpliktuvē.\n\nSaite:\n" + link);
-                } catch {
-                  alert("Nokopē automātiski neizdevās. Izmanto šo saiti saskaņošanai:\n\n" + link);
-                }
-              } else {
-                const sessionEm = (sessionStorage.getItem(LS_LOCAL_EMAIL) || "").trim().toLowerCase();
-                if (!sessionEm) {
-                  alert("Lai iesniegtu, vispirms ieej ar savu darba e-pastu.");
-                  return;
-                }
-                let insId = "";
-                const { data: citsRows, error: rpcCitsErr } = await supabase.rpc("pdd_submit_cits_request_session", {
-                  p_actor_user_id: userId,
-                  p_actor_email: sessionEm,
-                  p_target_user_id: selectedUserId,
-                  p_start: startDate,
-                  p_end: endDate,
-                  p_comment: comment.trim() || null,
-                  p_notify_email: to,
-                });
-                if (!rpcCitsErr && citsRows) {
-                  const row0 = Array.isArray(citsRows) ? citsRows[0] : citsRows;
-                  insId = String(row0?.request_id ?? "");
-                }
-                if (!insId) {
-                  const { data: ins, error: insErr } = await supabase
-                    .from("pdd_cits_requests")
-                    .insert({
-                      user_id: selectedUserId,
-                      start_date: startDate,
-                      end_date: endDate,
-                      comment: comment.trim() || null,
-                      notify_email: to,
-                    })
-                    .select("id")
-                    .single();
-                  if (insErr) {
-                    alert(
-                      insErr.message +
-                        (rpcCitsErr
-                          ? "\n\nJa esi ar anon sesiju: palaid Supabase SQL — funkcija pdd_submit_cits_request_session."
-                          : "")
-                    );
-                    return;
-                  }
-                  insId = ins.id;
-                }
-                const appBase = window.location.href.split("?")[0];
-                const { data: fnData, error: fnErr } = await supabase.functions.invoke("notify-cits-manager", {
-                  body: { request_id: insId, app_base_url: appBase },
-                });
-                if (fnErr) {
-                  console.error(fnErr);
-                  alert(
-                    "Pieteikums saglabāts, bet e-pasta funkcija nav pieejama (pārbaudi Edge Function „notify-cits-manager”)."
-                  );
-                } else if (fnData?.skipped) {
-                  alert(fnData.message || "E-pasts nav nosūtīts — skatīt konsoli.");
-                } else if (fnData?.link) {
-                  alert("Nosūtīts uz " + to + ". Saite arī: " + fnData.link);
-                }
               }
               setStartDate("");
               setEndDate("");
@@ -2148,8 +2058,6 @@
           ["e-mail"]: i || null,
           [COL_USER_AMATS]: a || null,
           role: normalizeUserRole(role),
-          [COL_USER_ROLE]: normalizeUserRole(role),
-          loma: normalizeUserRole(role),
           full_name: v || null,
           email: i || null,
         };
@@ -2219,20 +2127,7 @@
               await onReload();
               return;
             }
-            let { error } = await supabase.from("users").update(payload).eq("id", editing);
-            if (error) {
-              const roleOnlyPayload = {
-                [COL_USER_NAME]: payload[COL_USER_NAME],
-                [COL_USER_IMAIL]: payload[COL_USER_IMAIL],
-                [COL_USER_AMATS]: payload[COL_USER_AMATS],
-                full_name: payload.full_name,
-                email: payload.email,
-                [COL_USER_ROLE]: payload[COL_USER_ROLE],
-                loma: payload.loma,
-              };
-              const retry = await supabase.from("users").update(roleOnlyPayload).eq("id", editing);
-              error = retry.error;
-            }
+            const { error } = await supabase.from("users").update(payload).eq("id", editing);
             if (error) {
               alert(error.message);
               return;
@@ -2262,21 +2157,7 @@
               await onReload();
               return;
             }
-            let { error } = await supabase.from("users").insert({ id, ...payload });
-            if (error) {
-              const roleOnlyPayload = {
-                id,
-                [COL_USER_NAME]: payload[COL_USER_NAME],
-                [COL_USER_IMAIL]: payload[COL_USER_IMAIL],
-                [COL_USER_AMATS]: payload[COL_USER_AMATS],
-                full_name: payload.full_name,
-                email: payload.email,
-                [COL_USER_ROLE]: payload[COL_USER_ROLE],
-                loma: payload.loma,
-              };
-              const retry = await supabase.from("users").insert(roleOnlyPayload);
-              error = retry.error;
-            }
+            const { error } = await supabase.from("users").insert({ id, ...payload });
             if (error) {
               alert(error.message);
               return;
@@ -3794,6 +3675,7 @@
         const [historyOpen, setHistoryOpen] = useState(false);
         const [highlightAbsenceId, setHighlightAbsenceId] = useState(null);
         const [requestPresetDate, setRequestPresetDate] = useState("");
+        const [highlightFromUrl, setHighlightFromUrl] = useState(null);
         useEffect(() => {
           if (isLocalMode()) {
             setTypesList(getLocalTypes());
@@ -3893,42 +3775,69 @@
             setAbsences(list);
             return;
           }
-          let rows = null;
-          let qErr = null;
-          const q1 = await supabase
+          // 1) Prombūtnes ieraksti
+          const { data: rows, error: qErr } = await supabase
             .from("prombutnes_dati")
-            .select("*, type:prombutnes_veidi(*)")
-            .order("start_date", { ascending: true });
-          rows = q1.data;
-          qErr = q1.error;
-          if (qErr) {
-            const q2 = await supabase.from("prombutnes_dati").select("*");
-            rows = q2.data;
-            qErr = q2.error;
-          }
+            .select("*")
+            .order(ABSENCE_COLS_RUNTIME.start_date, { ascending: true });
           if (qErr) {
             setError(qErr.message);
             return;
           }
+          // 2) Lietotāju profili
           const { data: profs, error: pErr } = await supabase.from("users").select("*");
           if (pErr) setError(pErr.message);
           const pmap = new Map((profs ?? []).map((p) => [p.id, p]));
+          // 3) Prombūtnes veidu saraksts (kārtošanai/labeliem)
+          const { data: typesRows, error: tErr } = await supabase.from("prombutnes_veidi").select("*");
+          if (tErr) console.error(tErr);
+          const tmap = new Map(
+            (typesRows ?? []).map((t) => {
+              const nt = normalizeAbsenceTypeRecord(t);
+              return [nt.id, nt];
+            })
+          );
+          // 4) Normalizējam prombūtnes datus
           const list = (rows ?? [])
             .map((r) => {
               detectAbsenceColumnsFromRow(r);
               return normalizeAbsenceRecord(r);
             })
-            .map((r) => ({
-              ...r,
-              type: r.type ? normalizeAbsenceTypeRecord(r.type) : null,
-              employee: pmap.get(r.user_id) ?? null,
-              approver_user: r.approved_by ? pmap.get(r.approved_by) ?? null : null,
-            }));
+            .map((r) => {
+              const employee = pmap.get(r.user_id) ?? null;
+              const employeeName =
+                userDisplayName(employee) !== "—"
+                  ? userDisplayName(employee)
+                  : (r["Vārds uzvārds"] ?? r["Vards uzvards"] ?? "—");
+              return {
+                ...r,
+                employee: employee
+                  ? { ...employee, [COL_USER_NAME]: employeeName }
+                  : { id: r.user_id, [COL_USER_NAME]: employeeName },
+                type: tmap.get(r.type_id) ?? null,
+                approver_user: r.approved_by ? pmap.get(r.approved_by) ?? null : null,
+              };
+            });
           setAbsences(list);
         }, []);
         useEffect(() => {
           void refresh();
         }, [refresh]);
+
+        // URL param: ?citsRow=<id> → atvērt vēsturi un izcelt konkrēto ierakstu
+        useEffect(() => {
+          try {
+            const params = new URLSearchParams(window.location.search || "");
+            const citsRow = params.get("citsRow");
+            if (citsRow) {
+              setPromSub("history");
+              setHistoryOpen(true);
+              setHighlightFromUrl(citsRow);
+            }
+          } catch {
+            // ignore
+          }
+        }, []);
         const reloadUsersAndViews = useCallback(async () => {
           await loadTeamAndDeputy();
           await refresh();
@@ -3944,7 +3853,6 @@
             .on("postgres_changes", { event: "*", schema: "public", table: "prombutnes_dati" }, bump)
             .on("postgres_changes", { event: "*", schema: "public", table: "users" }, bump)
             .on("postgres_changes", { event: "*", schema: "public", table: "pdd_deputy_state" }, bump)
-            .on("postgres_changes", { event: "*", schema: "public", table: "pdd_cits_requests" }, bump)
             .subscribe();
           return () => {
             void supabase.removeChannel(ch);
@@ -4029,7 +3937,7 @@
                     approverView=${canApprove}
                     historyOpen=${historyOpen}
                     onToggleHistory=${() => setHistoryOpen((o) => !o)}
-                    highlightAbsenceId=${highlightAbsenceId}
+                    highlightAbsenceId=${highlightAbsenceId || highlightFromUrl}
                     onClearHighlight=${() => setHighlightAbsenceId(null)}
                   />
                 `
