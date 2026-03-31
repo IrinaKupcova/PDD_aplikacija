@@ -416,6 +416,7 @@
       const COL_USER_IMAIL = "i-mail";
       const COL_USER_AMATS = "Amats";
       const COL_USER_ROLE = "LOMA";
+      const COL_USER_APPROVER_STATUS = "Apstiprinātāja statuss";
       const TEAM_PAGE_SIZE = 20;
       const ABSENCE_ALT_KEYS = {
         user_id: ["user_id", "darbinieks_id", "darbinieka_id", "darbinieka id", "darbinieks", "vārds uzvārds", "vards uzvards"],
@@ -724,6 +725,21 @@
           u?.email ?? u?.[COL_USER_IMAIL] ?? u?.["e-mail"] ?? u?.["e-pasts"] ?? u?.["i-mail"] ?? ""
         ).trim();
         const amats = String(u?.[COL_USER_AMATS] ?? u?.Amats ?? u?.amats ?? "").trim();
+        const approverRaw =
+          u?.[COL_USER_APPROVER_STATUS] ??
+          u?.["Apstiprinataja statuss"] ??
+          u?.apstiprinataja_statuss ??
+          u?.apstiprinataja_status ??
+          u?.approver_status ??
+          u?.is_approver;
+        const approverStatus =
+          approverRaw === true ||
+          approverRaw === 1 ||
+          String(approverRaw ?? "").trim().toLowerCase() === "true" ||
+          String(approverRaw ?? "").trim().toLowerCase() === "1" ||
+          String(approverRaw ?? "").trim().toLowerCase() === "jā" ||
+          String(approverRaw ?? "").trim().toLowerCase() === "ja" ||
+          String(approverRaw ?? "").trim().toLowerCase() === "yes";
         return {
           ...u,
           id: String(u?.id ?? ""),
@@ -735,6 +751,8 @@
           [COL_USER_AMATS]: amats || null,
           [COL_USER_ROLE]: userRoleValue(u),
           role: userRoleValue(u),
+          [COL_USER_APPROVER_STATUS]: approverStatus,
+          approver_status: approverStatus,
         };
       }
 
@@ -857,8 +875,7 @@
        */
       function effectiveDeputyUserId(rawId, validFrom, validTo) {
         if (!rawId) return null;
-        // Ja perioda nav (abi datumi tukši) → uzskatām, ka nav aizvietotāja, paliek vadītājs.
-        if (!validFrom && !validTo) return null;
+        // Ja periods nav pieejams (kolonnas nav DB), paļaujamies uz deputy_user_id.
         const today = new Date().toISOString().slice(0, 10);
         if (validFrom && today < validFrom) return null;
         if (validTo && today > validTo) return null;
@@ -952,6 +969,31 @@
         localStorage.setItem(LS_CHANGE_LOG, JSON.stringify(logs.slice(0, 1500)));
       }
 
+      function isUserMarkedApprover(u) {
+        const raw =
+          u?.[COL_USER_APPROVER_STATUS] ??
+          u?.["Apstiprinataja statuss"] ??
+          u?.approver_status ??
+          u?.apstiprinataja_statuss ??
+          u?.apstiprinataja_status;
+        return (
+          raw === true ||
+          raw === 1 ||
+          String(raw ?? "").trim().toLowerCase() === "true" ||
+          String(raw ?? "").trim().toLowerCase() === "1" ||
+          String(raw ?? "").trim().toLowerCase() === "jā" ||
+          String(raw ?? "").trim().toLowerCase() === "ja" ||
+          String(raw ?? "").trim().toLowerCase() === "yes"
+        );
+      }
+
+      function resolveBaseApproverUser(teamUsers) {
+        const list = Array.isArray(teamUsers) ? teamUsers : [];
+        const marked = list.find((u) => isUserMarkedApprover(u));
+        if (marked) return marked;
+        return list.find((u) => userDisplayName(u).toLowerCase().trim() === DEFAULT_MANAGER_NAME.toLowerCase().trim()) ?? null;
+      }
+
       function resolveNotifyEmail(teamUsers, deputyUserId) {
         if (deputyUserId && teamUsers?.length) {
           const d = teamUsers.find((u) => String(u.id) === String(deputyUserId));
@@ -959,11 +1001,8 @@
           if (em) return em;
         }
         if (teamUsers?.length) {
-          const manager = teamUsers.find((u) => {
-            const n = userDisplayName(u).toLowerCase().trim();
-            return n === "katrīna jirgensone";
-          });
-          const em = userImail(manager);
+          const approver = resolveBaseApproverUser(teamUsers);
+          const em = userImail(approver);
           if (em) return em;
         }
         return DEFAULT_MANAGER_EMAIL;
@@ -973,10 +1012,8 @@
         if (!sessionUserId) return false;
         const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
         const list = Array.isArray(users) ? users : [];
-        const manager = list.find(
-          (u) => userDisplayName(u).toLowerCase().trim() === DEFAULT_MANAGER_NAME.toLowerCase().trim()
-        );
-        return manager ? String(manager.id) === String(sessionUserId) : false;
+        const approver = resolveBaseApproverUser(list);
+        return approver ? String(approver.id) === String(sessionUserId) : false;
       }
 
       /** Cits saskaņošana: tikai noklusētais vadītājs vai aktīvais aizvietotājs. */
@@ -2593,8 +2630,20 @@
                 { onConflict: "id" }
               );
             if (error) {
-              setMsg(error.message);
-              return;
+              console.warn("[pdd_deputy_state save warning]", error);
+            }
+            const managerUser =
+              (teamUsers ?? []).find(
+                (u) => userDisplayName(u).toLowerCase().trim() === DEFAULT_MANAGER_NAME.toLowerCase().trim()
+              ) ?? null;
+            const targetApproverId = nextId || managerUser?.id || null;
+            if (targetApproverId) {
+              const oldApprovers = (teamUsers ?? []).filter((u) => isUserMarkedApprover(u));
+              for (const u of oldApprovers) {
+                if (String(u.id) === String(targetApproverId)) continue;
+                await supabase.from("users").update({ [COL_USER_APPROVER_STATUS]: false }).eq("id", u.id);
+              }
+              await supabase.from("users").update({ [COL_USER_APPROVER_STATUS]: true }).eq("id", targetApproverId);
             }
             await onDeputyChange();
               setMsg(nextId ? "Apstiprinātājs saglabāts norādītajam periodam." : "Atiestatīts uz pamatvadītāju.");
@@ -2768,7 +2817,7 @@
             if (!userCanApproveAbsences(profileRole ?? "user", sessionUserId, deputyUserId)) {
               if (!cancelled)
                 setErr(
-                  "Apstiprināt drīkst tikai vadītājs, administrators vai norādītais Prombūtnes apstiprinātājs. Ielogojies ar atbilstošu kontu."
+                  "Apstiprināt drīkst tikai vadītājs vai norādītais aktīvais aizvietotājs. Ielogojies ar atbilstošu kontu."
                 );
               return;
             }
@@ -2788,7 +2837,7 @@
         }, [token, sessionUserId, deputyLoaded, deputyUserId, profileRole]);
         async function approve() {
           if (!canApprove) {
-            alert("Apstiprināt drīkst tikai vadītājs, administrators vai Prombūtnes apstiprinātājs.");
+            alert("Apstiprināt drīkst tikai vadītājs vai norādītais aktīvais aizvietotājs.");
             return;
           }
           setBusy(true);
@@ -2864,7 +2913,7 @@
         }
         async function reject() {
           if (!canApprove) {
-            alert("Noraidīt drīkst tikai vadītājs, administrators vai Prombūtnes apstiprinātājs.");
+            alert("Noraidīt drīkst tikai vadītājs vai norādītais aktīvais aizvietotājs.");
             return;
           }
           setBusy(true);
@@ -2949,7 +2998,7 @@
                       </button>
                       ${!canApprove && !isLocalMode()
                         ? html`<p style=${{ margin: 0, fontSize: "0.82rem", color: "var(--muted)" }}>
-                            Tikai vadītājs, administrators vai Prombūtnes apstiprinātājs var apstiprināt.
+                            Tikai vadītājs vai norādītais aktīvais aizvietotājs var apstiprināt.
                           </p>`
                         : null}
                     </div>
@@ -3841,15 +3890,24 @@
             uErr = uq2.error;
           }
           if (uErr) console.error(uErr);
-          setTeamUsers((urows ?? []).map(normalizeTeamUserRecord));
+          const normalizedUsers = (urows ?? []).map(normalizeTeamUserRecord);
+          setTeamUsers(normalizedUsers);
           const { data: drow, error: dErr } = await supabase
             .from("pdd_deputy_state")
             .select("deputy_user_id")
             .eq("id", 1)
             .maybeSingle();
           if (dErr) console.error(dErr);
-          const effectiveId = effectiveDeputyUserId(drow?.deputy_user_id ?? null, null, null);
-          setDeputyUserId(effectiveId);
+          const managerUser =
+            normalizedUsers.find(
+              (u) => userDisplayName(u).toLowerCase().trim() === DEFAULT_MANAGER_NAME.toLowerCase().trim()
+            ) ?? null;
+          const baseApprover = resolveBaseApproverUser(normalizedUsers);
+          const fromUsersDeputy =
+            baseApprover && managerUser && String(baseApprover.id) !== String(managerUser.id) ? String(baseApprover.id) : null;
+          // Galvenais avots: users."Apstiprinātāja statuss".
+          // Ja neviens nav atzīmēts kā apstiprinātājs, paliek pamatvadītājs (deputy = null).
+          setDeputyUserId(fromUsersDeputy || null);
           setDeputyValidFrom(null);
           setDeputyValidTo(null);
         }, []);
@@ -4238,8 +4296,8 @@
                 <div class="app-shell">
                   ${title}
                   <div class="banner-warn" role="alert" style=${{ marginBottom: "1rem", fontSize: "0.9rem" }}>
-                    Lai apstiprinātu „Cits (ar vadītāja saskaņojumu)”, ielogojies. Apstiprināt drīkst tikai vadītājs,
-                    administrators vai Prombūtnes apstiprinātājs.
+                    Lai apstiprinātu „Cits (ar vadītāja saskaņojumu)”, ielogojies. Apstiprināt drīkst tikai vadītājs
+                    vai norādītais aktīvais aizvietotājs.
                   </div>
                   <${AuthScreen} />
                 </div>
