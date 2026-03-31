@@ -434,7 +434,7 @@
         start_date: "Sakuma_datums",
         end_date: "Beigu_datums",
         comment: "Komentārs",
-        status: "Status",
+        status: "Statuss",
         approved_by: "approved_by",
         approved_at: "created_at",
       };
@@ -464,9 +464,7 @@
       }
 
       function userRoleValue(u) {
-        return normalizeUserRole(
-          u?.role ?? u?.[COL_USER_ROLE] ?? u?.loma ?? u?.LOMA ?? u?.Loma ?? u?.Role ?? u?.ROLE
-        );
+        return normalizeUserRole(u?.role ?? u?.Role ?? u?.ROLE);
       }
 
       function normalizeAbsenceRecord(r) {
@@ -854,13 +852,24 @@
         );
       }
 
-      /** p.i. ir spēkā tikai norādītajā datumu intervālā (ieskaitot galējās dienas); tukši datumi = bez gala. */
+      /** p.i. ir spēkā tikai norādītajā datumu intervālā (ieskaitot galējās dienas); tukši datumi = bez gala.
+       * Ja derīguma datumi nav pieejami (piemēram, DB nav kolonnas), tad tiek ignorēti.
+       */
       function effectiveDeputyUserId(rawId, validFrom, validTo) {
         if (!rawId) return null;
         const today = new Date().toISOString().slice(0, 10);
         if (validFrom && today < validFrom) return null;
         if (validTo && today > validTo) return null;
         return rawId;
+      }
+
+      function isDeputyPeriodColumnMissing(errorLike) {
+        const m = String(errorLike?.message ?? errorLike ?? "").toLowerCase();
+        if (!m) return false;
+        return (
+          (m.includes("deputy_valid_from") || m.includes("deputy_valid_to")) &&
+          (m.includes("does not exist") || m.includes("schema cache") || m.includes("could not find"))
+        );
       }
 
       async function fetchAbsenceFormUsers(supabaseClient, options) {
@@ -968,9 +977,8 @@
         return manager ? String(manager.id) === String(sessionUserId) : false;
       }
 
-      /** Cits saskaņošana: vadītājs (admin) vienmēr vai aktīvais aizvietotājs. */
+      /** Cits saskaņošana: tikai noklusētais vadītājs vai aktīvais aizvietotājs. */
       function userCanApproveAbsences(profileRole, sessionUserId, deputyUserId) {
-        if (String(profileRole || "").toLowerCase() === "admin") return true;
         if (isDefaultManagerUser(sessionUserId)) return true;
         if (
           deputyUserId &&
@@ -1764,7 +1772,7 @@
                   Sakuma_datums: startDate,
                   Beigu_datums: endDate,
                   Komentārs: comment.trim() || null,
-                  Status: "pending",
+                  Statuss: "pending",
                   approved_by: null,
                   created_at: nowIso,
                 })
@@ -2057,6 +2065,7 @@
           [COL_USER_IMAIL]: i || null,
           ["e-mail"]: i || null,
           [COL_USER_AMATS]: a || null,
+          // DB pusē: izmantojam tikai kolonu "role" (teksts).
           role: normalizeUserRole(role),
           full_name: v || null,
           email: i || null,
@@ -2572,14 +2581,15 @@
             }
             const { error } = await supabase
               .from("pdd_deputy_state")
-              .update({
-                deputy_user_id: nextId,
-                deputy_valid_from: fromStr || null,
-                deputy_valid_to: toStr || null,
-                updated_by: currentUserId,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", 1);
+              .upsert(
+                {
+                  id: 1,
+                  deputy_user_id: nextId,
+                  updated_by: currentUserId,
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: "id" }
+              );
             if (error) {
               setMsg(error.message);
               return;
@@ -2710,17 +2720,13 @@
           setDeputyLoaded(false);
           supabase
             .from("pdd_deputy_state")
-            .select("deputy_user_id, deputy_valid_from, deputy_valid_to")
+            .select("deputy_user_id")
             .eq("id", 1)
             .maybeSingle()
             .then(({ data, error }) => {
               if (cancelled) return;
               if (error) console.error(error);
-              const eff = effectiveDeputyUserId(
-                data?.deputy_user_id ?? null,
-                data?.deputy_valid_from ?? null,
-                data?.deputy_valid_to ?? null
-              );
+              const eff = effectiveDeputyUserId(data?.deputy_user_id ?? null, null, null);
               setDeputyUserId(eff);
               setDeputyLoaded(true);
             });
@@ -2991,6 +2997,7 @@
         onToggleHistory,
         highlightAbsenceId,
         onClearHighlight,
+        canApproveAbsences,
       }) {
         const [editing, setEditing] = useState(null);
         const [delId, setDelId] = useState(null);
@@ -3096,10 +3103,21 @@
         }, [highlightAbsenceId, historyOpen, filteredList]);
 
         const isAdmin = String(role || "").toLowerCase() === "admin";
+        function isApprovedCitsAbsence(a) {
+          const typeName = a?.type?.name ?? a?.type_id ?? "";
+          return isCitsSaskanotsTypeName(typeName) && String(a?.status || "").toLowerCase() === "approved";
+        }
+        function canEditAbsence(a) {
+          const own = String(a?.user_id) === String(userId);
+          return (isAdmin || own) && !isApprovedCitsAbsence(a);
+        }
+        function canDeleteAbsence(a) {
+          const own = String(a?.user_id) === String(userId);
+          return isAdmin || own;
+        }
         const anyActions = filteredList.some((a) => {
-          const own = String(a.user_id) === String(userId);
-          const canEdit = isAdmin || own;
-          const canDelete = isAdmin || own;
+          const canEdit = canEditAbsence(a);
+          const canDelete = canDeleteAbsence(a);
           return canEdit || canDelete;
         });
         const colCount = anyActions ? 7 : 6;
@@ -3114,6 +3132,10 @@
           return () => window.cancelAnimationFrame(h);
         }, [highlightAbsenceId, historyOpen, historySafePage, visibleList.length]);
         function openEdit(a) {
+          if (isApprovedCitsAbsence(a)) {
+            alert("Apstiprinātu Cits prombūtni vairs labot nevar.");
+            return;
+          }
           setEditing(a.id);
           setForm({
             type_id: String(a.type_id),
@@ -3125,6 +3147,12 @@
         async function saveEdit(e) {
           e.preventDefault();
           if (!editing) return;
+          const editedRow = (absences ?? []).find((x) => String(x.id) === String(editing));
+          if (isApprovedCitsAbsence(editedRow)) {
+            alert("Apstiprinātu Cits prombūtni vairs labot nevar.");
+            setEditing(null);
+            return;
+          }
           if (isLocalMode()) {
             const rows = getLocalAbsences().map((r) =>
               r.id === editing
@@ -3442,9 +3470,8 @@
                   ? html`
                       <tbody>
                         ${visibleList.map((a) => {
-                          const own = String(a.user_id) === String(userId);
-                          const canEdit = isAdmin || own;
-                          const canDelete = isAdmin || own;
+                          const canEdit = canEditAbsence(a);
+                          const canDelete = canDeleteAbsence(a);
                           const userFull = userDisplayName(a.employee);
                           const userParts = String(userFull).split(/\s+/).filter(Boolean);
                           const userShown =
@@ -3476,27 +3503,118 @@
                                 ${maybeMark(a.comment ?? "—", filters.comment)}
                               </td>
                               <td>
-                                <span
-                                  class=${`badge ${statusBadgeClass}`}
-                                >
+                                <span class=${`badge ${statusBadgeClass}`}>
                                   ${maybeMark(statusText, filters.status)}
                                 </span>
                               </td>
-                              ${anyActions
+                              ${anyActions || (isCitsType && canApproveAbsences && a.status !== "approved")
                                 ? html`
                                     <td>
-                                      <div class="row" style=${{ flexDirection: "column", gap: "0.25rem", alignItems: "stretch" }}>
+                                      <div
+                                        class="row"
+                                        style=${{
+                                          flexDirection: "column",
+                                          gap: "0.25rem",
+                                          alignItems: "stretch",
+                                        }}
+                                      >
                                         ${canEdit
                                           ? html`
-                                              <button type="button" class="btn btn-ghost btn-small" onClick=${() => openEdit(a)}>
+                                              <button
+                                                type="button"
+                                                class="btn btn-ghost btn-small"
+                                                onClick=${() => openEdit(a)}
+                                              >
                                                 Labot
                                               </button>
                                             `
                                           : null}
                                         ${canDelete
                                           ? html`
-                                              <button type="button" class="btn btn-danger btn-small" onClick=${() => setDelId(a.id)}>
+                                              <button
+                                                type="button"
+                                                class="btn btn-danger btn-small"
+                                                onClick=${() => setDelId(a.id)}
+                                              >
                                                 Dzēst
+                                              </button>
+                                            `
+                                          : null}
+                                        ${isCitsType && canApproveAbsences && a.status !== "approved"
+                                          ? html`
+                                              <button
+                                                type="button"
+                                                class="btn btn-danger btn-small"
+                                                onClick=${async () => {
+                                                  if (isLocalMode()) {
+                                                    const rows = getLocalAbsences().map((r) =>
+                                                      r.id === a.id ? { ...r, status: "approved" } : r
+                                                    );
+                                                    setLocalAbsences(rows);
+                                                    pushChangeLog(
+                                                      "prombutne.apstiprinat",
+                                                      `Ieraksts ${a.id} apstiprināts`
+                                                    );
+                                                  } else {
+                                                    const { error } = await supabase
+                                                      .from("prombutnes_dati")
+                                                      .update({
+                                                        [ABSENCE_COLS_RUNTIME.status]: "approved",
+                                                      })
+                                                      .eq("id", a.id);
+                                                    if (error) {
+                                                      alert(error.message);
+                                                      return;
+                                                    }
+                                                  }
+                                                  onRefresh();
+                                                }}
+                                              >
+                                                Apstiprināt
+                                              </button>
+                                              <button
+                                                type="button"
+                                                class="btn btn-ghost btn-small"
+                                                onClick=${async () => {
+                                                  const reason = window.prompt(
+                                                    "Iemesls noraidīšanai (tiks pievienots pie komentāra):"
+                                                  );
+                                                  if (reason == null) return;
+                                                  const trimmed = String(reason).trim();
+                                                  if (!trimmed) return;
+                                                  if (isLocalMode()) {
+                                                    const rows = getLocalAbsences().map((r) =>
+                                                      r.id === a.id
+                                                        ? {
+                                                            ...r,
+                                                            status: "rejected",
+                                                            comment: (r.comment || "") + "\n[Noraidīts: " + trimmed + "]",
+                                                          }
+                                                        : r
+                                                    );
+                                                    setLocalAbsences(rows);
+                                                    pushChangeLog(
+                                                      "prombutne.noraidit",
+                                                      `Ieraksts ${a.id} noraidīts`
+                                                    );
+                                                  } else {
+                                                    const { error } = await supabase
+                                                      .from("prombutnes_dati")
+                                                      .update({
+                                                        [ABSENCE_COLS_RUNTIME.status]: "rejected",
+                                                        [ABSENCE_COLS_RUNTIME.comment]:
+                                                          (a.comment || "") + "\n[Noraidīts: " + trimmed + "]",
+                                                      })
+                                                      .eq("id", a.id);
+                                                    if (error) {
+                                                      alert(error.message);
+                                                      return;
+                                                    }
+                                                  }
+                                                  onRefresh();
+                                                }}
+                                              >
+                                                Noraidīt
                                               </button>
                                             `
                                           : null}
@@ -3710,8 +3828,6 @@
             setDeputyValidTo(localTo || null);
             return;
           }
-          const { error: rpcErr } = await supabase.rpc("pdd_cleanup_expired_deputy");
-          if (rpcErr) console.warn("[pdd_cleanup_expired_deputy]", rpcErr);
           let urows = null;
           let uErr = null;
           const uq1 = await supabase.from("users").select("*").order(COL_USER_NAME, { ascending: true });
@@ -3726,13 +3842,13 @@
           setTeamUsers((urows ?? []).map(normalizeTeamUserRecord));
           const { data: drow, error: dErr } = await supabase
             .from("pdd_deputy_state")
-            .select("deputy_user_id, deputy_valid_from, deputy_valid_to")
+            .select("deputy_user_id")
             .eq("id", 1)
             .maybeSingle();
           if (dErr) console.error(dErr);
           setDeputyUserId(drow?.deputy_user_id ?? null);
-          setDeputyValidFrom(drow?.deputy_valid_from ?? null);
-          setDeputyValidTo(drow?.deputy_valid_to ?? null);
+          setDeputyValidFrom(null);
+          setDeputyValidTo(null);
         }, []);
         useEffect(() => {
           void loadTeamAndDeputy();
@@ -3939,6 +4055,7 @@
                     onToggleHistory=${() => setHistoryOpen((o) => !o)}
                     highlightAbsenceId=${highlightAbsenceId || highlightFromUrl}
                     onClearHighlight=${() => setHighlightAbsenceId(null)}
+                    canApproveAbsences=${canApprove}
                   />
                 `
               : null}
