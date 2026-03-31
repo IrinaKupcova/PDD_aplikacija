@@ -415,7 +415,155 @@
       const COL_USER_NAME = "Vārds uzvārds";
       const COL_USER_IMAIL = "i-mail";
       const COL_USER_AMATS = "Amats";
+      const COL_USER_ROLE = "LOMA";
       const TEAM_PAGE_SIZE = 20;
+      const ABSENCE_ALT_KEYS = {
+        user_id: ["user_id", "darbinieks_id", "darbinieka_id", "darbinieka id", "darbinieks", "vārds uzvārds", "vards uzvards"],
+        type_id: ["type_id", "type", "prombūtnes veids", "prombutnes veids", "prombutnes_veids", "veids"],
+        start_date: ["start_date", "sākuma datums", "sakuma_datums", "sakuma datums", "sākuma_datums", "sākuma_datums"],
+        end_date: ["end_date", "beigu datums", "beigu_datums", "beigu_datums"],
+        comment: ["comment", "komentāri", "komentari", "komentārs", "komentars"],
+        status: ["status", "statuss", "statuss"],
+        approved_by: ["approved_by", "apstiprinaja", "apstiprinātājs", "apstiprinatajs"],
+        approved_at: ["approved_at", "apstiprināts", "apstiprinats", "apstiprināts_at", "apstiprinats_at", "apstiprinājuma_laiks", "apstiprinajuma_laiks"],
+        created_at: ["created_at", "izveidots", "izveidots_at"],
+      };
+      const ABSENCE_COLS_RUNTIME = {
+        user_id: "user_id",
+        type_id: "type_id",
+        start_date: "start_date",
+        end_date: "end_date",
+        comment: "comment",
+        status: "status",
+        approved_by: "approved_by",
+        approved_at: "approved_at",
+      };
+
+      function pickByAliases(obj, aliases, fallback = null) {
+        if (!obj || !aliases?.length) return fallback;
+        const entries = Object.entries(obj);
+        for (const alias of aliases) {
+          const wanted = String(alias).toLowerCase().trim();
+          const hit = entries.find(([k]) => String(k).toLowerCase().trim() === wanted);
+          if (hit && hit[1] != null) return hit[1];
+        }
+        return fallback;
+      }
+
+      function detectAbsenceColumnsFromRow(row) {
+        if (!row || typeof row !== "object") return;
+        for (const [canon, aliases] of Object.entries(ABSENCE_ALT_KEYS)) {
+          const hit = pickByAliases(row, aliases, undefined);
+          if (hit !== undefined) {
+            const key = Object.keys(row).find((k) =>
+              aliases.some((a) => String(a).toLowerCase().trim() === String(k).toLowerCase().trim())
+            );
+            if (key) ABSENCE_COLS_RUNTIME[canon] = key;
+          }
+        }
+      }
+
+      function userRoleValue(u) {
+        return normalizeUserRole(
+          u?.role ?? u?.[COL_USER_ROLE] ?? u?.loma ?? u?.LOMA ?? u?.Loma ?? u?.Role ?? u?.ROLE
+        );
+      }
+
+      function normalizeAbsenceRecord(r) {
+        const typeRaw = pickByAliases(r, ABSENCE_ALT_KEYS.type_id, null);
+        const startRaw = pickByAliases(r, ABSENCE_ALT_KEYS.start_date, "");
+        const endRaw = pickByAliases(r, ABSENCE_ALT_KEYS.end_date, "");
+        const commentRaw = pickByAliases(r, ABSENCE_ALT_KEYS.comment, null);
+        const statusRaw = pickByAliases(r, ABSENCE_ALT_KEYS.status, "pending");
+        return {
+          ...r,
+          user_id: String(pickByAliases(r, ABSENCE_ALT_KEYS.user_id, r?.user_id ?? "")),
+          type_id: typeRaw == null || typeRaw === "" ? null : Number(typeRaw),
+          start_date: String(startRaw ?? ""),
+          end_date: String(endRaw ?? ""),
+          comment: commentRaw == null ? null : String(commentRaw),
+          status: normalizeAbsenceStatus(statusRaw),
+          approved_by: pickByAliases(r, ABSENCE_ALT_KEYS.approved_by, null),
+          approved_at: pickByAliases(r, ABSENCE_ALT_KEYS.approved_at, null),
+          created_at: pickByAliases(r, ABSENCE_ALT_KEYS.created_at, r?.created_at ?? null),
+        };
+      }
+
+      function absencePayloadClassic({ userId, typeId, startDate, endDate, comment, status, approvedBy, approvedAt }) {
+        return {
+          user_id: userId,
+          type_id: Number(typeId),
+          start_date: startDate,
+          end_date: endDate,
+          comment: comment ?? null,
+          status,
+          approved_by: approvedBy ?? null,
+          approved_at: approvedAt ?? null,
+        };
+      }
+
+      function absencePayloadDetected({ userId, typeId, startDate, endDate, comment, status, approvedBy, approvedAt }) {
+        return {
+          [ABSENCE_COLS_RUNTIME.user_id]: userId,
+          [ABSENCE_COLS_RUNTIME.type_id]: Number(typeId),
+          [ABSENCE_COLS_RUNTIME.start_date]: startDate,
+          [ABSENCE_COLS_RUNTIME.end_date]: endDate,
+          [ABSENCE_COLS_RUNTIME.comment]: comment ?? null,
+          [ABSENCE_COLS_RUNTIME.status]: status,
+          [ABSENCE_COLS_RUNTIME.approved_by]: approvedBy ?? null,
+          [ABSENCE_COLS_RUNTIME.approved_at]: approvedAt ?? null,
+        };
+      }
+
+      function absencePayloadLatvian({ userId, typeId, startDate, endDate, comment, status, approvedBy, approvedAt }) {
+        return {
+          "Darbinieka_ID": userId,
+          "Prombūtnes veids": Number(typeId),
+          "Sākuma datums": startDate,
+          "Beigu datums": endDate,
+          "Komentāri": comment ?? null,
+          STATUSS: status,
+          "Apstiprinātājs": approvedBy ?? null,
+          "Apstiprināts": approvedAt ?? null,
+        };
+      }
+
+      function absencePayloadLatvianUnderscore({
+        userId,
+        typeId,
+        startDate,
+        endDate,
+        comment,
+        status,
+        approvedBy,
+        approvedAt,
+      }) {
+        return {
+          "Vārds uzvārds": userId,
+          type: Number(typeId),
+          Sākuma_datums: startDate,
+          beigu_datums: endDate,
+          Komentārs: comment ?? null,
+          Statuss: status,
+          approved_by: approvedBy ?? null,
+          created_at: approvedAt ?? null,
+        };
+      }
+
+      async function insertAbsenceWithFallback(fields) {
+        const detected = absencePayloadDetected(fields);
+        const { error: errDetected } = await supabase.from("prombutnes_dati").insert(detected);
+        if (!errDetected) return null;
+        const classic = absencePayloadClassic(fields);
+        const { error: errClassic } = await supabase.from("prombutnes_dati").insert(classic);
+        if (!errClassic) return null;
+        const latvian = absencePayloadLatvian(fields);
+        const { error: errLatvian } = await supabase.from("prombutnes_dati").insert(latvian);
+        if (!errLatvian) return null;
+        const latvianUnderscore = absencePayloadLatvianUnderscore(fields);
+        const { error: errLatvian2 } = await supabase.from("prombutnes_dati").insert(latvianUnderscore);
+        return errLatvian2 ?? errLatvian ?? errClassic ?? errDetected;
+      }
 
       function userDisplayName(u) {
         if (!u) return "—";
@@ -432,12 +580,25 @@
       }
 
       function normalizeUserRole(rawRole) {
-        return String(rawRole ?? "").trim().toLowerCase() === "admin" ? "admin" : "user";
+        const v = String(rawRole ?? "").trim().toLowerCase();
+        if (v === "admin" || v === "manager" || v === "vaditajs" || v === "vadītājs") return "admin";
+        return "user";
+      }
+
+      function normalizeAbsenceStatus(rawStatus) {
+        const s = String(rawStatus ?? "").trim().toLowerCase();
+        if (!s) return "pending";
+        if (s === "approved" || s === "apstiprināts" || s === "apstiprinats" || s === "saskaņots" || s === "saskanots") {
+          return "approved";
+        }
+        if (s === "rejected" || s === "noraidīts" || s === "noraidits" || s === "cancelled") return "rejected";
+        if (s === "pending" || s === "gaida") return "pending";
+        return s;
       }
 
       function normalizeTeamUserRecord(u) {
         const name = String(
-          u?.[COL_USER_NAME] ?? u?.full_name ?? u?.["Vārds uzvārds"] ?? u?.["Vārds, uzvārds"] ?? ""
+          u?.[COL_USER_NAME] ?? u?.full_name ?? u?.["Vārds uzvārds"] ?? u?.["Vārds un uzvārds"] ?? u?.["Vārds, uzvārds"] ?? ""
         ).trim();
         const email = String(
           u?.email ?? u?.[COL_USER_IMAIL] ?? u?.["e-mail"] ?? u?.["e-pasts"] ?? u?.["i-mail"] ?? ""
@@ -452,12 +613,13 @@
           ["e-mail"]: email || null,
           email: email || null,
           [COL_USER_AMATS]: amats || null,
-          role: normalizeUserRole(u?.role),
+          [COL_USER_ROLE]: userRoleValue(u),
+          role: userRoleValue(u),
         };
       }
 
       function normalizeAbsenceTypeRecord(t) {
-        const name = String(t?.name ?? t?.type ?? "").trim();
+        const name = String(t?.name ?? t?.type ?? t?.["Prombūtnes veids"] ?? t?.["Prombutnes veids"] ?? "").trim();
         return {
           ...t,
           name,
@@ -924,7 +1086,8 @@
               [COL_USER_IMAIL]: me?.[COL_USER_IMAIL] ?? me?.email ?? sessionStorage.getItem(LS_LOCAL_EMAIL) ?? "",
               [COL_USER_AMATS]: me?.[COL_USER_AMATS] ?? me?.Amats ?? "",
               email: me?.email ?? sessionStorage.getItem(LS_LOCAL_EMAIL) ?? null,
-              role: me?.role ?? "user",
+              [COL_USER_ROLE]: userRoleValue(me),
+              role: userRoleValue(me),
               created_at: null,
             });
             setLoading(false);
@@ -945,7 +1108,7 @@
             .then(({ data, error }) => {
               if (!cancelled) {
                 if (error) console.error(error);
-                setProfile(data ?? null);
+                setProfile(data ? normalizeTeamUserRecord(data) : null);
                 setLoading(false);
               }
             });
@@ -1637,15 +1800,15 @@
               });
               if (rpcErr || !insId) {
                 const nowIso = new Date().toISOString();
-                const { error } = await supabase.from("prombutnes_dati").insert({
-                  user_id: selectedUserId,
-                  type_id: Number(typeId),
-                  start_date: startDate,
-                  end_date: endDate,
+                const error = await insertAbsenceWithFallback({
+                  userId: selectedUserId,
+                  typeId: Number(typeId),
+                  startDate,
+                  endDate,
                   comment: comment.trim() || null,
                   status: "approved",
-                  approved_by: null,
-                  approved_at: nowIso,
+                  approvedBy: null,
+                  approvedAt: nowIso,
                 });
                 if (error) {
                   alert(
@@ -1840,7 +2003,7 @@
       // Atbilstoši migrācijām `i-mail` tiek sinhronizēts no auth email (`users.email`),
       // bet UI mēs to rādām kā "e-pasts".
       const USER_TABLE_COL_DEFS = [
-        { key: "role", label: "role" },
+        { key: "role", label: "LOMA" },
         { key: COL_USER_NAME, label: "Vārds uzvārds" },
         { key: COL_USER_IMAIL, label: "e-pasts" },
         { key: COL_USER_AMATS, label: "Amats" },
@@ -1875,6 +2038,8 @@
           ["e-mail"]: i || null,
           [COL_USER_AMATS]: a || null,
           role: normalizeUserRole(role),
+          [COL_USER_ROLE]: normalizeUserRole(role),
+          loma: normalizeUserRole(role),
           full_name: v || null,
           email: i || null,
         };
@@ -1928,7 +2093,7 @@
             vardUzv: u[COL_USER_NAME] ?? u.full_name ?? "",
             imail: userImail(u),
             amats: u[COL_USER_AMATS] ?? "",
-            role: u.role ?? "user",
+            role: userRoleValue(u),
           });
         }
         async function saveEdit(e) {
@@ -1944,7 +2109,20 @@
               await onReload();
               return;
             }
-            const { error } = await supabase.from("users").update(payload).eq("id", editing);
+            let { error } = await supabase.from("users").update(payload).eq("id", editing);
+            if (error) {
+              const roleOnlyPayload = {
+                [COL_USER_NAME]: payload[COL_USER_NAME],
+                [COL_USER_IMAIL]: payload[COL_USER_IMAIL],
+                [COL_USER_AMATS]: payload[COL_USER_AMATS],
+                full_name: payload.full_name,
+                email: payload.email,
+                [COL_USER_ROLE]: payload[COL_USER_ROLE],
+                loma: payload.loma,
+              };
+              const retry = await supabase.from("users").update(roleOnlyPayload).eq("id", editing);
+              error = retry.error;
+            }
             if (error) {
               alert(error.message);
               return;
@@ -1974,7 +2152,21 @@
               await onReload();
               return;
             }
-            const { error } = await supabase.from("users").insert({ id, ...payload });
+            let { error } = await supabase.from("users").insert({ id, ...payload });
+            if (error) {
+              const roleOnlyPayload = {
+                id,
+                [COL_USER_NAME]: payload[COL_USER_NAME],
+                [COL_USER_IMAIL]: payload[COL_USER_IMAIL],
+                [COL_USER_AMATS]: payload[COL_USER_AMATS],
+                full_name: payload.full_name,
+                email: payload.email,
+                [COL_USER_ROLE]: payload[COL_USER_ROLE],
+                loma: payload.loma,
+              };
+              const retry = await supabase.from("users").insert(roleOnlyPayload);
+              error = retry.error;
+            }
             if (error) {
               alert(error.message);
               return;
@@ -2960,15 +3152,39 @@
             onRefresh();
             return;
           }
-          const { error } = await supabase
+          let { error } = await supabase
             .from("prombutnes_dati")
             .update({
-              type_id: Number(form.type_id),
-              start_date: form.start_date,
-              end_date: form.end_date,
-              comment: form.comment.trim() || null,
+              [ABSENCE_COLS_RUNTIME.type_id]: Number(form.type_id),
+              [ABSENCE_COLS_RUNTIME.start_date]: form.start_date,
+              [ABSENCE_COLS_RUNTIME.end_date]: form.end_date,
+              [ABSENCE_COLS_RUNTIME.comment]: form.comment.trim() || null,
             })
             .eq("id", editing);
+          if (error) {
+            const retry = await supabase
+              .from("prombutnes_dati")
+              .update({
+                "Prombūtnes veids": Number(form.type_id),
+                "Sākuma datums": form.start_date,
+                "Beigu datums": form.end_date,
+                "Komentāri": form.comment.trim() || null,
+              })
+              .eq("id", editing);
+            error = retry.error;
+            if (error) {
+              const retry2 = await supabase
+                .from("prombutnes_dati")
+                .update({
+                  type: Number(form.type_id),
+                  Sākuma_datums: form.start_date,
+                  beigu_datums: form.end_date,
+                  Komentārs: form.comment.trim() || null,
+                })
+                .eq("id", editing);
+              error = retry2.error;
+            }
+          }
           if (error) alert(error.message);
           else {
             setEditing(null);
@@ -3148,7 +3364,7 @@
                       </button>
                     </th>
                     <th>
-                      Status
+                      STATUSS
                       <button
                         type="button"
                         class=${`btn btn-ghost btn-small ${filterStatusActive ? "btn-danger" : ""}`}
@@ -3504,10 +3720,16 @@
           }
           const { error: rpcErr } = await supabase.rpc("pdd_cleanup_expired_deputy");
           if (rpcErr) console.warn("[pdd_cleanup_expired_deputy]", rpcErr);
-          const { data: urows, error: uErr } = await supabase
-            .from("users")
-            .select("*")
-            .order(COL_USER_NAME, { ascending: true });
+          let urows = null;
+          let uErr = null;
+          const uq1 = await supabase.from("users").select("*").order(COL_USER_NAME, { ascending: true });
+          urows = uq1.data;
+          uErr = uq1.error;
+          if (uErr) {
+            const uq2 = await supabase.from("users").select("*");
+            urows = uq2.data;
+            uErr = uq2.error;
+          }
           if (uErr) console.error(uErr);
           setTeamUsers((urows ?? []).map(normalizeTeamUserRecord));
           const { data: drow, error: dErr } = await supabase
@@ -3561,10 +3783,19 @@
             setAbsences(list);
             return;
           }
-          const { data: rows, error: qErr } = await supabase
+          let rows = null;
+          let qErr = null;
+          const q1 = await supabase
             .from("prombutnes_dati")
             .select("*, type:prombutnes_veidi(*)")
             .order("start_date", { ascending: true });
+          rows = q1.data;
+          qErr = q1.error;
+          if (qErr) {
+            const q2 = await supabase.from("prombutnes_dati").select("*");
+            rows = q2.data;
+            qErr = q2.error;
+          }
           if (qErr) {
             setError(qErr.message);
             return;
@@ -3572,12 +3803,17 @@
           const { data: profs, error: pErr } = await supabase.from("users").select("*");
           if (pErr) setError(pErr.message);
           const pmap = new Map((profs ?? []).map((p) => [p.id, p]));
-          const list = (rows ?? []).map((r) => ({
-            ...r,
-            type: r.type ? normalizeAbsenceTypeRecord(r.type) : null,
-            employee: pmap.get(r.user_id) ?? null,
-            approver_user: r.approved_by ? pmap.get(r.approved_by) ?? null : null,
-          }));
+          const list = (rows ?? [])
+            .map((r) => {
+              detectAbsenceColumnsFromRow(r);
+              return normalizeAbsenceRecord(r);
+            })
+            .map((r) => ({
+              ...r,
+              type: r.type ? normalizeAbsenceTypeRecord(r.type) : null,
+              employee: pmap.get(r.user_id) ?? null,
+              approver_user: r.approved_by ? pmap.get(r.approved_by) ?? null : null,
+            }));
           setAbsences(list);
         }, []);
         useEffect(() => {

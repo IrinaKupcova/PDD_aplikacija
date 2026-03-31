@@ -18,12 +18,20 @@ insert into public.pdd_deputy_state (id, deputy_user_id)
 values (1, null)
 on conflict (id) do nothing;
 
--- 2) Prombūtnes veidu nosaukums: nekrīt, ja kolonnas „type” nav
+-- 2) Kolonna „name” obligāta veidu sinhronizācijai (302200 var nebūt palaists)
+alter table public.prombutnes_veidi
+  add column if not exists name text;
+
+-- Prombūtnes veidu nosaukums: tikai ja pastāv gan „type”, gan „name”
 do $$
 begin
   if exists (
     select 1 from information_schema.columns
     where table_schema = 'public' and table_name = 'prombutnes_veidi' and column_name = 'type'
+  )
+  and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'prombutnes_veidi' and column_name = 'name'
   ) then
     update public.prombutnes_veidi v
     set name = nullif(trim(coalesce(v.type::text, '')), '')
