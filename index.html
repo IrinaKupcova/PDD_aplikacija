@@ -894,6 +894,22 @@
       const supabase = configured()
         ? createClient(normalizeProjectUrl(__cfg.url), String(__cfg.key).trim().replace(/\s+/g, ""))
         : null;
+      let ensureAuthPromise = null;
+
+      async function ensureDbReadableSession() {
+        if (isLocalMode() || !supabase) return;
+        const { data, error } = await supabase.auth.getSession();
+        if (!error && data?.session) return;
+        if (!ensureAuthPromise) {
+          ensureAuthPromise = (async () => {
+            const { error: anonErr } = await supabase.auth.signInAnonymously();
+            if (anonErr) console.warn("[auth.anon]", anonErr);
+          })().finally(() => {
+            ensureAuthPromise = null;
+          });
+        }
+        await ensureAuthPromise;
+      }
 
       function readCitsTokenFromUrl() {
         try {
@@ -969,6 +985,7 @@
           return localUser ? [localUser] : [];
         }
         if (!supabaseClient) return [];
+        await ensureDbReadableSession();
         let rows = null;
         let err = null;
         const r1 = await supabaseClient.from("users").select("*").order(COL_USER_NAME, { ascending: true });
@@ -1064,6 +1081,7 @@
       async function fetchAuditLogs() {
         const local = getChangeLog().map(normalizeAuditLogRecord).filter(Boolean);
         if (isLocalMode() || !supabase) return local;
+        await ensureDbReadableSession();
         const tables = ["Auditacijas_vēsture", "Auditacijas_vesture"];
         let rows = null;
         let err = null;
@@ -1088,6 +1106,7 @@
 
       async function insertAuditLog(row) {
         if (isLocalMode() || !supabase) return;
+        await ensureDbReadableSession();
         const payloadA = {
           ts: row.ts,
           action: row.action,
@@ -1462,18 +1481,22 @@
           }
           let cancelled = false;
           setLoading(true);
-          supabase
-            .from("users")
-            .select("*")
-            .eq("id", userId)
-            .maybeSingle()
-            .then(({ data, error }) => {
-              if (!cancelled) {
-                if (error) console.error(error);
-                setProfile(data ? normalizeTeamUserRecord(data) : null);
-                setLoading(false);
-              }
-            });
+          (async () => {
+            await ensureDbReadableSession();
+            const q1 = await supabase.from("users").select("*").eq("id", userId).maybeSingle();
+            let data = q1.data;
+            let error = q1.error;
+            if (error) {
+              const q2 = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+              data = q2.data;
+              error = q2.error;
+            }
+            if (!cancelled) {
+              if (error) console.error(error);
+              setProfile(data ? normalizeTeamUserRecord(data) : null);
+              setLoading(false);
+            }
+          })();
           return () => {
             cancelled = true;
           };
@@ -4189,6 +4212,7 @@
             setDeputyValidTo(localTo || null);
             return;
           }
+          await ensureDbReadableSession();
           let urows = null;
           let uErr = null;
           const uq1 = await supabase.from("users").select("*").order(COL_USER_NAME, { ascending: true });
@@ -4264,6 +4288,7 @@
             setAbsences(list);
             return;
           }
+          await ensureDbReadableSession();
           // 1) Prombūtnes ieraksti
           const { data: rows, error: qErr } = await supabase
             .from("prombutnes_dati")
