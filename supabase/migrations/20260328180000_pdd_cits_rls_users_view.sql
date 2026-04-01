@@ -1,6 +1,9 @@
   -- Paplašinājums: Cits (ar vadītāja saskaņojumu), dzēšana/labošana, vadītāja insert.
   -- Viena lietotāju tabula: public.users (nav skata, nav public.profiles).
 
+  -- Pāreja no vecās shēmas (profiles / skats users)
+  drop view if exists public.users cascade;
+
   do $$
   begin
     if to_regclass('public.profiles') is not null and to_regclass('public.users') is null then
@@ -84,13 +87,11 @@
 
   drop policy if exists "pdd_cits_insert_own" on public.pdd_cits_requests;
   create policy "pdd_cits_insert_own" on public.pdd_cits_requests
-    for insert to anon, authenticated
-    with check (true);
+    for insert to authenticated with check (auth.uid() = user_id);
 
   drop policy if exists "pdd_cits_select_own" on public.pdd_cits_requests;
   create policy "pdd_cits_select_own" on public.pdd_cits_requests
-    for select to anon, authenticated
-    using (true);
+    for select to authenticated using (auth.uid() = user_id);
 
   drop policy if exists "pdd_cits_select_manager" on public.pdd_cits_requests;
   create policy "pdd_cits_select_manager" on public.pdd_cits_requests
