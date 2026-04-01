@@ -11,14 +11,43 @@ function norm(v) {
   return String(v ?? "").trim().toLowerCase();
 }
 
+function normLoose(v) {
+  return String(v ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function startsWithCits(veids) {
+  return normLoose(veids).startsWith("cits");
+}
+
 function isAdminRole(role) {
-  return norm(role) === "admin";
+  const r = normLoose(role);
+  return r === "admin";
+}
+
+function pickUserRole(user) {
+  return user?.role ?? user?.Role ?? user?.ROLE ?? user?.lomas ?? user?.Lomas ?? user?.LOMAS ?? "";
+}
+
+function pickRequestStatus(req) {
+  return req?.statuss ?? req?.Statuss ?? req?.status ?? "";
+}
+
+function pickRequestVeids(req) {
+  return req?.veids ?? req?.Veids ?? req?.type ?? "";
+}
+
+function pickRequestUserId(req) {
+  return req?.user_id ?? req?.["Vārds uzvārds"] ?? req?.userId ?? null;
 }
 
 async function getUserById(supabase, userId) {
   const { data, error } = await supabase
     .from("users")
-    .select("id, email, role")
+    .select("*")
     .eq("id", userId)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -28,12 +57,10 @@ async function getUserById(supabase, userId) {
 async function getFirstAdmin(supabase) {
   const { data, error } = await supabase
     .from("users")
-    .select("id, email, role")
-    .or("role.eq.admin,role.eq.Admin")
-    .limit(1)
-    .maybeSingle();
+    .select("*");
   if (error) throw new Error(error.message);
-  return data ?? null;
+  const rows = Array.isArray(data) ? data : [];
+  return rows.find((u) => isAdminRole(pickUserRole(u))) ?? null;
 }
 
 async function sendResendEmail(resend, { from, to, subject, text }) {
@@ -53,17 +80,32 @@ async function onRequestCreated({
   veids,
   fromEmail = "PDD <onboarding@resend.dev>",
 }) {
-  const { data: req, error: upErr } = await supabase
+  const { data: currentReq, error: curErr } = await supabase
     .from("prombutnes_dati")
-    .update({ statuss: "pending" })
+    .select("*")
     .eq("id", requestId)
-    .select("id, user_id, statuss, veids")
     .maybeSingle();
-  if (upErr) throw new Error(upErr.message);
-  if (!req) throw new Error("Pieteikums nav atrasts.");
+  if (curErr) throw new Error(curErr.message);
+  if (!currentReq) throw new Error("Pieteikums nav atrasts.");
 
-  const effectiveVeids = String(veids ?? req.veids ?? "").trim();
-  if (norm(effectiveVeids) !== "cits") return { ok: true, notified: false };
+  const currentStatus = norm(pickRequestStatus(currentReq));
+  const effectiveVeids = String(veids ?? pickRequestVeids(currentReq) ?? "").trim();
+
+  // statuss='pending' tikai tad, ja vēl nav uzstādīts pending.
+  let req = currentReq;
+  if (currentStatus !== "pending") {
+    const { data: updatedReq, error: upErr } = await supabase
+      .from("prombutnes_dati")
+      .update({ statuss: "pending" })
+      .eq("id", requestId)
+      .select("*")
+      .maybeSingle();
+    if (upErr) throw new Error(upErr.message);
+    if (!updatedReq) throw new Error("Pieteikums nav atrasts.");
+    req = updatedReq;
+  }
+
+  if (!startsWithCits(effectiveVeids)) return { ok: true, notified: false };
 
   const admin = await getFirstAdmin(supabase);
   if (!admin?.email) return { ok: true, notified: false, warning: "Admin e-pasts nav atrasts." };
@@ -77,7 +119,7 @@ async function onRequestCreated({
       `Atvērt sistēmā: ${APPROVAL_LINK}`,
   });
 
-  return { ok: true, notified: true };
+  return { ok: true, notified: true, request: req };
 }
 
 async function approveRequest({
@@ -88,7 +130,7 @@ async function approveRequest({
   fromEmail = "PDD <onboarding@resend.dev>",
 }) {
   const actor = await getUserById(supabase, currentUserId);
-  if (!actor || !isAdminRole(actor.role)) throw new Error("Tikai admin drīkst apstiprināt.");
+  if (!actor || !isAdminRole(pickUserRole(actor))) throw new Error("Tikai admin drīkst apstiprināt.");
 
   const { data: req, error: updErr } = await supabase
     .from("prombutnes_dati")
@@ -98,12 +140,12 @@ async function approveRequest({
     })
     .eq("id", requestId)
     .eq("statuss", "pending")
-    .select("id, user_id, komentars, statuss")
+    .select("*")
     .maybeSingle();
   if (updErr) throw new Error(updErr.message);
-  if (!req) throw new Error("Pieteikums nav pending vai nav atrasts.");
+  if (!req) throw new Error("Pieteikums nav atrasts.");
 
-  const applicant = await getUserById(supabase, req.user_id);
+  const applicant = await getUserById(supabase, pickRequestUserId(req));
   if (applicant?.email) {
     await sendResendEmail(resend, {
       from: fromEmail,
@@ -113,7 +155,7 @@ async function approveRequest({
     });
   }
 
-  return { ok: true };
+  return { ok: true, request: req };
 }
 
 async function rejectRequest({
@@ -128,7 +170,7 @@ async function rejectRequest({
   if (!r) throw new Error("Noraidīšanas iemesls ir obligāts.");
 
   const actor = await getUserById(supabase, currentUserId);
-  if (!actor || !isAdminRole(actor.role)) throw new Error("Tikai admin drīkst noraidīt.");
+  if (!actor || !isAdminRole(pickUserRole(actor))) throw new Error("Tikai admin drīkst noraidīt.");
 
   const { data: req, error: updErr } = await supabase
     .from("prombutnes_dati")
@@ -139,12 +181,12 @@ async function rejectRequest({
     })
     .eq("id", requestId)
     .eq("statuss", "pending")
-    .select("id, user_id, komentars, statuss")
+    .select("*")
     .maybeSingle();
   if (updErr) throw new Error(updErr.message);
   if (!req) throw new Error("Pieteikums nav pending vai nav atrasts.");
 
-  const applicant = await getUserById(supabase, req.user_id);
+  const applicant = await getUserById(supabase, pickRequestUserId(req));
   if (applicant?.email) {
     await sendResendEmail(resend, {
       from: fromEmail,
@@ -154,18 +196,44 @@ async function rejectRequest({
     });
   }
 
-  return { ok: true };
+  return { ok: true, request: req };
 }
 
 function canShowActions({ currentUserRole, requestStatus }) {
   return isAdminRole(currentUserRole) && norm(requestStatus) === "pending";
 }
 
+function getHistoryActionConfig({ currentUserRole, requestStatus }) {
+  const canShow = canShowActions({ currentUserRole, requestStatus });
+  return {
+    showApprove: canShow,
+    showReject: canShow,
+    approveButton: { label: "Apstiprināt", variant: "success", disabled: !canShow },
+    rejectButton: { label: "Noraidīt", variant: "danger", disabled: !canShow },
+  };
+}
+
+function getRejectModalConfig() {
+  return {
+    title: "Noraidīt pieteikumu",
+    reasonField: {
+      type: "textarea",
+      required: true,
+      placeholder: "Ievadiet noraidīšanas iemeslu",
+    },
+    submitLabel: "Apstiprināt noraidīšanu",
+    cancelLabel: "Atcelt",
+  };
+}
+
 module.exports = {
   APPROVAL_LINK,
+  startsWithCits,
   onRequestCreated,
   approveRequest,
   rejectRequest,
   canShowActions,
+  getHistoryActionConfig,
+  getRejectModalConfig,
 };
 
