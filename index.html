@@ -971,6 +971,35 @@
         }
       }
 
+      async function mutatePrombutnesDatiViaRest({ id, method, payload = null }) {
+        const cfg = loadConfig();
+        const baseUrl = normalizeProjectUrl(cfg.url);
+        const apiKey = String(cfg.key || "").trim();
+        if (!baseUrl || !apiKey) return { error: new Error("Missing Supabase config") };
+        const url = `${baseUrl}/rest/v1/prombutnes_dati?id=eq.${encodeURIComponent(String(id ?? ""))}`;
+        const headers = {
+          apikey: apiKey,
+          Authorization: `Bearer ${apiKey}`,
+        };
+        if (payload && (method === "PATCH" || method === "POST")) {
+          headers["Content-Type"] = "application/json";
+        }
+        try {
+          const resp = await fetch(url, {
+            method,
+            headers,
+            body: payload ? JSON.stringify(payload) : undefined,
+          });
+          if (!resp.ok) {
+            const txt = await resp.text();
+            return { error: new Error(txt || `HTTP ${resp.status}`) };
+          }
+          return { error: null };
+        } catch (e) {
+          return { error: e };
+        }
+      }
+
       function readCitsTokenFromUrl() {
         try {
           return new URL(window.location.href).searchParams.get("cits") || "";
@@ -3512,8 +3541,11 @@
         function clearFilter(key) {
           setFilters((prev) => ({ ...prev, [key]: "" }));
         }
+        function isOwnAbsence(a) {
+          return String(a?.user_id ?? "").trim() === String(userId ?? "").trim();
+        }
         const sortedList = useMemo(() => {
-          const list = approverView ? absences : absences.filter((a) => a.user_id === userId);
+          const list = approverView ? absences : absences.filter((a) => isOwnAbsence(a));
           return [...list].sort((a, b) =>
             String(b.created_at || "").localeCompare(String(a.created_at || ""))
           );
@@ -3579,11 +3611,11 @@
           return isCitsSaskanotsTypeName(typeName) && String(a?.status || "").toLowerCase() === "approved";
         }
         function canEditAbsence(a) {
-          const own = String(a?.user_id) === String(userId);
+          const own = isOwnAbsence(a);
           return (isAdmin || own) && !isApprovedCitsAbsence(a);
         }
         function canDeleteAbsence(a) {
-          const own = String(a?.user_id) === String(userId);
+          const own = isOwnAbsence(a);
           return isAdmin || own;
         }
         const anyActions = filteredList.some((a) => {
@@ -3642,14 +3674,15 @@
             onRefresh();
             return;
           }
+          const restPayload = {
+            [ABSENCE_COLS_RUNTIME.type_id]: Number(form.type_id),
+            [ABSENCE_COLS_RUNTIME.start_date]: form.start_date,
+            [ABSENCE_COLS_RUNTIME.end_date]: form.end_date,
+            [ABSENCE_COLS_RUNTIME.comment]: form.comment.trim() || null,
+          };
           let { error } = await supabase
             .from("prombutnes_dati")
-            .update({
-              [ABSENCE_COLS_RUNTIME.type_id]: Number(form.type_id),
-              [ABSENCE_COLS_RUNTIME.start_date]: form.start_date,
-              [ABSENCE_COLS_RUNTIME.end_date]: form.end_date,
-              [ABSENCE_COLS_RUNTIME.comment]: form.comment.trim() || null,
-            })
+            .update(restPayload)
             .eq("id", editing);
           if (error) {
             const retry = await supabase
@@ -3674,6 +3707,14 @@
                 .eq("id", editing);
               error = retry2.error;
             }
+            if (error) {
+              const restRetry = await mutatePrombutnesDatiViaRest({
+                id: editing,
+                method: "PATCH",
+                payload: restPayload,
+              });
+              error = restRetry.error;
+            }
           }
           if (error) alert(error.message);
           else {
@@ -3690,7 +3731,11 @@
             onRefresh();
             return;
           }
-          const { error } = await supabase.from("prombutnes_dati").delete().eq("id", delId);
+          let { error } = await supabase.from("prombutnes_dati").delete().eq("id", delId);
+          if (error) {
+            const restRetry = await mutatePrombutnesDatiViaRest({ id: delId, method: "DELETE" });
+            error = restRetry.error;
+          }
           if (error) alert(error.message);
           else {
             setDelId(null);
