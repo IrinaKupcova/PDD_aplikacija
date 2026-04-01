@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="lv">
   <head>
     <meta charset="UTF-8" />
@@ -447,7 +447,6 @@
         start_date: ["start_date", "sākuma datums", "sakuma_datums", "sakuma datums", "sākuma_datums", "sākuma_datums"],
         end_date: ["end_date", "beigu datums", "beigu_datums", "beigu_datums"],
         comment: ["comment", "komentāri", "komentari", "komentārs", "komentars"],
-        reject_reason: ["Atteikuma_iemesls", "atteikuma_iemesls", "Atteikuma iemesls", "atteikuma iemesls", "rejection_reason"],
         status: ["status", "statuss", "statuss"],
         approved_by: ["approved_by", "apstiprinaja", "apstiprinātājs", "apstiprinatajs"],
         approved_at: ["approved_at", "apstiprināts", "apstiprinats", "apstiprināts_at", "apstiprinats_at", "apstiprinājuma_laiks", "apstiprinajuma_laiks"],
@@ -459,7 +458,6 @@
         start_date: "Sakuma_datums",
         end_date: "Beigu_datums",
         comment: "Komentārs",
-        reject_reason: "Atteikuma_iemesls",
         status: "Statuss",
         approved_by: "approved_by",
         approved_at: "created_at",
@@ -535,7 +533,6 @@
         const startRaw = pickByAliases(r, ABSENCE_ALT_KEYS.start_date, "");
         const endRaw = pickByAliases(r, ABSENCE_ALT_KEYS.end_date, "");
         const commentRaw = pickByAliases(r, ABSENCE_ALT_KEYS.comment, null);
-        const rejectReasonRaw = pickByAliases(r, ABSENCE_ALT_KEYS.reject_reason, null);
         const statusRaw = pickByAliases(r, ABSENCE_ALT_KEYS.status, "pending");
         return {
           ...r,
@@ -544,7 +541,6 @@
           start_date: String(startRaw ?? ""),
           end_date: String(endRaw ?? ""),
           comment: commentRaw == null ? null : String(commentRaw),
-          reject_reason: rejectReasonRaw == null ? null : String(rejectReasonRaw),
           status: normalizeAbsenceStatus(statusRaw),
           approved_by: pickByAliases(r, ABSENCE_ALT_KEYS.approved_by, null),
           approved_at: pickByAliases(r, ABSENCE_ALT_KEYS.approved_at, null),
@@ -942,80 +938,6 @@
         }
       }
 
-      async function fetchTableDirectFromRest(tableName, { orderBy, ascending = true } = {}) {
-        const cfg = loadConfig();
-        const baseUrl = normalizeProjectUrl(cfg.url);
-        const apiKey = String(cfg.key || "").trim();
-        if (!baseUrl || !apiKey) return { data: null, error: new Error("Missing Supabase config") };
-        const params = new URLSearchParams();
-        params.set("select", "*");
-        if (orderBy) {
-          params.set("order", `${orderBy}.${ascending ? "asc" : "desc"}`);
-        }
-        try {
-          const resp = await fetch(`${baseUrl}/rest/v1/${encodeURIComponent(tableName)}?${params.toString()}`, {
-            method: "GET",
-            headers: {
-              apikey: apiKey,
-              Authorization: `Bearer ${apiKey}`,
-            },
-          });
-          if (!resp.ok) {
-            const txt = await resp.text();
-            return { data: null, error: new Error(txt || `HTTP ${resp.status}`) };
-          }
-          const rows = await resp.json();
-          return { data: Array.isArray(rows) ? rows : [], error: null };
-        } catch (e) {
-          return { data: null, error: e };
-        }
-      }
-
-      async function mutatePrombutnesDatiViaRest({ id, method, payload = null }) {
-        const cfg = loadConfig();
-        const baseUrl = normalizeProjectUrl(cfg.url);
-        const apiKey = String(cfg.key || "").trim();
-        if (!baseUrl || !apiKey) return { error: new Error("Missing Supabase config") };
-        const url = `${baseUrl}/rest/v1/prombutnes_dati?id=eq.${encodeURIComponent(String(id ?? ""))}`;
-        const headers = {
-          apikey: apiKey,
-          Authorization: `Bearer ${apiKey}`,
-        };
-        if (payload && (method === "PATCH" || method === "POST")) {
-          headers["Content-Type"] = "application/json";
-        }
-        if (method === "PATCH" || method === "DELETE") {
-          headers["Prefer"] = "return=representation";
-        }
-        try {
-          const resp = await fetch(url, {
-            method,
-            headers,
-            body: payload ? JSON.stringify(payload) : undefined,
-          });
-          if (!resp.ok) {
-            const txt = await resp.text();
-            return { error: new Error(txt || `HTTP ${resp.status}`) };
-          }
-          const bodyText = await resp.text();
-          let body = null;
-          try {
-            body = bodyText ? JSON.parse(bodyText) : null;
-          } catch {
-            body = null;
-          }
-          if (
-            (method === "PATCH" || method === "DELETE") &&
-            (!Array.isArray(body) || body.length === 0)
-          ) {
-            return { error: new Error("Rinda netika izmainīta (RLS vai neatbilstošas kolonnas).") };
-          }
-          return { error: null };
-        } catch (e) {
-          return { error: e };
-        }
-      }
-
       function readCitsTokenFromUrl() {
         try {
           return new URL(window.location.href).searchParams.get("cits") || "";
@@ -1204,16 +1126,6 @@
             rows = q2.data;
             err = q2.error;
           }
-          if (err) {
-            const r1 = await fetchTableDirectFromRest(t, { orderBy: "ts", ascending: false });
-            rows = r1.data;
-            err = r1.error;
-          }
-          if (err) {
-            const r2 = await fetchTableDirectFromRest(t, { orderBy: "created_at", ascending: false });
-            rows = r2.data;
-            err = r2.error;
-          }
           if (!err) break;
         }
         if (err) {
@@ -1347,11 +1259,16 @@
         return manager ? String(manager.id) === String(sessionUserId) : false;
       }
 
-      /** Cits saskaņošana: tikai vadītājs vai admins. */
+      /** Cits saskaņošana: tikai noklusētais vadītājs vai aktīvais aizvietotājs. */
       function userCanApproveAbsences(profileRole, sessionUserId, deputyUserId) {
-        void deputyUserId;
         if (normalizeUserRole(profileRole) === "admin") return true;
         if (isDefaultManagerUser(sessionUserId)) return true;
+        if (
+          deputyUserId &&
+          sessionUserId &&
+          String(deputyUserId) === String(sessionUserId)
+        )
+          return true;
         return false;
       }
 
@@ -2007,27 +1924,14 @@
             setTypes(getLocalTypes());
             return;
           }
-          (async () => {
-            await ensureDbReadableSession();
-            const q = await supabase.from("prombutnes_veidi").select("*").order("id", { ascending: true });
-            let rows = q.data;
-            let err = q.error;
-            if (err || !(rows ?? []).length) {
-              const rr = await fetchTableDirectFromRest("prombutnes_veidi", { orderBy: "id", ascending: true });
-              if (!rr.error && Array.isArray(rr.data) && rr.data.length) {
-                rows = rr.data;
-                err = null;
-              } else if (err) {
-                rows = rr.data;
-                err = rr.error;
-              }
-            }
-            if (err) console.error(err);
-            const mapped = (rows ?? [])
-              .map(normalizeAbsenceTypeRecord)
-              .filter((t) => String(t?.name ?? "").trim() !== "");
-            setTypes(mapped);
-          })();
+          supabase
+            .from("prombutnes_veidi")
+            .select("*")
+            .order("id", { ascending: true })
+            .then(({ data, error }) => {
+              if (error) console.error(error);
+              setTypes((data ?? []).map(normalizeAbsenceTypeRecord));
+            });
         }, []);
         useEffect(() => {
           let cancelled = false;
@@ -3519,7 +3423,6 @@
           end: "",
           comment: "",
           status: "",
-          rejectReason: "",
         });
         const filterNameActive = String(filters?.name ?? "").trim() !== "";
         const filterTypeActive = String(filters?.type ?? "").trim() !== "";
@@ -3527,7 +3430,6 @@
         const filterEndActive = String(filters?.end ?? "").trim() !== "";
         const filterCommentActive = String(filters?.comment ?? "").trim() !== "";
         const filterStatusActive = String(filters?.status ?? "").trim() !== "";
-        const filterRejectReasonActive = String(filters?.rejectReason ?? "").trim() !== "";
         function userShownFromFull(userFull) {
           const uf = userFull ?? "—";
           const userParts = String(uf).split(/\s+/).filter(Boolean);
@@ -3538,7 +3440,7 @@
               : `${userParts[0]} ${userParts[userParts.length - 1]}`;
         }
         function clearFilters() {
-          setFilters({ name: "", type: "", start: "", end: "", comment: "", status: "", rejectReason: "" });
+          setFilters({ name: "", type: "", start: "", end: "", comment: "", status: "" });
         }
         const myNameForFilter = useMemo(() => {
           const own = (absences ?? []).find((a) => String(a.user_id) === String(userId));
@@ -3557,11 +3459,8 @@
         function clearFilter(key) {
           setFilters((prev) => ({ ...prev, [key]: "" }));
         }
-        function isOwnAbsence(a) {
-          return String(a?.user_id ?? "").trim() === String(userId ?? "").trim();
-        }
         const sortedList = useMemo(() => {
-          const list = approverView ? absences : absences.filter((a) => isOwnAbsence(a));
+          const list = approverView ? absences : absences.filter((a) => a.user_id === userId);
           return [...list].sort((a, b) =>
             String(b.created_at || "").localeCompare(String(a.created_at || ""))
           );
@@ -3581,7 +3480,7 @@
             const userShown = userShownFromFull(userFull);
             const typeName = a.type?.name ?? a.type_id ?? "";
             const statusText = isCitsSaskanotsTypeName(typeName)
-              ? (a.status === "approved" ? "saskaņots" : a.status === "rejected" ? "noraidīts" : "gaida")
+              ? (a.status === "approved" ? "saskaņots" : "gaida")
               : "bez saskaņošanas";
             if (f.name && !includesMatch(userShown, f.name)) return false;
             if (f.type && !includesMatch(typeName, f.type)) return false;
@@ -3589,7 +3488,6 @@
             if (f.end && !includesMatch(a.end_date ?? "", f.end)) return false;
             if (f.comment && !includesMatch(a.comment ?? "", f.comment)) return false;
             if (f.status && !includesMatch(statusText, f.status)) return false;
-            if (f.rejectReason && !includesMatch(extractRejectReason(a), f.rejectReason)) return false;
             return true;
           });
         }, [sortedList, filters, approverView, userId]);
@@ -3616,30 +3514,24 @@
         }, [highlightAbsenceId, historyOpen, filteredList]);
 
         const isAdmin = String(role || "").toLowerCase() === "admin";
-        function isPendingStatus(v) {
-          return String(v ?? "").toLowerCase() === "pending";
-        }
-        function extractRejectReason(absenceRow) {
-          return String(absenceRow?.reject_reason ?? "").trim();
-        }
         function isApprovedCitsAbsence(a) {
           const typeName = a?.type?.name ?? a?.type_id ?? "";
           return isCitsSaskanotsTypeName(typeName) && String(a?.status || "").toLowerCase() === "approved";
         }
         function canEditAbsence(a) {
-          const own = approverView ? isOwnAbsence(a) : true;
+          const own = String(a?.user_id) === String(userId);
           return (isAdmin || own) && !isApprovedCitsAbsence(a);
         }
         function canDeleteAbsence(a) {
-          const own = approverView ? isOwnAbsence(a) : true;
-          return own;
+          const own = String(a?.user_id) === String(userId);
+          return isAdmin || own;
         }
         const anyActions = filteredList.some((a) => {
           const canEdit = canEditAbsence(a);
           const canDelete = canDeleteAbsence(a);
           return canEdit || canDelete;
         });
-        const colCount = anyActions ? 8 : 7;
+        const colCount = anyActions ? 7 : 6;
         useEffect(() => {
           if (!highlightAbsenceId || !historyOpen) return;
           const h = window.requestAnimationFrame(() => {
@@ -3690,65 +3582,40 @@
             onRefresh();
             return;
           }
-          if (editedRow && typeof editedRow === "object") detectAbsenceColumnsFromRow(editedRow);
-          const rawType = String(form.type_id ?? "").trim();
-          const typeNum = Number(rawType);
-          const typeForPayload =
-            rawType && !Number.isNaN(typeNum) && String(typeNum) === rawType
-              ? typeNum
-              : isValidUuid(rawType)
-                ? rawType
-                : Number.isNaN(typeNum)
-                  ? rawType || null
-                  : typeNum;
-          const payloadVariants = [
-            {
-              [ABSENCE_COLS_RUNTIME.type_id]: typeForPayload,
+          let { error } = await supabase
+            .from("prombutnes_dati")
+            .update({
+              [ABSENCE_COLS_RUNTIME.type_id]: Number(form.type_id),
               [ABSENCE_COLS_RUNTIME.start_date]: form.start_date,
               [ABSENCE_COLS_RUNTIME.end_date]: form.end_date,
               [ABSENCE_COLS_RUNTIME.comment]: form.comment.trim() || null,
-            },
-            {
-              type: typeForPayload,
-              Sakuma_datums: form.start_date,
-              Beigu_datums: form.end_date,
-              Komentārs: form.comment.trim() || null,
-            },
-          ];
-          const noRowMsg = "Rinda netika izmainīta (RLS vai neatbilstošas kolonnas).";
-          let lastError = null;
-          let saved = false;
-          for (const p of payloadVariants) {
-            const r = await supabase
+            })
+            .eq("id", editing);
+          if (error) {
+            const retry = await supabase
               .from("prombutnes_dati")
-              .update(p)
-              .eq("id", editing)
-              .select("id");
-            if (r.error) {
-              lastError = r.error;
-              continue;
-            }
-            if (r.data && r.data.length > 0) {
-              saved = true;
-              break;
-            }
-            lastError = new Error(noRowMsg);
-          }
-          if (!saved) {
-            for (const p of payloadVariants) {
-              const restRetry = await mutatePrombutnesDatiViaRest({
-                id: editing,
-                method: "PATCH",
-                payload: p,
-              });
-              if (!restRetry.error) {
-                saved = true;
-                break;
-              }
-              lastError = restRetry.error;
+              .update({
+                "Prombūtnes veids": Number(form.type_id),
+                "Sākuma datums": form.start_date,
+                "Beigu datums": form.end_date,
+                "Komentāri": form.comment.trim() || null,
+              })
+              .eq("id", editing);
+            error = retry.error;
+            if (error) {
+              const retry2 = await supabase
+                .from("prombutnes_dati")
+                .update({
+                  type: Number(form.type_id),
+                  Sākuma_datums: form.start_date,
+                  beigu_datums: form.end_date,
+                  Komentārs: form.comment.trim() || null,
+                })
+                .eq("id", editing);
+              error = retry2.error;
             }
           }
-          if (!saved) alert(lastError?.message || noRowMsg);
+          if (error) alert(error.message);
           else {
             setEditing(null);
             onRefresh();
@@ -3763,21 +3630,8 @@
             onRefresh();
             return;
           }
-          const noRowMsg = "Rinda netika dzēsta (RLS vai neatbilstošs ID).";
-          const del = await supabase.from("prombutnes_dati").delete().eq("id", delId).select("id");
-          let lastError = del.error;
-          let removed = !del.error && del.data && del.data.length > 0;
-          if (!removed) {
-            if (!lastError) lastError = new Error(noRowMsg);
-            const restRetry = await mutatePrombutnesDatiViaRest({ id: delId, method: "DELETE" });
-            if (!restRetry.error) {
-              removed = true;
-              lastError = null;
-            } else {
-              lastError = restRetry.error;
-            }
-          }
-          if (!removed) alert(lastError?.message || noRowMsg);
+          const { error } = await supabase.from("prombutnes_dati").delete().eq("id", delId);
+          if (error) alert(error.message);
           else {
             setDelId(null);
             onRefresh();
@@ -3956,23 +3810,6 @@
                         </svg>
                       </button>
                     </th>
-                    <th>
-                      Atteikuma iemesls
-                      <button
-                        type="button"
-                        class=${`btn btn-ghost btn-small ${filterRejectReasonActive ? "btn-danger" : ""}`}
-                        title="Filtrs"
-                        onClick=${() => {
-                          if (filterRejectReasonActive) clearFilter("rejectReason");
-                          else setFiltersOpen((o) => !o);
-                          ensureHistoryOpen();
-                        }}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
-                        </svg>
-                      </button>
-                    </th>
                     ${anyActions ? html`<th>—</th>` : null}
                   </tr>
                   ${filtersOpen
@@ -4034,16 +3871,7 @@
                               <option value="bez saskaņošanas">bez saskaņošanas</option>
                               <option value="gaida">gaida</option>
                               <option value="saskaņots">saskaņots</option>
-                              <option value="noraidīts">noraidīts</option>
                       </select>
-                    </th>
-                    <th>
-                      <input
-                        class="input"
-                        value=${filters.rejectReason}
-                        onChange=${(e) => applyFilter("rejectReason", e.target.value)}
-                        placeholder="meklēt..."
-                      />
                     </th>
                     ${anyActions ? html`<th></th>` : null}
                   </tr>`
@@ -4067,14 +3895,10 @@
                           const typeName = a.type?.name ?? a.type_id ?? "—";
                           const isCitsType = isCitsSaskanotsTypeName(typeName);
                           const statusText = isCitsType
-                            ? (a.status === "approved" ? "saskaņots" : a.status === "rejected" ? "noraidīts" : "gaida")
+                            ? (a.status === "approved" ? "saskaņots" : "gaida")
                             : "bez saskaņošanas";
                           const statusBadgeClass = isCitsType
-                            ? (a.status === "approved"
-                                ? "badge-approved"
-                                : a.status === "rejected"
-                                  ? "badge-rejected"
-                                  : "badge-pending")
+                            ? (a.status === "approved" ? "badge-approved" : "badge-pending")
                             : "badge-approved";
                           return html`
                             <tr
@@ -4089,17 +3913,12 @@
                               <td style=${{ maxWidth: "140px", wordBreak: "break-word" }}>
                                 ${maybeMark(a.comment ?? "—", filters.comment)}
                               </td>
-                              <td style=${{ maxWidth: "140px", wordBreak: "break-word" }}>
+                              <td>
                                 <span class=${`badge ${statusBadgeClass}`}>
                                   ${maybeMark(statusText, filters.status)}
                                 </span>
                               </td>
-                              <td style=${{ maxWidth: "140px", wordBreak: "break-word" }}>
-                                ${isCitsType && String(a.status || "").toLowerCase() === "rejected"
-                                  ? maybeMark(extractRejectReason(a) || "—", filters.rejectReason)
-                                  : "—"}
-                              </td>
-                              ${anyActions || (isCitsType && canApproveAbsences && isPendingStatus(a.status))
+                              ${anyActions || (isCitsType && canApproveAbsences && a.status !== "approved")
                                 ? html`
                                     <td>
                                       <div
@@ -4132,7 +3951,7 @@
                                               </button>
                                             `
                                           : null}
-                                        ${isCitsType && canApproveAbsences && isPendingStatus(a.status)
+                                        ${isCitsType && canApproveAbsences && a.status !== "approved"
                                           ? html`
                                               <button
                                                 type="button"
@@ -4152,7 +3971,6 @@
                                                       .from("prombutnes_dati")
                                                       .update({
                                                         [ABSENCE_COLS_RUNTIME.status]: "approved",
-                                                        [ABSENCE_COLS_RUNTIME.reject_reason]: null,
                                                       })
                                                       .eq("id", a.id);
                                                     if (error) {
@@ -4181,7 +3999,7 @@
                                                         ? {
                                                             ...r,
                                                             status: "rejected",
-                                                            reject_reason: trimmed,
+                                                            comment: (r.comment || "") + "\n[Noraidīts: " + trimmed + "]",
                                                           }
                                                         : r
                                                     );
@@ -4195,7 +4013,8 @@
                                                       .from("prombutnes_dati")
                                                       .update({
                                                         [ABSENCE_COLS_RUNTIME.status]: "rejected",
-                                                        [ABSENCE_COLS_RUNTIME.reject_reason]: trimmed,
+                                                        [ABSENCE_COLS_RUNTIME.comment]:
+                                                          (a.comment || "") + "\n[Noraidīts: " + trimmed + "]",
                                                       })
                                                       .eq("id", a.id);
                                                     if (error) {
@@ -4512,18 +4331,8 @@
             .from("prombutnes_dati")
             .select("*")
             .order(ABSENCE_COLS_RUNTIME.start_date, { ascending: true });
-          let absRows = rows;
-          let absErr = qErr;
-          if (absErr) {
-            const rr = await fetchTableDirectFromRest("prombutnes_dati", {
-              orderBy: ABSENCE_COLS_RUNTIME.start_date,
-              ascending: true,
-            });
-            absRows = rr.data;
-            absErr = rr.error;
-          }
-          if (absErr) {
-            setError(absErr.message);
+          if (qErr) {
+            setError(qErr.message);
             return;
           }
           // 2) Lietotāju profili
@@ -4540,16 +4349,7 @@
           if (pErr) setError(pErr.message);
           const pmap = new Map((profs ?? []).map((p) => [String(p.id), normalizeTeamUserRecord(p)]));
           // 3) Prombūtnes veidu saraksts (kārtošanai/labeliem)
-          let typesRows = null;
-          let tErr = null;
-          const tQ = await supabase.from("prombutnes_veidi").select("*");
-          typesRows = tQ.data;
-          tErr = tQ.error;
-          if (tErr) {
-            const tr = await fetchTableDirectFromRest("prombutnes_veidi");
-            typesRows = tr.data;
-            tErr = tr.error;
-          }
+          const { data: typesRows, error: tErr } = await supabase.from("prombutnes_veidi").select("*");
           if (tErr) console.error(tErr);
           const tmap = new Map(
             (typesRows ?? []).map((t) => {
@@ -4558,7 +4358,7 @@
             })
           );
           // 4) Normalizējam prombūtnes datus
-          const list = (absRows ?? [])
+          const list = (rows ?? [])
             .map((r) => {
               detectAbsenceColumnsFromRow(r);
               return normalizeAbsenceRecord(r);
@@ -4620,8 +4420,8 @@
         const isManager = normalizeUserRole(role) === "admin";
         const canApprove = userCanApproveAbsences(role, userId, deputyEffectiveId);
         useEffect(() => {
-          if (promSub === "deputy") setPromSub("calendar");
-        }, [promSub, setPromSub]);
+          if (promSub === "deputy" && !isManager) setPromSub("calendar");
+        }, [promSub, isManager, setPromSub]);
         const promSubLabel =
           promSub === "calendar"
             ? "Kalendārs"
@@ -4712,6 +4512,19 @@
                     presetDate=${requestPresetDate}
                     onConsumePreset=${() => setRequestPresetDate("")}
                     canApproveRequests=${canApprove}
+                  />
+                `
+              : null}
+            ${promSub === "deputy" && isManager
+              ? html`
+                  <${DeputyDelegePanel}
+                    teamUsers=${teamUsers}
+                    approverCols=${approverCols}
+                    deputyUserId=${deputyUserId}
+                    deputyValidFrom=${deputyValidFrom}
+                    deputyValidTo=${deputyValidTo}
+                    onDeputyChange=${reloadUsersAndViews}
+                    currentUserId=${userId}
                   />
                 `
               : null}
@@ -4820,7 +4633,7 @@
         const { profile, loading: profileLoading } = useProfile(session?.user?.id);
         const [view, setView] = useState("home");
         const [promSub, setPromSub] = useState("calendar");
-        const showPromDeputyTab = false;
+        const showPromDeputyTab = profile?.role === "admin";
         const [citsToken, setCitsToken] = useState(() => readCitsTokenFromUrl());
         const title = useMemo(
           () => html`
@@ -5014,3 +4827,4 @@
     </script>
   </body>
 </html>
+

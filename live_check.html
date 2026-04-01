@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="lv">
   <head>
     <meta charset="UTF-8" />
@@ -1004,10 +1004,7 @@
           } catch {
             body = null;
           }
-          if (
-            (method === "PATCH" || method === "DELETE") &&
-            (!Array.isArray(body) || body.length === 0)
-          ) {
+          if ((method === "PATCH" || method === "DELETE") && (!Array.isArray(body) || body.length === 0)) {
             return { error: new Error("Rinda netika izmainīta (RLS vai neatbilstošas kolonnas).") };
           }
           return { error: null };
@@ -3632,7 +3629,7 @@
         }
         function canDeleteAbsence(a) {
           const own = approverView ? isOwnAbsence(a) : true;
-          return own;
+          return isAdmin || own;
         }
         const anyActions = filteredList.some((a) => {
           const canEdit = canEditAbsence(a);
@@ -3690,65 +3687,59 @@
             onRefresh();
             return;
           }
-          if (editedRow && typeof editedRow === "object") detectAbsenceColumnsFromRow(editedRow);
-          const rawType = String(form.type_id ?? "").trim();
-          const typeNum = Number(rawType);
-          const typeForPayload =
-            rawType && !Number.isNaN(typeNum) && String(typeNum) === rawType
-              ? typeNum
-              : isValidUuid(rawType)
-                ? rawType
-                : Number.isNaN(typeNum)
-                  ? rawType || null
-                  : typeNum;
           const payloadVariants = [
             {
-              [ABSENCE_COLS_RUNTIME.type_id]: typeForPayload,
+              [ABSENCE_COLS_RUNTIME.type_id]: Number(form.type_id),
               [ABSENCE_COLS_RUNTIME.start_date]: form.start_date,
               [ABSENCE_COLS_RUNTIME.end_date]: form.end_date,
               [ABSENCE_COLS_RUNTIME.comment]: form.comment.trim() || null,
             },
             {
-              type: typeForPayload,
+              type: Number(form.type_id),
               Sakuma_datums: form.start_date,
               Beigu_datums: form.end_date,
               Komentārs: form.comment.trim() || null,
             },
+            {
+              type: Number(form.type_id),
+              "Sākuma_datums": form.start_date,
+              "Beigu_datums": form.end_date,
+              Komentārs: form.comment.trim() || null,
+            },
+            {
+              "Prombūtnes veids": Number(form.type_id),
+              "Sākuma datums": form.start_date,
+              "Beigu datums": form.end_date,
+              "Komentāri": form.comment.trim() || null,
+            },
           ];
-          const noRowMsg = "Rinda netika izmainīta (RLS vai neatbilstošas kolonnas).";
-          let lastError = null;
-          let saved = false;
+          let error = null;
           for (const p of payloadVariants) {
             const r = await supabase
               .from("prombutnes_dati")
               .update(p)
               .eq("id", editing)
-              .select("id");
-            if (r.error) {
-              lastError = r.error;
-              continue;
-            }
-            if (r.data && r.data.length > 0) {
-              saved = true;
+              .select("id")
+              .maybeSingle();
+            error = r.error;
+            if (!error && r.data) {
+              error = null;
               break;
             }
-            lastError = new Error(noRowMsg);
+            if (!error && !r.data) error = { message: "Ieraksts netika atjaunināts." };
           }
-          if (!saved) {
+          if (error) {
             for (const p of payloadVariants) {
               const restRetry = await mutatePrombutnesDatiViaRest({
                 id: editing,
                 method: "PATCH",
                 payload: p,
               });
-              if (!restRetry.error) {
-                saved = true;
-                break;
-              }
-              lastError = restRetry.error;
+              error = restRetry.error;
+              if (!error) break;
             }
           }
-          if (!saved) alert(lastError?.message || noRowMsg);
+          if (error) alert(error.message);
           else {
             setEditing(null);
             onRefresh();
@@ -3763,21 +3754,20 @@
             onRefresh();
             return;
           }
-          const noRowMsg = "Rinda netika dzēsta (RLS vai neatbilstošs ID).";
-          const del = await supabase.from("prombutnes_dati").delete().eq("id", delId).select("id");
-          let lastError = del.error;
-          let removed = !del.error && del.data && del.data.length > 0;
-          if (!removed) {
-            if (!lastError) lastError = new Error(noRowMsg);
-            const restRetry = await mutatePrombutnesDatiViaRest({ id: delId, method: "DELETE" });
-            if (!restRetry.error) {
-              removed = true;
-              lastError = null;
-            } else {
-              lastError = restRetry.error;
-            }
+          let { data: delRow, error } = await supabase
+            .from("prombutnes_dati")
+            .delete()
+            .eq("id", delId)
+            .select("id")
+            .maybeSingle();
+          if (!error && !delRow) {
+            error = { message: "Ieraksts netika dzēsts." };
           }
-          if (!removed) alert(lastError?.message || noRowMsg);
+          if (error) {
+            const restRetry = await mutatePrombutnesDatiViaRest({ id: delId, method: "DELETE" });
+            error = restRetry.error;
+          }
+          if (error) alert(error.message);
           else {
             setDelId(null);
             onRefresh();
@@ -5014,3 +5004,4 @@
     </script>
   </body>
 </html>
+
