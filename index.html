@@ -371,6 +371,7 @@
     <script src="./Komanda.js"></script>
     <script src="./Kalendars.js"></script>
     <script src="./Filtr.js"></script>
+    <script src="./Saskaņošana.js"></script>
 
     <script type="module">
       import React, { useState, useEffect, useCallback, useMemo } from "https://esm.sh/react@19.0.0";
@@ -1116,16 +1117,31 @@
       }
 
       function resolveActiveDeputyUser(teamUsers, todayStr = new Date().toISOString().slice(0, 10)) {
+        function toIsoDate(raw) {
+          const s = String(raw ?? "").trim();
+          if (!s) return "";
+          // yyyy-mm-dd
+          let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+          if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+          // dd/mm/yyyy
+          m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+          if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+          // dd.mm.yyyy
+          m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s);
+          if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+          return s;
+        }
         const list = Array.isArray(teamUsers) ? teamUsers : [];
         const manager = resolveManagerUser(list);
+        const todayIso = toIsoDate(todayStr);
         return (
           list.find((u) => {
             if (manager && String(u.id) === String(manager.id)) return false;
             if (normalizeApproverMode(u?.[COL_USER_APPROVER_STATUS]) !== "period") return false;
-            const fromStr = String(u?.[COL_USER_APPROVER_FROM] ?? u?.approver_period_from ?? "").trim();
-            const toStr = String(u?.[COL_USER_APPROVER_TO] ?? u?.approver_period_to ?? "").trim();
-            if (!fromStr || !toStr) return false;
-            return fromStr <= todayStr && todayStr <= toStr;
+            const fromIso = toIsoDate(u?.[COL_USER_APPROVER_FROM] ?? u?.approver_period_from ?? "");
+            const toIso = toIsoDate(u?.[COL_USER_APPROVER_TO] ?? u?.approver_period_to ?? "");
+            if (!fromIso || !toIso) return false;
+            return fromIso <= todayIso && todayIso <= toIso;
           }) ?? null
         );
       }
@@ -2719,6 +2735,7 @@
 
       function DeputyDelegePanel({
         teamUsers,
+        approverCols,
         deputyUserId,
         deputyValidFrom,
         deputyValidTo,
@@ -2759,43 +2776,103 @@
               setMsg("Neizdevās atrast pamatvadītāju users tabulā.");
               return;
             }
-            const approverCols = detectUserApproverColumns(teamUsers ?? []);
-            const clearAll = await supabase
-              .from("users")
-              .update({
-                [approverCols.status]: null,
-                [approverCols.from]: null,
-                [approverCols.to]: null,
-              })
-              .not("id", "is", null);
-            if (clearAll.error) {
-              setMsg(clearAll.error.message);
+            if (window.SASKANOSANA?.saveState) {
+              const res = await window.SASKANOSANA.saveState(
+                supabase,
+                DEFAULT_MANAGER_NAME,
+                nextId || null,
+                fromStr || null,
+                toStr || null
+              );
+              if (res?.error) {
+                setMsg(res.error.message || "Neizdevās saglabāt saskaņošanu.");
+                return;
+              }
+              await onDeputyChange();
+              setMsg(nextId ? "Apstiprinātājs saglabāts norādītajam periodam." : "Atiestatīts uz pamatvadītāju.");
               return;
             }
-            const markManager = await supabase
-              .from("users")
-              .update({
-                [approverCols.status]: "pec noklusējuma vienmēr",
-                [approverCols.from]: null,
-                [approverCols.to]: null,
-              })
-              .eq("id", managerUser.id);
-            if (markManager.error) {
-              setMsg(markManager.error.message);
+            const colsDefault = approverCols ?? {
+              status: COL_USER_APPROVER_STATUS,
+              from: COL_USER_APPROVER_FROM,
+              to: COL_USER_APPROVER_TO,
+            };
+            // Kolonnas nosakām no RAW DB rindas, nevis no normalizētā objekta.
+            const probe = await supabase.from("users").select("*").limit(1);
+            const cols = probe.error
+              ? colsDefault
+              : detectUserApproverColumns(Array.isArray(probe.data) ? probe.data : []);
+
+            async function runUsersUpdateWithColumnPruning(buildQuery, payload) {
+              const draft = { ...payload };
+              let lastError = null;
+              for (let i = 0; i < 6; i++) {
+                const { error } = await buildQuery(draft);
+                if (!error) return null;
+                lastError = error;
+                const msg = String(error?.message || "");
+                const m =
+                  /Could not find the '([^']+)' column/i.exec(msg) ||
+                  /'([^']+)' column/i.exec(msg);
+                const missing = m?.[1];
+                if (missing && Object.prototype.hasOwnProperty.call(draft, missing)) {
+                  delete draft[missing];
+                  continue;
+                }
+                break;
+              }
+              return lastError;
+            }
+
+            const clearErr = await runUsersUpdateWithColumnPruning(
+              (p) =>
+                supabase
+                  .from("users")
+                  .update(p)
+                  .not("id", "is", null),
+              {
+                [cols.status]: null,
+                [cols.from]: null,
+                [cols.to]: null,
+              }
+            );
+            if (clearErr) {
+              setMsg(clearErr.message);
+              return;
+            }
+
+            const markMgrErr = await runUsersUpdateWithColumnPruning(
+              (p) =>
+                supabase
+                  .from("users")
+                  .update(p)
+                  .eq("id", managerUser.id),
+              {
+                [cols.status]: "pec noklusējuma vienmēr",
+                [cols.from]: null,
+                [cols.to]: null,
+              }
+            );
+            if (markMgrErr) {
+              setMsg(markMgrErr.message);
               return;
             }
             const targetApproverId = nextId || managerUser?.id || null;
             if (targetApproverId && nextId) {
-              const setDeputy = await supabase
-                .from("users")
-                .update({
-                  [approverCols.status]: "uz noteikto periodu",
-                  [approverCols.from]: fromStr,
-                  [approverCols.to]: toStr,
-                })
-                .eq("id", targetApproverId);
-              if (setDeputy.error) {
-                setMsg(setDeputy.error.message);
+              const deputyErr = await runUsersUpdateWithColumnPruning(
+                (p) =>
+                  supabase
+                    .from("users")
+                    .update(p)
+                    .eq("id", targetApproverId),
+                {
+                  [cols.status]: "uz noteikto periodu",
+                  [cols.from]: fromStr,
+                  [cols.to]: toStr,
+                }
+              );
+              if (deputyErr) {
+                setMsg(deputyErr.message);
                 return;
               }
             }
@@ -2923,6 +3000,22 @@
           }
           let cancelled = false;
           setDeputyLoaded(false);
+          if (window.SASKANOSANA?.loadState) {
+            window.SASKANOSANA
+              .loadState(supabase, DEFAULT_MANAGER_NAME)
+              .then((st) => {
+                if (cancelled) return;
+                if (st?.error) {
+                  setDeputyUserId(null);
+                } else {
+                  setDeputyUserId(st.deputyUserId ?? null);
+                }
+                setDeputyLoaded(true);
+              });
+            return () => {
+              cancelled = true;
+            };
+          }
           supabase
             .from("users")
             .select("*")
@@ -3998,6 +4091,11 @@
         const [deputyUserId, setDeputyUserId] = useState(null);
         const [deputyValidFrom, setDeputyValidFrom] = useState(null);
         const [deputyValidTo, setDeputyValidTo] = useState(null);
+        const [approverCols, setApproverCols] = useState({
+          status: COL_USER_APPROVER_STATUS,
+          from: COL_USER_APPROVER_FROM,
+          to: COL_USER_APPROVER_TO,
+        });
         const [error, setError] = useState(null);
         const [historyOpen, setHistoryOpen] = useState(false);
         const [highlightAbsenceId, setHighlightAbsenceId] = useState(null);
@@ -4048,8 +4146,19 @@
             uErr = uq2.error;
           }
           if (uErr) console.error(uErr);
-          const normalizedUsers = (urows ?? []).map(normalizeTeamUserRecord);
+          const rawUsers = urows ?? [];
+          const normalizedUsers = rawUsers.map(normalizeTeamUserRecord);
+          setApproverCols(detectUserApproverColumns(rawUsers));
           setTeamUsers(normalizedUsers);
+          if (window.SASKANOSANA?.loadState) {
+            const st = await window.SASKANOSANA.loadState(supabase, DEFAULT_MANAGER_NAME);
+            if (!st?.error) {
+              setDeputyUserId(st.deputyUserId ?? null);
+              setDeputyValidFrom(st.deputyFrom ?? null);
+              setDeputyValidTo(st.deputyTo ?? null);
+              return;
+            }
+          }
           const activeDeputy = resolveActiveDeputyUser(normalizedUsers);
           setDeputyUserId(activeDeputy?.id ? String(activeDeputy.id) : null);
           setDeputyValidFrom(activeDeputy?.[COL_USER_APPROVER_FROM] ?? null);
@@ -4280,6 +4389,7 @@
               ? html`
                   <${DeputyDelegePanel}
                     teamUsers=${teamUsers}
+                    approverCols=${approverCols}
                     deputyUserId=${deputyUserId}
                     deputyValidFrom=${deputyValidFrom}
                     deputyValidTo=${deputyValidTo}
