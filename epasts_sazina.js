@@ -2,11 +2,7 @@
  * epasts_sazina.js
  *
  * Atsevišķs modulis prombūtnes "Cits" saskaņošanai ar e-pastiem.
- * NEAIZTIEK esošās lapas/funkcijas — tikai pievieno jaunu funkcionalitāti.
- *
- * Paredzēts servera pusē (Next.js API route / server action), jo:
- * - Resend API key nedrīkst būt klientā
- * - role validācija jāveic server-side
+ * Šis fails neiejaucas esošajās lapās/funkcijās.
  */
 
 const APPROVAL_LINK = "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
@@ -50,11 +46,6 @@ async function sendResendEmail(resend, { from, to, subject, text }) {
   if (error) throw new Error(error.message || "Neizdevās nosūtīt e-pastu.");
 }
 
-/**
- * 1) Izsauc pie pieteikuma izveides.
- * - nodrošina statuss='pending'
- * - ja veids='Cits', nosūta e-pastu admin
- */
 async function onRequestCreated({
   supabase,
   resend,
@@ -62,7 +53,6 @@ async function onRequestCreated({
   veids,
   fromEmail = "PDD <onboarding@resend.dev>",
 }) {
-  // Nodrošinām pending statusu.
   const { data: req, error: upErr } = await supabase
     .from("prombutnes_dati")
     .update({ statuss: "pending" })
@@ -90,9 +80,6 @@ async function onRequestCreated({
   return { ok: true, notified: true };
 }
 
-/**
- * 4) Apstiprināšana (server-side role validācija + update + e-pasts pieteicējam)
- */
 async function approveRequest({
   supabase,
   resend,
@@ -129,9 +116,6 @@ async function approveRequest({
   return { ok: true };
 }
 
-/**
- * 5) Noraidīšana (required iemesls) + 6) e-pasts pieteicējam
- */
 async function rejectRequest({
   supabase,
   resend,
@@ -173,10 +157,6 @@ async function rejectRequest({
   return { ok: true };
 }
 
-/**
- * 2/3/8 UI palīdzfunkcija:
- * rāda "Darbības" pogas tikai admin un tikai pending rindām.
- */
 function canShowActions({ currentUserRole, requestStatus }) {
   return isAdminRole(currentUserRole) && norm(requestStatus) === "pending";
 }
@@ -188,3 +168,4 @@ module.exports = {
   rejectRequest,
   canShowActions,
 };
+

@@ -17,7 +17,6 @@
   function toIso(raw) {
     const s = String(raw ?? "").trim();
     if (!s) return "";
-    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s.slice(0, 10);
     let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
     if (m) return `${m[1]}-${m[2]}-${m[3]}`;
     m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
@@ -25,12 +24,6 @@
     m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s);
     if (m) return `${m[3]}-${m[2]}-${m[1]}`;
     return s;
-  }
-
-  function isUuidLike(v) {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      String(v ?? "").trim()
-    );
   }
 
   function detectCols(rows) {
@@ -80,11 +73,7 @@
     if (error) return { error };
     const rows = data ?? [];
     const cols = detectCols(rows);
-    const managerByStatus = rows.find((u) => mode(u?.[cols.status]) === "default") ?? null;
-    const managerByName = rows.find((u) => n(u?.[cols.name]) === n(managerName)) ?? null;
-    const managerByAdminName = rows.find((u) => n(u?.role) === "admin" && n(u?.[cols.name]).includes("katrina")) ?? null;
-    const managerByAnyAdmin = rows.find((u) => n(u?.role) === "admin") ?? null;
-    const manager = managerByStatus || managerByName || managerByAdminName || managerByAnyAdmin || null;
+    const manager = rows.find((u) => n(u?.[cols.name]) === n(managerName)) ?? null;
     const today = toIso(new Date().toISOString().slice(0, 10));
     const deputy =
       rows.find((u) => {
@@ -106,78 +95,33 @@
   }
 
   async function saveState(supabase, managerName, deputyUserId, fromStr, toStr) {
-    if (deputyUserId && !isUuidLike(deputyUserId)) {
-      return { error: { message: `Pagaidu apstiprinātāja id nav UUID: "${deputyUserId}"` } };
-    }
     const state = await loadState(supabase, managerName);
     if (state.error) return state;
     const { rows, cols, manager } = state;
+    if (!manager) return { error: { message: "Nav atrasts pamatvadītājs users tabulā." } };
 
-    async function updateOneUser(id, payload, requireWrite) {
-      const draft = { ...payload };
-      let lastError = null;
-      for (let i = 0; i < 6; i++) {
-        const { data, error } = await supabase
-          .from("users")
-          .update(draft)
-          .eq("id", id)
-          .select("id");
-        if (!error) {
-          const affected = Array.isArray(data) ? data.length : 0;
-          if (requireWrite && affected < 1) {
-            return {
-              error: {
-                message:
-                  "DB neatļāva saglabāt izvēlēto apstiprinātāju (RLS/politika neļauj update uz šo users rindu).",
-              },
-            };
-          }
-          return { ok: true, affected };
-        }
-        lastError = error;
-        const msg = String(error?.message || "");
-        const m = /Could not find the '([^']+)' column/i.exec(msg) || /column "([^"]+)" does not exist/i.exec(msg);
-        const missing = m?.[1];
-        if (missing && Object.prototype.hasOwnProperty.call(draft, missing)) {
-          delete draft[missing];
-          continue;
-        }
-        return { error };
-      }
-      return { error: lastError || { message: "Nezināma kļūda pie users update." } };
-    }
-
-    const clearIds = Array.from(
-      new Set(
-        rows
-          .filter((u) => mode(u?.[cols.status]) !== "none" || u?.[cols.from] || u?.[cols.to])
-          .map((u) => u.id)
-          .concat(manager?.id ? [manager.id] : [])
-          .concat(deputyUserId ? [deputyUserId] : [])
-      )
-    );
-
+    const clearIds = rows
+      .filter((u) => mode(u?.[cols.status]) !== "none" || u?.[cols.from] || u?.[cols.to])
+      .map((u) => u.id);
     for (const id of clearIds) {
-      const res = await updateOneUser(id, { [cols.status]: null, [cols.from]: null, [cols.to]: null }, false);
-      if (res.error) return res;
+      const { error } = await supabase
+        .from("users")
+        .update({ [cols.status]: null, [cols.from]: null, [cols.to]: null })
+        .eq("id", id);
+      if (error) return { error };
     }
-
-    // Ja manager rindu nevar atjaunot (RLS), neturam to kā fatālu kļūdu: galvenais ir saglabāt izvēlēto periodisko.
-    if (manager?.id) {
-      await updateOneUser(
-        manager.id,
-        { [cols.status]: "pec noklusējuma vienmēr", [cols.from]: null, [cols.to]: null },
-        false
-      );
-    }
+    const { error: managerErr } = await supabase
+      .from("users")
+      .update({ [cols.status]: "pec noklusējuma vienmēr", [cols.from]: null, [cols.to]: null })
+      .eq("id", manager.id);
+    if (managerErr) return { error: managerErr };
 
     if (deputyUserId) {
-      const deputyRes = await updateOneUser(
-        deputyUserId,
-        { [cols.status]: "uz noteikto periodu", [cols.from]: fromStr || null, [cols.to]: toStr || null },
-        true
-      );
-      if (deputyRes.error) return deputyRes;
+      const { error: deputyErr } = await supabase
+        .from("users")
+        .update({ [cols.status]: "uz noteikto periodu", [cols.from]: fromStr || null, [cols.to]: toStr || null })
+        .eq("id", deputyUserId);
+      if (deputyErr) return { error: deputyErr };
 
       // Verify write actually persisted (RLS can silently affect 0 rows in some setups)
       const { data: chk, error: chkErr } = await supabase
@@ -187,18 +131,13 @@
         .maybeSingle();
       if (chkErr) return { error: chkErr };
       const okMode = mode(getByNormKey(chk, cols.status)) === "period";
-      const gotFrom = toIso(getByNormKey(chk, cols.from));
-      const gotTo = toIso(getByNormKey(chk, cols.to));
-      const expFrom = toIso(fromStr);
-      const expTo = toIso(toStr);
-      const okFrom = !expFrom || gotFrom === expFrom;
-      const okTo = !expTo || gotTo === expTo;
+      const okFrom = toIso(getByNormKey(chk, cols.from)) === toIso(fromStr);
+      const okTo = toIso(getByNormKey(chk, cols.to)) === toIso(toStr);
       if (!okMode || !okFrom || !okTo) {
         return {
           error: {
-            message: `DB nesaglabāja pagaidu apstiprinātāju. status="${String(
-              getByNormKey(chk, cols.status) ?? ""
-            )}", no="${gotFrom}", līdz="${gotTo}"`,
+            message:
+              "DB nesaglabāja pagaidu apstiprinātāju (iespējams RLS/politiku ierobežojums users tabulai).",
           },
         };
       }

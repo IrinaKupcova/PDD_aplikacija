@@ -483,12 +483,6 @@
           .trim();
       }
 
-      function isUuidLike(v) {
-        return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-          String(v ?? "").trim()
-        );
-      }
-
       function detectUserApproverColumns(usersLike) {
         const rows = Array.isArray(usersLike) ? usersLike : [];
         const keys = new Set();
@@ -523,15 +517,7 @@
       }
 
       function userRoleValue(u) {
-        return normalizeUserRole(
-          u?.role ??
-            u?.Role ??
-            u?.ROLE ??
-            u?.[COL_USER_ROLE] ??
-            u?.Loma ??
-            u?.loma ??
-            u?.LOMA
-        );
+        return normalizeUserRole(u?.role ?? u?.Role ?? u?.ROLE);
       }
 
       function normalizeAbsenceRecord(r) {
@@ -647,6 +633,10 @@
         const msg = String(err?.message ?? "");
         const m = msg.match(/Could not find the '([^']+)' column/i);
         return m?.[1] ? String(m[1]) : null;
+      }
+
+      function isUuidLike(v) {
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(v ?? ""));
       }
 
       function looksLikeNameRefKey(k) {
@@ -965,14 +955,6 @@
           return localUser ? [localUser] : [];
         }
         if (!supabaseClient) return [];
-        // Vienots avots ar "Komanda" sadaļu: ja saraksts jau ielādēts tur, izmantojam to pašu.
-        const shared = window.KOMANDA?.loadTeamUsers?.() ?? [];
-        const sharedArr = Array.isArray(shared) ? shared : [];
-        if (sharedArr.length) {
-          return sharedArr
-            .map((u) => normalizeTeamUserRecord(u))
-            .sort((a, b) => String(userDisplayName(a)).localeCompare(String(userDisplayName(b))));
-        }
         const r = await supabaseClient
           .from("users")
           .select("*")
@@ -1057,19 +1039,13 @@
       async function fetchAuditLogs() {
         const local = getChangeLog().map(normalizeAuditLogRecord).filter(Boolean);
         if (isLocalMode() || !supabase) return local;
-        const tables = ["Auditacijas_vēsture", "Auditacijas_vesture"];
-        let rows = null;
-        let err = null;
-        for (const t of tables) {
-          const q1 = await supabase.from(t).select("*").order("ts", { ascending: false });
-          rows = q1.data;
-          err = q1.error;
-          if (err) {
-            const q2 = await supabase.from(t).select("*").order("created_at", { ascending: false });
-            rows = q2.data;
-            err = q2.error;
-          }
-          if (!err) break;
+        const q1 = await supabase.from("Auditacijas_vesture").select("*").order("ts", { ascending: false });
+        let rows = q1.data;
+        let err = q1.error;
+        if (err) {
+          const q2 = await supabase.from("Auditacijas_vesture").select("*").order("created_at", { ascending: false });
+          rows = q2.data;
+          err = q2.error;
         }
         if (err) {
           console.warn("[audit.fetch]", err);
@@ -1089,25 +1065,16 @@
           actor_email: row.actor_email || null,
           actor_id: row.actor_id || null,
         };
-        const tables = ["Auditacijas_vēsture", "Auditacijas_vesture"];
-        let error = null;
-        for (const t of tables) {
-          const r = await supabase.from(t).insert(payloadA);
-          error = r.error;
-          if (!error) return;
-        }
+        let { error } = await supabase.from("Auditacijas_vesture").insert(payloadA);
+        if (!error) return;
         const payloadB = {
           Laiks: row.ts,
           "Darbība": row.action,
           "Detaļas": row.details,
           "Lietotājs": row.actor_name,
         };
-        for (const t of tables) {
-          const retry = await supabase.from(t).insert(payloadB);
-          if (!retry.error) return;
-          error = retry.error;
-        }
-        if (error) console.warn("[audit.insert]", error);
+        const retry = await supabase.from("Auditacijas_vesture").insert(payloadB);
+        if (retry.error) console.warn("[audit.insert]", retry.error);
       }
 
       function pushChangeLog(action, details) {
@@ -1203,8 +1170,13 @@
 
       /** Cits saskaņošana: tikai noklusētais vadītājs vai aktīvais aizvietotājs. */
       function userCanApproveAbsences(profileRole, sessionUserId, deputyUserId) {
-        if (normalizeUserRole(profileRole) === "admin") return true;
         if (isDefaultManagerUser(sessionUserId)) return true;
+        if (
+          deputyUserId &&
+          sessionUserId &&
+          String(deputyUserId) === String(sessionUserId)
+        )
+          return true;
         return false;
       }
 
@@ -1652,6 +1624,17 @@
                           >
                             Prombūtnes vēsture
                           </button>
+                          ${showPromDeputyTab
+                            ? html`
+                                <button
+                                  type="button"
+                                  class=${`app-nav-sublink ${promSub === "deputy" ? "active" : ""}`}
+                                  onClick=${() => onPromSubChange("deputy")}
+                                >
+                                  Apstiprinātāja maiņa
+                                </button>
+                              `
+                            : null}
                           <button
                             type="button"
                             class=${`app-nav-sublink ${promSub === "changes" ? "active" : ""}`}
@@ -1839,7 +1822,7 @@
         const [selectedUserId, setSelectedUserId] = useState("");
         const [citsRows, setCitsRows] = useState([]);
         const [decisionReason, setDecisionReason] = useState({});
-        const isManager = normalizeUserRole(role) === "admin";
+        const isManager = role === "admin";
         useEffect(() => {
           if (isLocalMode()) {
             setTypes(getLocalTypes());
@@ -1871,10 +1854,9 @@
             if (cancelled) return;
             setUsers(list);
             const uid = String(userId);
-            const selfInList = list.find((u) => String(u.id) === uid)?.id ?? "";
-            const defaultId = selfInList || uid || list[0]?.id || "";
+            const defaultId =
+              list.find((u) => String(u.id) === uid)?.id ?? list[0]?.id ?? "";
             setSelectedUserId((prev) => {
-              if (!isManager) return defaultId;
               if (prev && list.some((u) => String(u.id) === String(prev))) return prev;
               return defaultId;
             });
@@ -1883,9 +1865,6 @@
             cancelled = true;
           };
         }, [userId, isManager]);
-        useEffect(() => {
-          if (!isManager) setSelectedUserId(String(userId || ""));
-        }, [isManager, userId]);
         useEffect(() => {
           if (!presetDate) return;
           setStartDate(presetDate);
@@ -2087,18 +2066,15 @@
                   required
                   value=${selectedUserId}
                   onChange=${(ev) => setSelectedUserId(ev.target.value)}
-                  disabled=${!isManager}
                 >
-                  ${(isManager ? users : users.filter((u) => String(u.id) === String(userId))).map(
+                  ${users.map(
                     (u) => html`
                       <option key=${u.id} value=${u.id}>${userDisplayName(u)}</option>
                     `
                   )}
                 </select>
                 <span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                  ${isManager
-                    ? "Pēc noklusējuma izvēlēts tavs vārds, admin var pārslēgt uz citu."
-                    : "Pēc noklusējuma izvēlēts tavs vārds."}
+                  Pēc noklusējuma izvēlēts tavs vārds, bet vari pārslēgt uz citu.
                 </span>
               </div>
               <div class="field">
@@ -2766,45 +2742,11 @@
         onDeputyChange,
         currentUserId,
       }) {
-        const [optionUsers, setOptionUsers] = useState(() => (Array.isArray(teamUsers) ? teamUsers : []));
         const [sel, setSel] = useState(() => (deputyUserId ? String(deputyUserId) : DEPUTY_OPT_MANAGER));
         const [periodFrom, setPeriodFrom] = useState(deputyValidFrom ?? "");
         const [periodTo, setPeriodTo] = useState(deputyValidTo ?? "");
         const [busy, setBusy] = useState(false);
         const [msg, setMsg] = useState(null);
-        function deputyOptionValue(u) {
-          const id = String(u?.id ?? "").trim();
-          if (isUuidLike(id)) return id;
-          const nm = String(u?.[COL_USER_NAME] ?? u?.full_name ?? userDisplayName(u) ?? "").trim();
-          return nm ? `name:${nm}` : id;
-        }
-        useEffect(() => {
-          const fromProp = Array.isArray(teamUsers) ? teamUsers : [];
-          if (fromProp.length) {
-            setOptionUsers(fromProp);
-            return;
-          }
-          const fromKomanda = window.KOMANDA?.loadTeamUsers?.() ?? [];
-          const arr = Array.isArray(fromKomanda) ? fromKomanda : [];
-          setOptionUsers(arr.map(normalizeTeamUserRecord));
-        }, [teamUsers]);
-        useEffect(() => {
-          if (isLocalMode() || !supabase) return;
-          if ((optionUsers ?? []).length > 0) return;
-          let cancelled = false;
-          (async () => {
-            const q = await supabase.from("users").select("*");
-            if (cancelled) return;
-            if (q.error) {
-              setMsg(q.error.message);
-              return;
-            }
-            setOptionUsers((q.data ?? []).map(normalizeTeamUserRecord));
-          })();
-          return () => {
-            cancelled = true;
-          };
-        }, [optionUsers]);
         useEffect(() => {
           setSel(deputyUserId ? String(deputyUserId) : DEPUTY_OPT_MANAGER);
           setPeriodFrom(deputyValidFrom ?? "");
@@ -2829,6 +2771,11 @@
               );
               return;
             }
+            const managerUser = resolveManagerUser(teamUsers ?? []);
+            if (!managerUser) {
+              setMsg("Neizdevās atrast pamatvadītāju users tabulā.");
+              return;
+            }
             if (window.SASKANOSANA?.saveState) {
               const res = await window.SASKANOSANA.saveState(
                 supabase,
@@ -2843,11 +2790,6 @@
               }
               await onDeputyChange();
               setMsg(nextId ? "Apstiprinātājs saglabāts norādītajam periodam." : "Atiestatīts uz pamatvadītāju.");
-              return;
-            }
-            const managerUser = resolveManagerUser(teamUsers ?? []);
-            if (!managerUser) {
-              setMsg("Neizdevās atrast pamatvadītāju users tabulā.");
               return;
             }
             const colsDefault = approverCols ?? {
@@ -2943,37 +2885,7 @@
         async function saveForm(e) {
           e.preventDefault();
           const isMgrOpt = sel === DEPUTY_OPT_MANAGER;
-          let nextId = isMgrOpt ? null : sel;
-          if (!isLocalMode() && nextId && !isUuidLike(nextId)) {
-            const pickedNameFromValue = String(nextId).startsWith("name:")
-              ? String(nextId).slice(5).trim()
-              : "";
-            const picked =
-              (optionUsers ?? []).find((u) => deputyOptionValue(u) === String(nextId)) ?? null;
-            const pickedName = String(
-              pickedNameFromValue ||
-                picked?.[COL_USER_NAME] ||
-                picked?.full_name ||
-                userDisplayName(picked) ||
-                ""
-            ).trim();
-            if (pickedName) {
-              const q = await supabase.from("users").select("*");
-              if (!q.error) {
-                const rows = (q.data ?? []).map(normalizeTeamUserRecord);
-                const hit = rows.find(
-                  (u) =>
-                    normalizeAliasKey(u?.[COL_USER_NAME]) === normalizeAliasKey(pickedName) &&
-                    isUuidLike(u?.id)
-                );
-                if (hit?.id) nextId = String(hit.id);
-              }
-            }
-            if (nextId && !isUuidLike(nextId)) {
-              setMsg("Izvēlētajam pagaidu apstiprinātājam nav derīgs UUID users.id laukā.");
-              return;
-            }
-          }
+          const nextId = isMgrOpt ? null : sel;
           const fromStr = isMgrOpt ? "" : periodFrom.trim();
           const toStr = isMgrOpt ? "" : periodTo.trim();
           if (!isMgrOpt) {
@@ -3014,25 +2926,19 @@
             </p>
             <form class="stack" onSubmit=${saveForm}>
               <div class="field">
-                <label>Noklusējuma apstiprinātājs</label>
-                <input class="input" value=${DEFAULT_MANAGER_NAME} disabled />
-              </div>
-              <div class="field">
-                <label for="deputy-sel">Pagaidu apstiprinātājs</label>
+                <label for="deputy-sel">Persona</label>
                 <select
                   id="deputy-sel"
                   class="select"
                   value=${sel}
                   onChange=${(ev) => setSel(ev.target.value)}
                 >
-                  <option value=${DEPUTY_OPT_MANAGER}>Nav pagaidu apstiprinātāja (paliek vadītājs)</option>
-                  ${optionUsers
-                    .filter((u) => String(userDisplayName(u) || "").trim() !== "")
+                  <option value=${DEPUTY_OPT_MANAGER}>Vadītājs — ${DEFAULT_MANAGER_NAME}</option>
+                  ${teamUsers
+                    .filter((u) => userDisplayName(u).toLowerCase().trim() !== DEFAULT_MANAGER_NAME.toLowerCase().trim())
                     .map(
                       (u) => html`
-                        <option key=${u.id || userDisplayName(u)} value=${deputyOptionValue(u)}>
-                          ${formatUserSelectLabel(u)}
-                        </option>
+                        <option key=${u.id} value=${u.id}>${formatUserSelectLabel(u)}</option>
                       `
                     )}
                 </select>
@@ -4381,10 +4287,11 @@
             void supabase.removeChannel(ch);
           };
         }, [loadTeamAndDeputy, refresh]);
+        const isManager = role === "admin";
         const canApprove = userCanApproveAbsences(role, userId, deputyEffectiveId);
         useEffect(() => {
-          if (promSub === "deputy") setPromSub("calendar");
-        }, [promSub, setPromSub]);
+          if (promSub === "deputy" && !isManager) setPromSub("calendar");
+        }, [promSub, isManager, setPromSub]);
         const promSubLabel =
           promSub === "calendar"
             ? "Kalendārs"
@@ -4396,7 +4303,9 @@
                   ? "Auditācijas vēsture"
               : promSub === "teamUsers"
                 ? "Komanda"
-                : "";
+                : promSub === "deputy"
+                  ? "Apstiprinātāja maiņa"
+                  : "";
         return html`
           <section class="stack" style=${{ gap: "1.25rem" }}>
             <div>
@@ -4476,6 +4385,19 @@
                   />
                 `
               : null}
+            ${promSub === "deputy" && isManager
+              ? html`
+                  <${DeputyDelegePanel}
+                    teamUsers=${teamUsers}
+                    approverCols=${approverCols}
+                    deputyUserId=${deputyUserId}
+                    deputyValidFrom=${deputyValidFrom}
+                    deputyValidTo=${deputyValidTo}
+                    onDeputyChange=${reloadUsersAndViews}
+                    currentUserId=${userId}
+                  />
+                `
+              : null}
             ${promSub === "teamUsers"
               ? html`
                   <${TeamUsersDirectory}
@@ -4487,7 +4409,7 @@
                 `
               : null}
             ${promSub === "changes"
-              ? html`<${ChangeHistoryPanel} isAdmin=${normalizeUserRole(role) === "admin"} />`
+              ? html`<${ChangeHistoryPanel} isAdmin=${String(role || "").toLowerCase() === "admin"} />`
               : null}
           </section>
         `;
@@ -4581,7 +4503,7 @@
         const { profile, loading: profileLoading } = useProfile(session?.user?.id);
         const [view, setView] = useState("home");
         const [promSub, setPromSub] = useState("calendar");
-        const showPromDeputyTab = profileLoading || !profile || normalizeUserRole(profile?.role) === "admin";
+        const showPromDeputyTab = profile?.role === "admin";
         const [citsToken, setCitsToken] = useState(() => readCitsTokenFromUrl());
         const title = useMemo(
           () => html`
@@ -4757,13 +4679,13 @@
               : view === "team"
                 ? html`<${PrombutnesSection}
                     userId=${session.user.id}
-                    role=${profile?.role ?? null}
+                    role=${profile?.role ?? "user"}
                     promSub=${"teamUsers"}
                     setPromSub=${() => {}}
                   />`
               : html`<${PrombutnesSection}
                     userId=${session.user.id}
-                    role=${profile?.role ?? null}
+                    role=${profile?.role ?? "user"}
                     promSub=${promSub}
                     setPromSub=${setPromSub}
                   />`}
