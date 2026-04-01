@@ -60,6 +60,14 @@
     return "none";
   }
 
+  function getByNormKey(obj, keyName) {
+    if (!obj || !keyName) return null;
+    if (Object.prototype.hasOwnProperty.call(obj, keyName)) return obj[keyName];
+    const wanted = n(keyName);
+    const hit = Object.keys(obj).find((k) => n(k) === wanted);
+    return hit ? obj[hit] : null;
+  }
+
   async function loadState(supabase, managerName) {
     const { data, error } = await supabase.from("users").select("*");
     if (error) return { error };
@@ -96,21 +104,43 @@
       .filter((u) => mode(u?.[cols.status]) !== "none" || u?.[cols.from] || u?.[cols.to])
       .map((u) => u.id);
     for (const id of clearIds) {
-      await supabase
+      const { error } = await supabase
         .from("users")
         .update({ [cols.status]: null, [cols.from]: null, [cols.to]: null })
         .eq("id", id);
+      if (error) return { error };
     }
-    await supabase
+    const { error: managerErr } = await supabase
       .from("users")
       .update({ [cols.status]: "pec noklusējuma vienmēr", [cols.from]: null, [cols.to]: null })
       .eq("id", manager.id);
+    if (managerErr) return { error: managerErr };
 
     if (deputyUserId) {
-      await supabase
+      const { error: deputyErr } = await supabase
         .from("users")
         .update({ [cols.status]: "uz noteikto periodu", [cols.from]: fromStr || null, [cols.to]: toStr || null })
         .eq("id", deputyUserId);
+      if (deputyErr) return { error: deputyErr };
+
+      // Verify write actually persisted (RLS can silently affect 0 rows in some setups)
+      const { data: chk, error: chkErr } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", deputyUserId)
+        .maybeSingle();
+      if (chkErr) return { error: chkErr };
+      const okMode = mode(getByNormKey(chk, cols.status)) === "period";
+      const okFrom = toIso(getByNormKey(chk, cols.from)) === toIso(fromStr);
+      const okTo = toIso(getByNormKey(chk, cols.to)) === toIso(toStr);
+      if (!okMode || !okFrom || !okTo) {
+        return {
+          error: {
+            message:
+              "DB nesaglabāja pagaidu apstiprinātāju (iespējams RLS/politiku ierobežojums users tabulai).",
+          },
+        };
+      }
     }
     return { ok: true };
   }
