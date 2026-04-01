@@ -1039,13 +1039,19 @@
       async function fetchAuditLogs() {
         const local = getChangeLog().map(normalizeAuditLogRecord).filter(Boolean);
         if (isLocalMode() || !supabase) return local;
-        const q1 = await supabase.from("Auditacijas_vesture").select("*").order("ts", { ascending: false });
-        let rows = q1.data;
-        let err = q1.error;
-        if (err) {
-          const q2 = await supabase.from("Auditacijas_vesture").select("*").order("created_at", { ascending: false });
-          rows = q2.data;
-          err = q2.error;
+        const tables = ["Auditacijas_vēsture", "Auditacijas_vesture"];
+        let rows = null;
+        let err = null;
+        for (const t of tables) {
+          const q1 = await supabase.from(t).select("*").order("ts", { ascending: false });
+          rows = q1.data;
+          err = q1.error;
+          if (err) {
+            const q2 = await supabase.from(t).select("*").order("created_at", { ascending: false });
+            rows = q2.data;
+            err = q2.error;
+          }
+          if (!err) break;
         }
         if (err) {
           console.warn("[audit.fetch]", err);
@@ -1065,16 +1071,25 @@
           actor_email: row.actor_email || null,
           actor_id: row.actor_id || null,
         };
-        let { error } = await supabase.from("Auditacijas_vesture").insert(payloadA);
-        if (!error) return;
+        const tables = ["Auditacijas_vēsture", "Auditacijas_vesture"];
+        let error = null;
+        for (const t of tables) {
+          const r = await supabase.from(t).insert(payloadA);
+          error = r.error;
+          if (!error) return;
+        }
         const payloadB = {
           Laiks: row.ts,
           "Darbība": row.action,
           "Detaļas": row.details,
           "Lietotājs": row.actor_name,
         };
-        const retry = await supabase.from("Auditacijas_vesture").insert(payloadB);
-        if (retry.error) console.warn("[audit.insert]", retry.error);
+        for (const t of tables) {
+          const retry = await supabase.from(t).insert(payloadB);
+          if (!retry.error) return;
+          error = retry.error;
+        }
+        if (error) console.warn("[audit.insert]", error);
       }
 
       function pushChangeLog(action, details) {
@@ -1170,6 +1185,7 @@
 
       /** Cits saskaņošana: tikai noklusētais vadītājs vai aktīvais aizvietotājs. */
       function userCanApproveAbsences(profileRole, sessionUserId, deputyUserId) {
+        if (normalizeUserRole(profileRole) === "admin") return true;
         if (isDefaultManagerUser(sessionUserId)) return true;
         if (
           deputyUserId &&
@@ -1822,7 +1838,7 @@
         const [selectedUserId, setSelectedUserId] = useState("");
         const [citsRows, setCitsRows] = useState([]);
         const [decisionReason, setDecisionReason] = useState({});
-        const isManager = role === "admin";
+        const isManager = normalizeUserRole(role) === "admin";
         useEffect(() => {
           if (isLocalMode()) {
             setTypes(getLocalTypes());
@@ -1854,9 +1870,10 @@
             if (cancelled) return;
             setUsers(list);
             const uid = String(userId);
-            const defaultId =
-              list.find((u) => String(u.id) === uid)?.id ?? list[0]?.id ?? "";
+            const selfId = list.find((u) => String(u.id) === uid)?.id ?? uid;
+            const defaultId = selfId || (list[0]?.id ?? "");
             setSelectedUserId((prev) => {
+              if (!isManager) return defaultId;
               if (prev && list.some((u) => String(u.id) === String(prev))) return prev;
               return defaultId;
             });
@@ -1865,6 +1882,9 @@
             cancelled = true;
           };
         }, [userId, isManager]);
+        useEffect(() => {
+          if (!isManager) setSelectedUserId(String(userId || ""));
+        }, [isManager, userId]);
         useEffect(() => {
           if (!presetDate) return;
           setStartDate(presetDate);
@@ -2066,15 +2086,18 @@
                   required
                   value=${selectedUserId}
                   onChange=${(ev) => setSelectedUserId(ev.target.value)}
+                  disabled=${!isManager}
                 >
-                  ${users.map(
+                  ${(isManager ? users : users.filter((u) => String(u.id) === String(userId))).map(
                     (u) => html`
                       <option key=${u.id} value=${u.id}>${userDisplayName(u)}</option>
                     `
                   )}
                 </select>
                 <span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                  Pēc noklusējuma izvēlēts tavs vārds, bet vari pārslēgt uz citu.
+                  ${isManager
+                    ? "Pēc noklusējuma izvēlēts tavs vārds; admin var izvēlēties citu."
+                    : "Pēc noklusējuma izvēlēts tavs vārds."}
                 </span>
               </div>
               <div class="field">
@@ -4409,7 +4432,7 @@
                 `
               : null}
             ${promSub === "changes"
-              ? html`<${ChangeHistoryPanel} isAdmin=${String(role || "").toLowerCase() === "admin"} />`
+              ? html`<${ChangeHistoryPanel} isAdmin=${normalizeUserRole(role) === "admin"} />`
               : null}
           </section>
         `;
