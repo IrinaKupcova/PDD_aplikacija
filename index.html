@@ -1004,7 +1004,7 @@
           } catch {
             body = null;
           }
-          if ((method === "PATCH" || method === "DELETE") && (!Array.isArray(body) || body.length === 0)) {
+          if (method === "PATCH" && (!Array.isArray(body) || body.length === 0)) {
             return { error: new Error("Rinda netika izmainīta (RLS vai neatbilstošas kolonnas).") };
           }
           return { error: null };
@@ -3718,15 +3718,12 @@
             const r = await supabase
               .from("prombutnes_dati")
               .update(p)
-              .eq("id", editing)
-              .select("id")
-              .maybeSingle();
+              .eq("id", editing);
             error = r.error;
-            if (!error && r.data) {
+            if (!error) {
               error = null;
               break;
             }
-            if (!error && !r.data) error = { message: "Ieraksts netika atjaunināts." };
           }
           if (error) {
             for (const p of payloadVariants) {
@@ -3754,15 +3751,10 @@
             onRefresh();
             return;
           }
-          let { data: delRow, error } = await supabase
+          let { error } = await supabase
             .from("prombutnes_dati")
             .delete()
-            .eq("id", delId)
-            .select("id")
-            .maybeSingle();
-          if (!error && !delRow) {
-            error = { message: "Ieraksts netika dzēsts." };
-          }
+            .eq("id", delId);
           if (error) {
             const restRetry = await mutatePrombutnesDatiViaRest({ id: delId, method: "DELETE" });
             error = restRetry.error;
