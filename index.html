@@ -938,6 +938,35 @@
         }
       }
 
+      async function fetchTableDirectFromRest(tableName, { orderBy, ascending = true } = {}) {
+        const cfg = loadConfig();
+        const baseUrl = normalizeProjectUrl(cfg.url);
+        const apiKey = String(cfg.key || "").trim();
+        if (!baseUrl || !apiKey) return { data: null, error: new Error("Missing Supabase config") };
+        const params = new URLSearchParams();
+        params.set("select", "*");
+        if (orderBy) {
+          params.set("order", `${orderBy}.${ascending ? "asc" : "desc"}`);
+        }
+        try {
+          const resp = await fetch(`${baseUrl}/rest/v1/${encodeURIComponent(tableName)}?${params.toString()}`, {
+            method: "GET",
+            headers: {
+              apikey: apiKey,
+              Authorization: `Bearer ${apiKey}`,
+            },
+          });
+          if (!resp.ok) {
+            const txt = await resp.text();
+            return { data: null, error: new Error(txt || `HTTP ${resp.status}`) };
+          }
+          const rows = await resp.json();
+          return { data: Array.isArray(rows) ? rows : [], error: null };
+        } catch (e) {
+          return { data: null, error: e };
+        }
+      }
+
       function readCitsTokenFromUrl() {
         try {
           return new URL(window.location.href).searchParams.get("cits") || "";
@@ -1125,6 +1154,16 @@
             const q2 = await supabase.from(t).select("*").order("created_at", { ascending: false });
             rows = q2.data;
             err = q2.error;
+          }
+          if (err) {
+            const r1 = await fetchTableDirectFromRest(t, { orderBy: "ts", ascending: false });
+            rows = r1.data;
+            err = r1.error;
+          }
+          if (err) {
+            const r2 = await fetchTableDirectFromRest(t, { orderBy: "created_at", ascending: false });
+            rows = r2.data;
+            err = r2.error;
           }
           if (!err) break;
         }
@@ -4331,8 +4370,18 @@
             .from("prombutnes_dati")
             .select("*")
             .order(ABSENCE_COLS_RUNTIME.start_date, { ascending: true });
-          if (qErr) {
-            setError(qErr.message);
+          let absRows = rows;
+          let absErr = qErr;
+          if (absErr) {
+            const rr = await fetchTableDirectFromRest("prombutnes_dati", {
+              orderBy: ABSENCE_COLS_RUNTIME.start_date,
+              ascending: true,
+            });
+            absRows = rr.data;
+            absErr = rr.error;
+          }
+          if (absErr) {
+            setError(absErr.message);
             return;
           }
           // 2) Lietotāju profili
@@ -4349,7 +4398,16 @@
           if (pErr) setError(pErr.message);
           const pmap = new Map((profs ?? []).map((p) => [String(p.id), normalizeTeamUserRecord(p)]));
           // 3) Prombūtnes veidu saraksts (kārtošanai/labeliem)
-          const { data: typesRows, error: tErr } = await supabase.from("prombutnes_veidi").select("*");
+          let typesRows = null;
+          let tErr = null;
+          const tQ = await supabase.from("prombutnes_veidi").select("*");
+          typesRows = tQ.data;
+          tErr = tQ.error;
+          if (tErr) {
+            const tr = await fetchTableDirectFromRest("prombutnes_veidi");
+            typesRows = tr.data;
+            tErr = tr.error;
+          }
           if (tErr) console.error(tErr);
           const tmap = new Map(
             (typesRows ?? []).map((t) => {
@@ -4358,7 +4416,7 @@
             })
           );
           // 4) Normalizējam prombūtnes datus
-          const list = (rows ?? [])
+          const list = (absRows ?? [])
             .map((r) => {
               detectAbsenceColumnsFromRow(r);
               return normalizeAbsenceRecord(r);
