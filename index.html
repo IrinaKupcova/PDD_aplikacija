@@ -517,7 +517,15 @@
       }
 
       function userRoleValue(u) {
-        return normalizeUserRole(u?.role ?? u?.Role ?? u?.ROLE);
+        return normalizeUserRole(
+          u?.role ??
+            u?.Role ??
+            u?.ROLE ??
+            u?.[COL_USER_ROLE] ??
+            u?.loma ??
+            u?.Loma ??
+            u?.LOMA
+        );
       }
 
       function normalizeAbsenceRecord(r) {
@@ -740,7 +748,13 @@
 
       function userDisplayName(u) {
         if (!u) return "—";
-        const n = u[COL_USER_NAME] ?? u.full_name;
+        const n =
+          u[COL_USER_NAME] ??
+          u.full_name ??
+          u?.name ??
+          u?.["Vārds un uzvārds"] ??
+          u?.["Vārds, uzvārds"] ??
+          u?.["vards uzvards"];
         return (n && String(n).trim()) || "—";
       }
 
@@ -955,15 +969,26 @@
           return localUser ? [localUser] : [];
         }
         if (!supabaseClient) return [];
-        const r = await supabaseClient
-          .from("users")
-          .select("*")
-          .order(COL_USER_NAME, { ascending: true });
-        if (r.error) {
-          console.error(r.error);
+        let rows = null;
+        let err = null;
+        const r1 = await supabaseClient.from("users").select("*").order(COL_USER_NAME, { ascending: true });
+        rows = r1.data;
+        err = r1.error;
+        if (err) {
+          const r2 = await supabaseClient.from("users").select("*");
+          rows = r2.data;
+          err = r2.error;
+        }
+        if (err) {
+          const p1 = await supabaseClient.from("profiles").select("*");
+          rows = p1.data;
+          err = p1.error;
+        }
+        if (err) {
+          console.error(err);
           return [];
         }
-          return (r.data ?? []).map(normalizeTeamUserRecord);
+        return (rows ?? []).map(normalizeTeamUserRecord);
       }
 
       function getLocalCitsRequests() {
@@ -1870,7 +1895,8 @@
             if (cancelled) return;
             setUsers(list);
             const uid = String(userId);
-            const selfId = list.find((u) => String(u.id) === uid)?.id ?? uid;
+            const selfUser = list.find((u) => String(u.id) === uid) ?? null;
+            const selfId = selfUser?.id ?? uid;
             const defaultId = selfId || (list[0]?.id ?? "");
             setSelectedUserId((prev) => {
               if (!isManager) return defaultId;
@@ -2088,7 +2114,12 @@
                   onChange=${(ev) => setSelectedUserId(ev.target.value)}
                   disabled=${!isManager}
                 >
-                  ${(isManager ? users : users.filter((u) => String(u.id) === String(userId))).map(
+                  ${(isManager
+                    ? users
+                    : (() => {
+                        const selfOnly = users.filter((u) => String(u.id) === String(userId));
+                        return selfOnly.length ? selfOnly : users;
+                      })()).map(
                     (u) => html`
                       <option key=${u.id} value=${u.id}>${userDisplayName(u)}</option>
                     `
@@ -4168,6 +4199,11 @@
             urows = uq2.data;
             uErr = uq2.error;
           }
+          if (uErr) {
+            const pq = await supabase.from("profiles").select("*");
+            urows = pq.data;
+            uErr = pq.error;
+          }
           if (uErr) console.error(uErr);
           const rawUsers = urows ?? [];
           const normalizedUsers = rawUsers.map(normalizeTeamUserRecord);
@@ -4238,9 +4274,18 @@
             return;
           }
           // 2) Lietotāju profili
-          const { data: profs, error: pErr } = await supabase.from("users").select("*");
+          let profs = null;
+          let pErr = null;
+          const pu1 = await supabase.from("users").select("*");
+          profs = pu1.data;
+          pErr = pu1.error;
+          if (pErr) {
+            const pu2 = await supabase.from("profiles").select("*");
+            profs = pu2.data;
+            pErr = pu2.error;
+          }
           if (pErr) setError(pErr.message);
-          const pmap = new Map((profs ?? []).map((p) => [p.id, p]));
+          const pmap = new Map((profs ?? []).map((p) => [String(p.id), normalizeTeamUserRecord(p)]));
           // 3) Prombūtnes veidu saraksts (kārtošanai/labeliem)
           const { data: typesRows, error: tErr } = await supabase.from("prombutnes_veidi").select("*");
           if (tErr) console.error(tErr);
@@ -4257,7 +4302,7 @@
               return normalizeAbsenceRecord(r);
             })
             .map((r) => {
-              const employee = pmap.get(r.user_id) ?? null;
+              const employee = pmap.get(String(r.user_id)) ?? null;
               const employeeName =
                 userDisplayName(employee) !== "—"
                   ? userDisplayName(employee)
@@ -4268,7 +4313,7 @@
                   ? { ...employee, [COL_USER_NAME]: employeeName }
                   : { id: r.user_id, [COL_USER_NAME]: employeeName },
                 type: tmap.get(r.type_id) ?? null,
-                approver_user: r.approved_by ? pmap.get(r.approved_by) ?? null : null,
+                approver_user: r.approved_by ? pmap.get(String(r.approved_by)) ?? null : null,
               };
             });
           setAbsences(list);
@@ -4310,7 +4355,7 @@
             void supabase.removeChannel(ch);
           };
         }, [loadTeamAndDeputy, refresh]);
-        const isManager = role === "admin";
+        const isManager = normalizeUserRole(role) === "admin";
         const canApprove = userCanApproveAbsences(role, userId, deputyEffectiveId);
         useEffect(() => {
           if (promSub === "deputy" && !isManager) setPromSub("calendar");
