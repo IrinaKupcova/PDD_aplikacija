@@ -984,6 +984,9 @@
         if (payload && (method === "PATCH" || method === "POST")) {
           headers["Content-Type"] = "application/json";
         }
+        if (method === "PATCH" || method === "DELETE") {
+          headers["Prefer"] = "return=representation";
+        }
         try {
           const resp = await fetch(url, {
             method,
@@ -993,6 +996,16 @@
           if (!resp.ok) {
             const txt = await resp.text();
             return { error: new Error(txt || `HTTP ${resp.status}`) };
+          }
+          const bodyText = await resp.text();
+          let body = null;
+          try {
+            body = bodyText ? JSON.parse(bodyText) : null;
+          } catch {
+            body = null;
+          }
+          if ((method === "PATCH" || method === "DELETE") && (!Array.isArray(body) || body.length === 0)) {
+            return { error: new Error("Rinda netika izmainīta (RLS vai neatbilstošas kolonnas).") };
           }
           return { error: null };
         } catch (e) {
@@ -3674,51 +3687,56 @@
             onRefresh();
             return;
           }
-          const restPayload = {
-            [ABSENCE_COLS_RUNTIME.type_id]: Number(form.type_id),
-            [ABSENCE_COLS_RUNTIME.start_date]: form.start_date,
-            [ABSENCE_COLS_RUNTIME.end_date]: form.end_date,
-            [ABSENCE_COLS_RUNTIME.comment]: form.comment.trim() || null,
-          };
-          let { data: updRow, error } = await supabase
-            .from("prombutnes_dati")
-            .update(restPayload)
-            .eq("id", editing)
-            .select("id")
-            .maybeSingle();
-          if (!error && !updRow) {
-            error = { message: "Ieraksts netika atjaunināts." };
+          const payloadVariants = [
+            {
+              [ABSENCE_COLS_RUNTIME.type_id]: Number(form.type_id),
+              [ABSENCE_COLS_RUNTIME.start_date]: form.start_date,
+              [ABSENCE_COLS_RUNTIME.end_date]: form.end_date,
+              [ABSENCE_COLS_RUNTIME.comment]: form.comment.trim() || null,
+            },
+            {
+              type: Number(form.type_id),
+              Sakuma_datums: form.start_date,
+              Beigu_datums: form.end_date,
+              Komentārs: form.comment.trim() || null,
+            },
+            {
+              type: Number(form.type_id),
+              "Sākuma_datums": form.start_date,
+              "Beigu_datums": form.end_date,
+              Komentārs: form.comment.trim() || null,
+            },
+            {
+              "Prombūtnes veids": Number(form.type_id),
+              "Sākuma datums": form.start_date,
+              "Beigu datums": form.end_date,
+              "Komentāri": form.comment.trim() || null,
+            },
+          ];
+          let error = null;
+          for (const p of payloadVariants) {
+            const r = await supabase
+              .from("prombutnes_dati")
+              .update(p)
+              .eq("id", editing)
+              .select("id")
+              .maybeSingle();
+            error = r.error;
+            if (!error && r.data) {
+              error = null;
+              break;
+            }
+            if (!error && !r.data) error = { message: "Ieraksts netika atjaunināts." };
           }
           if (error) {
-            const retry = await supabase
-              .from("prombutnes_dati")
-              .update({
-                "Prombūtnes veids": Number(form.type_id),
-                "Sākuma datums": form.start_date,
-                "Beigu datums": form.end_date,
-                "Komentāri": form.comment.trim() || null,
-              })
-              .eq("id", editing);
-            error = retry.error;
-            if (error) {
-              const retry2 = await supabase
-                .from("prombutnes_dati")
-                .update({
-                  type: Number(form.type_id),
-                  Sākuma_datums: form.start_date,
-                  beigu_datums: form.end_date,
-                  Komentārs: form.comment.trim() || null,
-                })
-                .eq("id", editing);
-              error = retry2.error;
-            }
-            if (error) {
+            for (const p of payloadVariants) {
               const restRetry = await mutatePrombutnesDatiViaRest({
                 id: editing,
                 method: "PATCH",
-                payload: restPayload,
+                payload: p,
               });
               error = restRetry.error;
+              if (!error) break;
             }
           }
           if (error) alert(error.message);
