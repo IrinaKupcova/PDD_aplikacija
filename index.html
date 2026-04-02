@@ -1673,7 +1673,7 @@
           return { session, loading };
         }
 
-        function useProfile(userId) {
+        function useProfile(userId, sessionEmail) {
           const [profile, setProfile] = useState(null);
           const [loading, setLoading] = useState(Boolean(userId));
           useEffect(() => {
@@ -1719,6 +1719,22 @@
                 data = q2.data;
                 error = q2.error;
               }
+              // Ja auth uid nav tas pats, kas users.id (piem., anon sesija), mēģinām atrast profilu pēc e-pasta.
+              if (!data && sessionEmail) {
+                const em = String(sessionEmail || "").trim().toLowerCase();
+                if (em) {
+                  const byEmail = await supabase
+                    .from("users")
+                    .select("*")
+                    .ilike("email", em)
+                    .limit(1)
+                    .maybeSingle();
+                  if (!byEmail.error && byEmail.data) {
+                    data = byEmail.data;
+                    error = null;
+                  }
+                }
+              }
               if (!cancelled) {
                 if (error) console.error(error);
                 setProfile(data ? normalizeTeamUserRecord(data) : null);
@@ -1728,7 +1744,7 @@
             return () => {
               cancelled = true;
             };
-          }, [userId]);
+          }, [userId, sessionEmail]);
           return { profile, loading };
         }
 
@@ -2515,8 +2531,8 @@
               <h2>Prombūtnes pieteikums</h2>
               <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
                 <strong>Cits (ar vadītāja saskaņojumu)</strong> — obligāta e-pasta saskaņošana: pieprasījums un saite uz
-                <strong>${notifyEmail}</strong>. Pārējie veidi tiek ierakstīti kā apstiprināti un uzreiz redzami
-                kalendārā (bez atsevišķa akcepta soļa šeit).
+                {" "}<strong>katrina.jirgensone@vid.gov.lv</strong>. Pārējie veidi tiek ierakstīti kā apstiprināti un
+                uzreiz redzami kalendārā (bez atsevišķa akcepta soļa šeit).
               </p>
               <form class="stack" onSubmit=${handleSubmit}>
                 <div class="field">
@@ -2784,23 +2800,8 @@
 
         function TeamUsersDirectory({ users, canAdmin, currentUserId, onReload }) {
           const { cols, labels } = teamUsersTableColumns(users);
-          const colCount = Math.max(cols.length, 1) + (canAdmin ? 1 : 0);
+          const colCount = Math.max(cols.length, 1);
           const [page, setPage] = useState(0);
-          const [editing, setEditing] = useState(null);
-          const [form, setForm] = useState({
-            vardUzv: "",
-            imail: "",
-            amats: "",
-            role: "user",
-          });
-          const [addOpen, setAddOpen] = useState(false);
-          const [addForm, setAddForm] = useState({
-            id: "",
-            vardUzv: "",
-            imail: "",
-            amats: "",
-            role: "user",
-          });
           const [busy, setBusy] = useState(false);
           const [authHint, setAuthHint] = useState("");
           const isLocalTeams = false;
@@ -2818,130 +2819,6 @@
             setPage((p) => Math.min(p, tp - 1));
           }, [users?.length]);
 
-          function openEdit(u) {
-            setEditing(u.id);
-            setForm({
-              vardUzv: u[COL_USER_NAME] ?? u.full_name ?? "",
-              imail: userImail(u),
-              amats: u[COL_USER_AMATS] ?? "",
-              role: userRoleValue(u),
-            });
-          }
-          async function saveEdit(e) {
-            e.preventDefault();
-            if (!editing) return;
-            if (!canAdmin) {
-              alert("Labot drīkst tikai Admin.");
-              return;
-            }
-            setBusy(true);
-            try {
-              const payload = buildUserRowPayload(form.vardUzv, form.imail, form.amats, form.role);
-              if (TIKAI_VIENKARSI_SKATS || !supabase) {
-                window.KOMANDA?.upsertTeamUser?.({ id: editing, ...payload });
-                pushChangeLog("komanda.labot", `Lietotājs ${editing} atjaunināts`);
-                setEditing(null);
-                await onReload();
-                return;
-              }
-              // Nodrošina, ka ir Supabase sesija (JWT), citādi RLS redz auth.uid() = null.
-              const okSess = await ensureDbReadableSession();
-              if (!okSess) {
-                alert(
-                  "Nevar izveidot Supabase sesiju (anon sign-in). Supabase projektā ieslēdz: Authentication → Providers → Anonymous sign-ins."
-                );
-                return;
-              }
-              const { data, error } = await supabase.from("users").update(payload).eq("id", editing).select("id");
-              if (error) {
-                alert(error.message);
-                return;
-              }
-              if (!data || data.length === 0) {
-                alert("Netika atjaunināts (RLS vai 0 rindas).");
-                return;
-              }
-              setEditing(null);
-              await onReload();
-            } finally {
-              setBusy(false);
-            }
-          }
-          async function saveAdd(e) {
-            e.preventDefault();
-            if (!canAdmin) {
-              alert("Pievienot drīkst tikai Admin.");
-              return;
-            }
-            const isLocal = TIKAI_VIENKARSI_SKATS || !supabase;
-            let id = isLocal ? (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now())) : "";
-            if (!isLocal) {
-              const okSess = await ensureDbReadableSession();
-              if (!okSess) {
-                setAuthHint("Nav Supabase sesijas (Anon). Ieslēdz Anonymous sign-ins Supabase projektā un pārlādē lapu.");
-                alert("Nav Supabase sesijas. Ieslēdz Anonymous sign-ins un pārlādē lapu.");
-                return;
-              }
-              const s = await supabase.auth.getSession();
-              const uid = s?.data?.session?.user?.id ?? null;
-              if (!uid) {
-                setAuthHint("Sesija nav izveidota (uid nav). Pārlādē lapu un mēģini vēlreiz.");
-                alert("Sesija nav izveidota (uid nav). Pārlādē lapu un mēģini vēlreiz.");
-                return;
-              }
-              // Pārbaude: vai šim uid ir admin/manager loma users tabulā (citādi RLS bloķēs INSERT).
-              const me = await supabase.from("users").select("role").eq("id", uid).maybeSingle();
-              const myRole = String(me?.data?.role ?? "").trim().toLowerCase();
-              if (me?.error || !myRole || (myRole !== "admin" && myRole !== "manager")) {
-                setAuthHint("Pievienot var tikai Admin/manager. Pašlaik Supabase sesija nav ar admin/manager lomu.");
-                alert("Pievienot var tikai Admin/manager. Pašlaik Supabase sesija nav ar admin/manager lomu.");
-                return;
-              }
-              const entered = String(addForm.imail ?? "").trim();
-              if (!entered || !entered.includes("@")) {
-                alert("Ievadi e-pastu.");
-                return;
-              }
-              let foundId = "";
-              const { data: rpcRows, error: rpcErr } = await supabase.rpc("pdd_lookup_user_by_email", { p_email: entered });
-              if (!rpcErr) {
-                const r0 = Array.isArray(rpcRows) ? rpcRows[0] : null;
-                foundId = String(r0?.user_id ?? r0?.pdd_lookup_user_by_email ?? r0?.userId ?? "").trim();
-              }
-              id = isValidUuid(foundId) ? foundId : (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()));
-            }
-            setBusy(true);
-            try {
-              const payload = buildUserRowPayload(addForm.vardUzv, addForm.imail, addForm.amats, addForm.role);
-              if (isLocal) {
-                window.KOMANDA?.upsertTeamUser?.({ id, ...payload });
-                pushChangeLog("komanda.pievienot", `Lietotājs ${id} pievienots`);
-                setAddOpen(false);
-                setAddForm({ id: "", vardUzv: "", imail: "", amats: "", role: "user" });
-                await onReload();
-                return;
-              }
-              const { data, error } = await supabase.from("users").insert({ id, ...payload }).select("id");
-              if (error) {
-                const msg = String(error.message || "");
-                if (/foreign key constraint|violates foreign key|auth\.users/i.test(msg)) {
-                  alert("Neizdevās saglabāt DB, jo šim e-pastam nav izveidots Supabase Authentication lietotājs.");
-                } else {
-                  alert(error.message);
-                }
-                return;
-              }
-              if (!data || data.length === 0) {
-                alert("Netika izveidots ieraksts (RLS vai 0 rindas).");
-                return;
-              }
-              setAddOpen(false);
-              setAddForm({ id: "", vardUzv: "", imail: "", amats: "", role: "user" });
-              await onReload();
-            } finally {
-              setBusy(false);
-            }
-          }
           return html`
             <div class="list-panel team-users-panel">
               <h2 style=${{ margin: "0 0 0.25rem", fontSize: "1rem" }}>Komanda</h2>
@@ -2958,7 +2835,6 @@
                   <thead>
                     <tr>
                       ${cols.map((key) => html`<th key=${key}>${labels[key] ?? key}</th>`)}
-                      ${canAdmin ? html`<th>Darbības</th>` : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -2969,17 +2845,6 @@
                               const cellVal = key === COL_USER_IMAIL ? userImail(u) : u[key];
                               return html`<td key=${key}>${formatUserTableCell(key, cellVal)}</td>`;
                             })}
-                            ${canAdmin
-                              ? html`
-                                  <td>
-                                    <div class="row" style=${{ gap: "0.25rem" }}>
-                                      <button type="button" class="btn btn-ghost btn-small" onClick=${() => openEdit(u)}>
-                                        Labot
-                                      </button>
-                                    </div>
-                                  </td>
-                                `
-                              : null}
                           </tr>
                         `)
                       : html`
@@ -3114,71 +2979,6 @@
                 : total
                   ? html`<p style=${{ margin: "0.55rem 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>Kopā ${total} rindas.</p>`
                   : null}
-              ${editing
-                ? html`
-                    <div
-                      style=${{
-                        position: "fixed",
-                        inset: 0,
-                        background: "rgba(0,0,0,0.45)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        zIndex: 50,
-                        padding: "1rem",
-                      }}
-                      onClick=${() => setEditing(null)}
-                    >
-                      <div class="list-panel" style=${{ maxWidth: "400px", width: "100%" }} onClick=${(ev) => ev.stopPropagation()}>
-                        <h3 style=${{ margin: "0 0 0.65rem", fontSize: "1rem" }}>Labot lietotāju</h3>
-                        <form class="stack" onSubmit=${saveEdit}>
-                          <div class="field">
-                            <label>Vārds uzvārds</label>
-                            <input
-                              class="input"
-                              value=${form.vardUzv}
-                              onChange=${(ev) => setForm((f) => ({ ...f, vardUzv: ev.target.value }))}
-                            />
-                          </div>
-                          <div class="field">
-                              <label>e-pasts</label>
-                            <input
-                              class="input"
-                              type="email"
-                              value=${form.imail}
-                              onChange=${(ev) => setForm((f) => ({ ...f, imail: ev.target.value }))}
-                            />
-                          </div>
-                          <div class="field">
-                            <label>Amats</label>
-                            <input
-                              class="input"
-                              value=${form.amats}
-                              onChange=${(ev) => setForm((f) => ({ ...f, amats: ev.target.value }))}
-                            />
-                          </div>
-                          <div class="field">
-                            <label>Loma</label>
-                            <select
-                              class="select"
-                              value=${form.role}
-                              onChange=${(ev) => setForm((f) => ({ ...f, role: ev.target.value }))}
-                            >
-                              <option value="user">user</option>
-                              <option value="admin">admin</option>
-                            </select>
-                          </div>
-                          <div class="row">
-                            <button type="submit" class="btn btn-primary btn-small" disabled=${busy}>Saglabāt</button>
-                            <button type="button" class="btn btn-ghost btn-small" onClick=${() => setEditing(null)}>
-                              Atcelt
-                            </button>
-                          </div>
-                        </form>
-                      </div>
-                    </div>
-                  `
-                : null}
             </div>
           `;
         }
@@ -4938,10 +4738,7 @@
             () => effectiveDeputyUserId(deputyUserId, deputyValidFrom, deputyValidTo),
             [deputyUserId, deputyValidFrom, deputyValidTo]
           );
-          const notifyEmail = useMemo(
-            () => resolveNotifyEmail(teamUsers, deputyEffectiveId),
-            [teamUsers, deputyEffectiveId]
-          );
+          const notifyEmail = "katrina.jirgensone@vid.gov.lv";
           const canApprove = userCanApproveAbsences(role, userId, deputyEffectiveId);
           const absenceNavSnapRef = useRef({ userId: "", canApprove: false, onAbsencesSnapshot: null });
           absenceNavSnapRef.current = { userId, canApprove, onAbsencesSnapshot };
@@ -5176,7 +4973,7 @@
                 ? html`
                     <${TeamUsersDirectory}
                       users=${teamUsers}
-                      canAdmin=${String(rawRole || "").toLowerCase() === "admin"}
+                      canAdmin=${normalizeUserRole(rawRole ?? role) === "admin"}
                       currentUserId=${userId}
                       onReload=${reloadUsersAndViews}
                     />
@@ -5274,7 +5071,8 @@
 
         function App() {
           const { session, loading } = useSession();
-          const { profile, loading: profileLoading } = useProfile(session?.user?.id);
+          const { profile, loading: profileLoading } = useProfile(session?.user?.id, session?.user?.email);
+          const effectiveUserId = profile?.id ?? session?.user?.id ?? null;
           const [view, setView] = useState("home");
           const [promSub, setPromSub] = useState("calendar");
           const [pendingCitsNav, setPendingCitsNav] = useState(false);
@@ -5458,7 +5256,7 @@
                   />`
                 : view === "team"
                   ? html`<${PrombutnesSection}
-                      userId=${session.user.id}
+                      userId=${effectiveUserId}
                       role=${profile?.role ?? "user"}
                       rawRole=${profile?.raw_role ?? null}
                       promSub=${"teamUsers"}
@@ -5466,7 +5264,7 @@
                       onAbsencesSnapshot=${onAbsencesSnapshot}
                     />`
                 : html`<${PrombutnesSection}
-                      userId=${session.user.id}
+                      userId=${effectiveUserId}
                       role=${profile?.role ?? "user"}
                       rawRole=${profile?.raw_role ?? null}
                       promSub=${promSub}
