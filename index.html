@@ -2224,7 +2224,7 @@
           `;
         }
 
-        function AbsenceRequestForm({ userId, role, onCreated, notifyEmail, presetDate, onConsumePreset, canApproveRequests }) {
+        function AbsenceRequestForm({ userId, onCreated, notifyEmail, presetDate, onConsumePreset, canApproveRequests }) {
           const [types, setTypes] = useState([]);
           const [typeId, setTypeId] = useState("");
           const [startDate, setStartDate] = useState("");
@@ -2238,7 +2238,6 @@
           const [selectedUserId, setSelectedUserId] = useState("");
           const [citsRows, setCitsRows] = useState([]);
           const [decisionReason, setDecisionReason] = useState({});
-          const isManager = normalizeUserRole(role) === "admin";
           const currentTypeObj = types.find((t) => String(t.id) === String(typeId)) ?? null;
           const isCitsFlow = Boolean(currentTypeObj && isCitsSaskanotsTypeName(currentTypeObj.name));
 
@@ -2324,7 +2323,6 @@
               const selfId = selfUser?.id ?? uid;
               const defaultId = selfId || (safeList[0]?.id ?? "");
               setSelectedUserId((prev) => {
-                if (!isManager) return defaultId;
                 if (prev && safeList.some((u) => String(u.id) === String(prev))) return prev;
                 return defaultId;
               });
@@ -2332,10 +2330,7 @@
             return () => {
               cancelled = true;
             };
-          }, [userId, isManager]);
-          useEffect(() => {
-            if (!isManager) setSelectedUserId(String(userId || ""));
-          }, [isManager, userId]);
+          }, [userId]);
           useEffect(() => {
             if (!presetDate) return;
             setStartDate(presetDate);
@@ -2556,23 +2551,15 @@
                     required
                     value=${selectedUserId || String(userId || "")}
                     onChange=${(ev) => setSelectedUserId(ev.target.value)}
-                    disabled=${!isManager}
                   >
-                    ${(isManager
-                      ? users
-                      : (() => {
-                          const selfOnly = users.filter((u) => String(u.id) === String(userId));
-                          return selfOnly.length ? selfOnly : users;
-                        })()).map(
+                    ${(users ?? []).map(
                       (u) => html`
                         <option key=${u.id} value=${u.id}>${userDisplayName(u)}</option>
                       `
                     )}
                   </select>
                   <span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                    ${isManager
-                      ? "Pēc noklusējuma izvēlēts tavs vārds; admin var izvēlēties citu."
-                      : "Pēc noklusējuma izvēlēts tavs vārds."}
+                    Saraksts no datubāzes (Komanda). Pēc noklusējuma — tavs vārds; var izvēlēties citu darbinieku.
                   </span>
                 </div>
                 <div class="field">
@@ -2836,7 +2823,7 @@
             <div class="list-panel team-users-panel">
               <h2 style=${{ margin: "0 0 0.25rem", fontSize: "1rem" }}>Komanda</h2>
               <p style=${{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--muted)" }}>
-                Šī ir pamata lietotāju tabula. Šeit nosaki lomas (piemēram, <code>admin</code> vai
+                Šī ir pamata lietotāju tabula. Šeit nosa lomas (piemēram, <code>admin</code> vai
                 <code>user</code>) un piekļuves tiesības.
               </p>
               ${authHint
@@ -4979,7 +4966,6 @@
                 ? html`
                     <${AbsenceRequestForm}
                       userId=${userId}
-                      role=${role}
                       onCreated=${() => void refresh()}
                       notifyEmail=${notifyEmail}
                       presetDate=${requestPresetDate}
