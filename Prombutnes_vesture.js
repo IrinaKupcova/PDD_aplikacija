@@ -22,7 +22,7 @@
     const typeName = a.type?.name ?? a.type_id ?? "";
     if (!isCitsSaskanotsTypeName(typeName)) return false;
     const st = String(a.status ?? "").trim().toLowerCase();
-    return st === "pending";
+    return st === "pending" || st === "pending_manager" || st === "gaida";
   }
 
   /**

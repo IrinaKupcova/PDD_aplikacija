@@ -1,5 +1,7 @@
 (function () {
   const LS_TEAM_USERS = "pdd_team_users_v1";
+  const LS_LOCAL_USER_ID = "pdd_local_user_id";
+  const LOCAL_USER_ID = "local-user-1";
 
   // Lokāls seed (varēsi labot/dzēst/papildināt UI).
   // Shape atbilst Supabase public.users kolonnām (tā, lai UI šeit un migrācijās nesajūk):
@@ -108,6 +110,11 @@
   }
 
   function upsertTeamUser(user) {
+    const actor = getCurrentLocalActor();
+    if (actor.role !== "admin") {
+      alert("Labot drīkst tikai Admin.");
+      return null;
+    }
     const users = loadTeamUsers();
     const idx = users.findIndex((u) => String(u.id) === String(user.id));
     const safe = normalizeUser(user);
@@ -139,8 +146,23 @@
   }
 
   function deleteTeamUser(id) {
+    const actor = getCurrentLocalActor();
+    if (actor.role !== "admin") {
+      alert("Dzēst drīkst tikai Admin.");
+      return;
+    }
     const users = loadTeamUsers().filter((u) => String(u.id) !== String(id));
     saveTeamUsers(users);
+  }
+
+  function getCurrentLocalActor() {
+    // Šī lapa strādā “lokālajā režīmā” caur sessionStorage, un loma nāk no COMANDA lokālās tabulas.
+    // Ja nav login-informācijas, pieņemam defaultu (local-user-1).
+    const uid = sessionStorage.getItem(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
+    const list = loadTeamUsers();
+    const me = (Array.isArray(list) ? list : []).find((u) => String(u.id) === String(uid)) ?? null;
+    const role = normalizeUser(me)?.role === "admin" ? "admin" : "user";
+    return { id: uid, role };
   }
 
   // Public API (tikai komandas lietotāji; ziņas atsevišķi Zinas.js)

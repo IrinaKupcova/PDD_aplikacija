@@ -481,6 +481,8 @@
           type_id: ["type_id", "type", "prombūtnes veids", "prombutnes veids", "prombutnes_veids", "veids"],
           start_date: ["start_date", "sākuma datums", "sakuma_datums", "sakuma datums", "sākuma_datums", "sākuma_datums"],
           end_date: ["end_date", "beigu datums", "beigu_datums", "beigu_datums"],
+          laiks_no: ["Laiks_no", "laiks_no", "from_time", "time_from"],
+          laiks_lidz: ["Laiks_lidz", "laiks_lidz", "to_time", "time_to"],
           comment: ["comment", "komentāri", "komentari", "komentārs", "komentars"],
           reject_reason: ["Atteikuma_iemesls", "atteikuma_iemesls", "Atteikuma iemesls", "atteikuma iemesls", "rejection_reason"],
           status: ["status", "statuss", "statuss"],
@@ -493,6 +495,8 @@
           type_id: "type",           // integer
           start_date: "Sakuma_datums",
           end_date: "Beigu_datums",
+          laiks_no: "Laiks_no",
+          laiks_lidz: "Laiks_lidz",
           comment: "Komentārs",
           reject_reason: "Atteikuma_iemesls",
           status: "Statuss",
@@ -569,6 +573,8 @@
           const typeRaw = pickByAliases(r, ABSENCE_ALT_KEYS.type_id, null);
           const startRaw = pickByAliases(r, ABSENCE_ALT_KEYS.start_date, "");
           const endRaw = pickByAliases(r, ABSENCE_ALT_KEYS.end_date, "");
+          const laiksNoRaw = pickByAliases(r, ABSENCE_ALT_KEYS.laiks_no, "");
+          const laiksLidzRaw = pickByAliases(r, ABSENCE_ALT_KEYS.laiks_lidz, "");
           const commentRaw = pickByAliases(r, ABSENCE_ALT_KEYS.comment, null);
           const rejectReasonRaw = pickByAliases(r, ABSENCE_ALT_KEYS.reject_reason, null);
           const statusRaw = pickByAliases(r, ABSENCE_ALT_KEYS.status, "pending");
@@ -578,6 +584,8 @@
             type_id: typeRaw == null || typeRaw === "" ? null : Number(typeRaw),
             start_date: String(startRaw ?? ""),
             end_date: String(endRaw ?? ""),
+            laiks_no: laiksNoRaw ? String(laiksNoRaw) : null,
+            laiks_lidz: laiksLidzRaw ? String(laiksLidzRaw) : null,
             comment: commentRaw == null ? null : String(commentRaw),
             reject_reason: rejectReasonRaw == null ? null : String(rejectReasonRaw),
             status: normalizeAbsenceStatus(statusRaw),
@@ -845,6 +853,7 @@
             [COL_USER_AMATS]: amats || null,
             [COL_USER_ROLE]: userRoleValue(u),
             role: userRoleValue(u),
+            raw_role: u?.role ?? null,
             [COL_USER_APPROVER_STATUS]: approverMode,
             approver_status: approverMode,
             [COL_USER_APPROVER_FROM]: approverFrom || null,
@@ -1672,6 +1681,7 @@
                 [COL_USER_IMAIL]: me?.[COL_USER_IMAIL] ?? me?.email ?? sessionStorage.getItem(LS_LOCAL_EMAIL) ?? "",
                 [COL_USER_AMATS]: me?.[COL_USER_AMATS] ?? me?.Amats ?? "",
                 email: me?.email ?? sessionStorage.getItem(LS_LOCAL_EMAIL) ?? null,
+                raw_role: me?.role ?? null,
                 [COL_USER_ROLE]: userRoleValue(me),
                 role: userRoleValue(me),
                 created_at: null,
@@ -1986,10 +1996,43 @@
           };
         }
 
-        function AbsenceCalendar({ month, onMonthChange, absences, caption, onPickAbsence, onPickDay }) {
+        function AbsenceCalendar({ month, onMonthChange, absences, caption, onPickAbsence, onPickDay, types }) {
           const start = startOfWeek(startOfMonth(month), { weekStartsOn: 1 });
           const end = endOfWeek(endOfMonth(month), { weekStartsOn: 1 });
           const days = eachDayOfInterval({ start, end });
+          const citsTypeId = (() => {
+            const list = Array.isArray(types) ? types : [];
+            const cits = list.find((t) => isCitsSaskanotsTypeName(t?.name ?? t?.type ?? ""));
+            return cits?.id ?? null;
+          })();
+          function extractCitsPeriodLabelLv(a) {
+            const c = String(a?.comment ?? "").trim();
+            if (/^Visa diena\b/i.test(c)) return "Visa diena";
+
+            function normTime(s) {
+              const str = String(s ?? "").trim();
+              const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(str);
+              if (!m) return "";
+              const hh = String(m[1]).padStart(2, "0");
+              const mm = String(m[2]).padStart(2, "0");
+              return `${hh}:${mm}`;
+            }
+
+            const from = normTime(a?.laiks_no ?? a?.Laiks_no);
+            const to = normTime(a?.laiks_lidz ?? a?.Laiks_lidz);
+            if (from && to) return `Laikā no ${from} līdz ${to}`;
+            if (from && !to) return `Laikā no ${from}`;
+            if (!from && to) return `Laikā līdz ${to}`;
+
+            // Fallback: ja vēl ir tikai komentāra prefikss (vecā datu forma).
+            const m = /^Laikā no\s+(\d{1,2}:\d{2})\s+līdz\s+(\d{1,2}:\d{2})\b/i.exec(c);
+            if (m) {
+              const f = normTime(m[1]);
+              const t = normTime(m[2]);
+              if (f && t) return `Laikā no ${f} līdz ${t}`;
+            }
+            return "";
+          }
           const entriesForDay = (d) => {
             const key = dayKey(d);
             return absences.filter((a) => key >= a.start_date && key <= a.end_date);
@@ -2041,41 +2084,103 @@
                             `
                           : null}
                       </div>
-                      ${items.map((a) => html`
-                        <span
-                          key=${a.id}
-                          role="button"
-                          tabindex="0"
-                          class="cal-chip"
-                          style=${chipStyle(a)}
-                          title=${[
-                            userDisplayName(a.employee) !== "—" ? userDisplayName(a.employee) : "Darbinieks",
-                            a.type?.name ?? "",
-                            a.status,
-                            a.comment
-                              ? `Komentārs: ${String(a.comment).replace(/"/g, "'")}`
-                              : "",
-                            onPickAbsence ? "Spied, lai atvērtu vēsturē" : "",
-                          ]
-                            .filter(Boolean)
-                            .join(" — ")}
-                          onClick=${(ev) => {
-                            ev.stopPropagation();
-                            onPickAbsence?.(a);
-                          }}
-                          onKeyDown=${(ev) => {
-                            if (ev.key === "Enter" || ev.key === " ") {
-                              ev.preventDefault();
+                      ${items.map((a) => {
+                        const isCitsType = Boolean(a?.type?.name) && isCitsSaskanotsTypeName(a.type.name);
+                        const periodLabel = isCitsType ? extractCitsPeriodLabelLv(a) : "";
+                        const notAllDay = Boolean(periodLabel) && String(periodLabel).toLowerCase() !== "visa diena";
+                        const pendingMark = (() => {
+                          const fn = globalThis.PDDPrombutnesVesture?.isPendingCitsAbsence;
+                          if (typeof fn === "function") return Boolean(fn(a));
+                          const typeName = a?.type?.name ?? "";
+                          const st = String(a?.status ?? "").trim().toLowerCase();
+                          const isCitsResolved =
+                            isCitsSaskanotsTypeName(typeName) ||
+                            (citsTypeId != null && String(a?.type_id) === String(citsTypeId));
+                          return isCitsResolved && (st === "pending" || st === "pending_manager" || st === "gaida");
+                        })();
+                        return html`
+                          <span
+                            key=${a.id}
+                            role="button"
+                            tabindex="0"
+                            class="cal-chip"
+                            style=${chipStyle(a)}
+                            title=${[
+                              userDisplayName(a.employee) !== "—" ? userDisplayName(a.employee) : "Darbinieks",
+                              a.type?.name ?? "",
+                              a.status,
+                              a.comment
+                                ? `Komentārs: ${String(a.comment).replace(/"/g, "'")}`
+                                : "",
+                              onPickAbsence ? "Spied, lai atvērtu vēsturē" : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" — ")}
+                            onClick=${(ev) => {
+                              ev.stopPropagation();
                               onPickAbsence?.(a);
+                            }}
+                            onKeyDown=${(ev) => {
+                              if (ev.key === "Enter" || ev.key === " ") {
+                                ev.preventDefault();
+                                onPickAbsence?.(a);
+                              }
+                            }}
+                          >
+                            ${userDisplayName(a.employee) !== "—"
+                              ? userDisplayName(a.employee)
+                              : "?"}{" "}
+                            · ${a.type?.name ?? ""}${
+                              isCitsType && periodLabel
+                                ? html`
+                                    ${notAllDay
+                                      ? html`
+                                          <svg
+                                            width="14"
+                                            height="14"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            style=${{ marginLeft: "0.5rem", marginRight: "-0.1rem", verticalAlign: "text-bottom" }}
+                                            title="Nav visa diena"
+                                            aria-hidden="true"
+                                          >
+                                            <circle cx="12" cy="12" r="10"></circle>
+                                            <polyline points="12 6 12 12 16 14"></polyline>
+                                          </svg>
+                                        `
+                                      : null} · ${periodLabel}
+                                  `
+                                : null
                             }
-                          }}
-                        >
-                          ${userDisplayName(a.employee) !== "—"
-                            ? userDisplayName(a.employee)
-                            : "?"}{" "}
-                          · ${a.type?.name ?? ""}
-                        </span>
-                      `)}
+                            ${pendingMark
+                              ? html`
+                                  <span
+                                    style=${{
+                                      marginLeft: "0.5rem",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      background: "rgba(220,38,38,0.12)",
+                                      color: "var(--danger, #dc2626)",
+                                      border: "1px solid rgba(220,38,38,0.45)",
+                                      padding: "1px 6px",
+                                      borderRadius: "999px",
+                                      fontSize: "0.72rem",
+                                      lineHeight: 1.2,
+                                      verticalAlign: "text-bottom",
+                                    }}
+                                    title="Gaida apstiprinājumu"
+                                  >
+                                    Gaida apstiprinājumu
+                                  </span>
+                                `
+                              : null}
+                          </span>
+                        `;
+                      })}
                     </div>
                   `;
                 })}
@@ -2090,12 +2195,34 @@
           const [startDate, setStartDate] = useState("");
           const [endDate, setEndDate] = useState("");
           const [comment, setComment] = useState("");
+          const [citsAllDay, setCitsAllDay] = useState(true);
+          const [citsFromTime, setCitsFromTime] = useState("09:00");
+          const [citsToTime, setCitsToTime] = useState("17:00");
           const [busy, setBusy] = useState(false);
           const [users, setUsers] = useState([]);
           const [selectedUserId, setSelectedUserId] = useState("");
           const [citsRows, setCitsRows] = useState([]);
           const [decisionReason, setDecisionReason] = useState({});
           const isManager = normalizeUserRole(role) === "admin";
+          const currentTypeObj = types.find((t) => String(t.id) === String(typeId)) ?? null;
+          const isCitsFlow = Boolean(currentTypeObj && isCitsSaskanotsTypeName(currentTypeObj.name));
+
+          function buildCitsPeriodLabelLv({ allDay, fromTime, toTime }) {
+            if (allDay === true) return "Visa diena";
+            const fromLv = String(fromTime ?? "").trim();
+            const toLv = String(toTime ?? "").trim();
+            if (fromLv && toLv) return `Laikā no ${fromLv} līdz ${toLv}`;
+            return "";
+          }
+
+          function normalizeCitsCommentWithPeriodLv({ allDay, fromTime, toTime, comment: c }) {
+            const label = buildCitsPeriodLabelLv({ allDay, fromTime, toTime });
+            const trimmed = String(c ?? "").trim();
+            if (label && trimmed) return `${label} · ${trimmed}`;
+            if (label) return label;
+            return trimmed || null;
+          }
+
           useEffect(() => {
             if (isLocalMode()) {
               setTypes(getLocalTypes());
@@ -2123,6 +2250,15 @@
               setTypes(mapped);
             })();
           }, []);
+
+          // Kad izvēlas Cits veidu, ieliekam noklusētos “visa diena” / “no-līdz”.
+          useEffect(() => {
+            if (!isCitsFlow) {
+              setCitsAllDay(true);
+              return;
+            }
+            setCitsAllDay(true);
+          }, [isCitsFlow]);
           useEffect(() => {
             let cancelled = false;
             (async () => {
@@ -2253,7 +2389,14 @@
                     type: Number(typeId),
                     Sakuma_datums: startDate,
                     Beigu_datums: endDate,
-                    Komentārs: comment.trim() || null,
+                    Laiks_no: citsAllDay ? null : citsFromTime,
+                    Laiks_lidz: citsAllDay ? null : citsToTime,
+                    Komentārs: normalizeCitsCommentWithPeriodLv({
+                      allDay: citsAllDay,
+                      fromTime: citsFromTime,
+                      toTime: citsToTime,
+                      comment,
+                    }),
                     Statuss: "pending",
                     approved_by: null,
                     created_at: nowIso,
@@ -2291,6 +2434,9 @@
                 setStartDate("");
                 setEndDate("");
                 setComment("");
+                setCitsAllDay(true);
+                setCitsFromTime("09:00");
+                setCitsToTime("17:00");
                 setTypeId("");
                 setSelectedUserId((prev) => prev || userId);
                 onCreated();
@@ -2422,6 +2568,50 @@
                     />
                   </div>
                 </div>
+
+                ${isCitsFlow
+                  ? html`
+                      <div class="field" style=${{ marginTop: "-0.15rem" }}>
+                        <label style=${{ display: "flex", alignItems: "center", gap: "0.55rem" }}>
+                          <input
+                            type="checkbox"
+                            checked=${citsAllDay}
+                            onChange=${(ev) => setCitsAllDay(Boolean(ev.target.checked))}
+                          />
+                          Visa diena
+                        </label>
+                      </div>
+                      ${citsAllDay
+                        ? null
+                        : html`
+                            <div class="row" style=${{ gap: "0.75rem" }}>
+                              <div class="field" style=${{ flex: "1 1 140px" }}>
+                                <label for="cits-from">Laiks no</label>
+                                <input
+                                  id="cits-from"
+                                  type="time"
+                                  class="input"
+                                  value=${citsFromTime}
+                                  onChange=${(ev) => setCitsFromTime(ev.target.value)}
+                                  required
+                                />
+                              </div>
+                              <div class="field" style=${{ flex: "1 1 140px" }}>
+                                <label for="cits-to">${TIKAI_VIENKARSI_SKATS ? "Līdz" : "Laiks līdz"}</label>
+                                <input
+                                  id="cits-to"
+                                  type="time"
+                                  class="input"
+                                  value=${citsToTime}
+                                  onChange=${(ev) => setCitsToTime(ev.target.value)}
+                                  required
+                                />
+                              </div>
+                            </div>
+                          `}
+                    `
+                  : null}
+
                 <div class="field">
                   <label for="pcom">Komentārs</label>
                   <textarea
@@ -2621,6 +2811,10 @@
           async function saveEdit(e) {
             e.preventDefault();
             if (!editing) return;
+            if (!canAdmin) {
+              alert("Labot drīkst tikai Admin.");
+              return;
+            }
             setBusy(true);
             try {
               const payload = buildUserRowPayload(form.vardUzv, form.imail, form.amats, form.role);
@@ -2644,6 +2838,10 @@
           }
           async function saveAdd(e) {
             e.preventDefault();
+            if (!canAdmin) {
+              alert("Pievienot drīkst tikai Admin.");
+              return;
+            }
             const isLocal = TIKAI_VIENKARSI_SKATS || !supabase;
             const id = isLocal ? (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now())) : addForm.id.trim();
             if (!isLocal && !isValidUuid(id)) {
@@ -2675,6 +2873,10 @@
           }
           async function confirmDelete() {
             if (!delId) return;
+            if (!canAdmin) {
+              alert("Dzēst drīkst tikai Admin.");
+              return;
+            }
             setBusy(true);
             try {
               if (TIKAI_VIENKARSI_SKATS || !supabase) {
@@ -4162,8 +4364,18 @@
                             const hi = highlightAbsenceId && String(highlightAbsenceId) === String(a.id);
                             const typeName = a.type?.name ?? a.type_id ?? "—";
                             const isCitsType = isCitsSaskanotsTypeName(typeName);
-                            const pendingCitsRow =
-                              globalThis.PDDPrombutnesVesture?.isPendingCitsAbsence?.(a) ?? false;
+                            const citsCommentRaw = String(a?.comment ?? "");
+                            const timeMark =
+                              isCitsType &&
+                              !/^Visa diena\b/i.test(citsCommentRaw) &&
+                              (Boolean(a?.laiks_no || a?.laiks_lidz) || /^Laikā no\s+/i.test(citsCommentRaw));
+                            const pendingCitsRow = (() => {
+                              const fn = globalThis.PDDPrombutnesVesture?.isPendingCitsAbsence;
+                              if (typeof fn === "function") return Boolean(fn(a));
+                              const typeName = a?.type?.name ?? a?.type_id ?? "";
+                              const st = String(a?.status ?? "").trim().toLowerCase();
+                              return isCitsSaskanotsTypeName(typeName) && (st === "pending" || st === "pending_manager" || st === "gaida");
+                            })();
                             const statusText = isCitsType
                               ? (a.status === "approved" ? "saskaņots" : a.status === "rejected" ? "noraidīts" : "gaida")
                               : "bez saskaņošanas";
@@ -4184,7 +4396,29 @@
                               >
                                 <td>${maybeMark(userShown, filters.name)}</td>
                                 <td>${maybeMark(typeName, filters.type)}</td>
-                                <td>${maybeMark(formatDateLv(a.start_date), filters.start)}</td>
+                                <td>
+                                  ${maybeMark(formatDateLv(a.start_date), filters.start)}
+                                  ${timeMark
+                                    ? html`
+                                        <svg
+                                          width="14"
+                                          height="14"
+                                          viewBox="0 0 24 24"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                          style=${{ marginLeft: "0.45rem", verticalAlign: "text-bottom", opacity: 0.9 }}
+                                          title="Nav visa diena"
+                                          aria-hidden="true"
+                                        >
+                                          <circle cx="12" cy="12" r="10"></circle>
+                                          <polyline points="12 6 12 12 16 14"></polyline>
+                                        </svg>
+                                      `
+                                    : null}
+                                </td>
                                 <td>${maybeMark(formatDateLv(a.end_date), filters.end)}</td>
                                 <td style=${{ maxWidth: "140px", wordBreak: "break-word" }}>
                                   ${maybeMark(a.comment ?? "—", filters.comment)}
@@ -4484,7 +4718,7 @@
           `;
         }
 
-        function PrombutnesSection({ userId, role, promSub, setPromSub, onAbsencesSnapshot }) {
+        function PrombutnesSection({ userId, role, rawRole, promSub, setPromSub, onAbsencesSnapshot }) {
           const [month, setMonth] = useState(() => new Date());
           const [absences, setAbsences] = useState([]);
           const [typesList, setTypesList] = useState([]);
@@ -4768,6 +5002,7 @@
                         month=${month}
                         onMonthChange=${setMonth}
                         absences=${absences}
+                        types=${typesList}
                         caption="Komandas kalendārs. Parastie veidi reģistrējas uzreiz kā apstiprināti; „Cits (ar vadītāja saskaņojumu)” — pēc e-pasta apstiprinājuma. Spied uz krāsainās iezīmes, lai atvērtu ierakstu vēsturē."
                         onPickDay=${(d) => {
                           const ymd =
@@ -4819,7 +5054,7 @@
                 ? html`
                     <${TeamUsersDirectory}
                       users=${teamUsers}
-                      canAdmin=${String(role || "").toLowerCase() === "admin"}
+                      canAdmin=${String(rawRole || "").toLowerCase() === "admin"}
                       currentUserId=${userId}
                       onReload=${reloadUsersAndViews}
                     />
@@ -5103,6 +5338,7 @@
                   ? html`<${PrombutnesSection}
                       userId=${session.user.id}
                       role=${profile?.role ?? "user"}
+                      rawRole=${profile?.raw_role ?? null}
                       promSub=${"teamUsers"}
                       setPromSub=${() => {}}
                       onAbsencesSnapshot=${onAbsencesSnapshot}
@@ -5110,6 +5346,7 @@
                 : html`<${PrombutnesSection}
                       userId=${session.user.id}
                       role=${profile?.role ?? "user"}
+                      rawRole=${profile?.raw_role ?? null}
                       promSub=${promSub}
                       setPromSub=${setPromSub}
                       onAbsencesSnapshot=${onAbsencesSnapshot}
