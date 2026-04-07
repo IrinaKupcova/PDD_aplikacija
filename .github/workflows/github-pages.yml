@@ -26,6 +26,15 @@ jobs:
           SUPA_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
           mkdir -p _site
+          # Kopējam visus statiskos failus, ko izmanto index.html (JS, ikonas, u.c.).
+          # Neiekļaujam CI/Actions mapes, node_modules un pagaidu arhīvus.
+          rsync -a --delete \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude "node_modules/" \
+            --exclude "_site/" \
+            --exclude "*.zip" \
+            ./ _site/
           node << 'NODE'
           const fs = require("fs");
           let h = fs.readFileSync("index.html", "utf8");
