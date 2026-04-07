@@ -227,7 +227,7 @@ module.exports = async (req, res) => {
       }
       const fromBodyMgr = String(body.notify_manager_email || "").trim();
       const adminEmail =
-        (await getFirstAdminOrManagerEmail(admin)) || (fromBodyMgr.includes("@") ? fromBodyMgr : "");
+        (fromBodyMgr.includes("@") ? fromBodyMgr : "") || (await getFirstAdminOrManagerEmail(admin));
       const { data: applicantRow } = await admin.from("users").select("*").eq("id", ownerId).maybeSingle();
       const applicantEmail = pickUserEmailRow(applicantRow);
       if (!adminEmail && !applicantEmail) {
