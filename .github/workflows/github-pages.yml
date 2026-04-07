@@ -27,14 +27,11 @@ jobs:
         run: |
           mkdir -p _site
           # Kopējam visus statiskos failus, ko izmanto index.html (JS, ikonas, u.c.).
-          # Neiekļaujam CI/Actions mapes, node_modules un pagaidu arhīvus.
-          rsync -a --delete \
-            --exclude ".git/" \
-            --exclude ".github/" \
-            --exclude "node_modules/" \
-            --exclude "_site/" \
-            --exclude "*.zip" \
-            ./ _site/
+          # Apzināti nelietojam rsync (ne vienmēr pieejams runnerī).
+          shopt -s dotglob
+          cp -R . _site/
+          rm -rf _site/.git _site/.github _site/node_modules _site/_site
+          rm -f _site/*.zip
           node << 'NODE'
           const fs = require("fs");
           let h = fs.readFileSync("index.html", "utf8");
