@@ -12,6 +12,8 @@
  */
 
 const APPROVAL_LINK = "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
+const MANAGER_NOTIFY_EMAIL = "katrina.jirgensone@vid.gov.lv";
+const MANAGER_NOTIFY_COPY_EMAIL = "irina.kupcova@vid.gov.lv";
 
 function norm(v) {
   return String(v ?? "").trim().toLowerCase();
@@ -84,6 +86,18 @@ async function sendResendEmail(resend, { from, to, subject, text }) {
   if (error) throw new Error(error.message || "Neizdevās nosūtīt e-pastu.");
 }
 
+function uniqEmails(list) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(list) ? list : [list]) {
+    const em = String(raw ?? "").trim().toLowerCase();
+    if (!em || !em.includes("@") || seen.has(em)) continue;
+    seen.add(em);
+    out.push(em);
+  }
+  return out;
+}
+
 async function onRequestCreated({
   supabase,
   resend,
@@ -119,8 +133,9 @@ async function onRequestCreated({
   if (!startsWithCits(effectiveVeids)) return { ok: true, notified: false };
 
   const admin = await getFirstAdmin(supabase);
-  const adminEmail = pickUserEmail(admin);
-  if (!adminEmail) return { ok: true, notified: false, warning: "Admin e-pasts nav atrasts." };
+  const adminEmail = MANAGER_NOTIFY_EMAIL || pickUserEmail(admin);
+  const notifyTo = uniqEmails([adminEmail, MANAGER_NOTIFY_COPY_EMAIL]);
+  if (!notifyTo.length) return { ok: true, notified: false, warning: "Vadītāja e-pasts nav atrasts." };
 
   const applicant = await getUserById(supabase, pickRequestUserId(req));
   const applicantEmail = pickUserEmail(applicant);
@@ -137,7 +152,7 @@ async function onRequestCreated({
   const sends = [
     sendResendEmail(resend, {
       from: fromEmail,
-      to: adminEmail,
+      to: notifyTo,
       subject: managerSubject,
       text: managerText,
     }),
