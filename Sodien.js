@@ -26,6 +26,15 @@ function typeName(a) {
   return pick(a?.type?.name || a?.type_id) || "—";
 }
 
+function timeInterval(a) {
+  const from = pick(a?.laiks_no || a?.Laiks_no || a?.laiksNo || "");
+  const to = pick(a?.laiks_lidz || a?.Laiks_lidz || a?.laiksLidz || "");
+  if (from && to) return `${from}–${to}`;
+  if (from) return `no ${from}`;
+  if (to) return `līdz ${to}`;
+  return "";
+}
+
 function todayRows(absences) {
   const today = ymd(new Date());
   const list = Array.isArray(absences) ? absences : [];
@@ -36,9 +45,16 @@ function renderTodayInfo({ html, absences }) {
   if (typeof html !== "function") return null;
   const rows = todayRows(absences);
   return html`
-    <section class="list-panel" style=${{ marginTop: "1rem", background: "var(--bg)" }}>
-      <h3 style=${{ margin: "0 0 0.65rem", fontSize: "1rem" }}>Kas šodien aktuāls</h3>
-      <p style=${{ margin: "0 0 0.65rem", color: "var(--muted)", fontSize: "0.9rem" }}>Šodien nav darbā</p>
+    <section
+      class="list-panel"
+      style=${{
+        marginTop: "1rem",
+        background: "linear-gradient(180deg, rgba(56,189,248,0.16), rgba(14,116,144,0.1))",
+        border: "1px solid rgba(14,116,144,0.55)",
+      }}
+    >
+      <h3 style=${{ margin: "0 0 0.65rem", fontSize: "1rem", color: "#075985" }}>Kas šodien aktuāls</h3>
+      <p style=${{ margin: "0 0 0.65rem", color: "#0f172a", fontSize: "0.9rem" }}>Šodien nav darbā</p>
       ${rows.length
         ? html`
             <div class="stack" style=${{ gap: "0.5rem" }}>
@@ -47,10 +63,10 @@ function renderTodayInfo({ html, absences }) {
                   <div
                     key=${`today-away-${a.id ?? i}`}
                     style=${{
-                      border: "1px solid var(--border)",
+                      border: "1px solid rgba(14,116,144,0.4)",
                       borderRadius: "10px",
                       padding: "0.55rem 0.65rem",
-                      background: "var(--surface)",
+                      background: "rgba(255,255,255,0.72)",
                     }}
                   >
                     <div style=${{ fontWeight: 600 }}>
@@ -62,6 +78,13 @@ function renderTodayInfo({ html, absences }) {
                     <div style=${{ fontSize: "0.88rem", color: "var(--muted)" }}>
                       Papildu informācija: ${pick(a?.Papildu_info) || "—"}
                     </div>
+                    ${timeInterval(a)
+                      ? html`
+                          <div style=${{ fontSize: "0.88rem", color: "var(--muted)" }}>
+                            Laiks: ${timeInterval(a)}
+                          </div>
+                        `
+                      : null}
                   </div>
                 `
               )}

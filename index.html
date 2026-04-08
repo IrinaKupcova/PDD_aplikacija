@@ -1100,6 +1100,15 @@
           if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !supabase) return { skipped: true };
           const fnUrl = getSendPddEmailFnUrl();
           if (!fnUrl) return { ok: false, reason: "missing_fn_url", fnUrl: "" };
+          try {
+            const { data, error } = await supabase.functions.invoke("send-pdd-email", {
+              body: { name, veids },
+            });
+            if (!error) return { ok: true, status: 200, body: data, fnUrl };
+            console.warn("[send-pdd-email.invoke]", error);
+          } catch (e) {
+            console.warn("[send-pdd-email.invoke]", e);
+          }
           const cfg = loadConfig();
           const apiKey = String(cfg.key || "").trim();
           if (!apiKey) return { ok: false, reason: "missing_anon_key", fnUrl };
@@ -3008,8 +3017,8 @@
                     onChange=${(ev) => setComment(ev.target.value)}
                   />
                 </div>
-                <p class="app-sub" style=${{ margin: "-0.15rem 0 0.1rem" }}>
-                  Ievieto papildus, ja vēlies
+                <p class="app-sub" style=${{ margin: "-0.15rem 0 0.1rem", fontWeight: 700 }}>
+                  <strong>Ievieto papildus, ja vēlies</strong>
                 </p>
                 <div class="field">
                   <label for="preplace">Mani aizvieto</label>
@@ -4322,13 +4331,6 @@
               >
                 <h2 style=${{ margin: 0, fontSize: "1rem" }}>Prombūtnes vēsture</h2>
                 <div class="row" style=${{ gap: "0.35rem", flexWrap: "wrap" }}>
-                  ${!isLocalMode()
-                    ? html`
-                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => void onRefresh()} title="Pārlādēt datus no Supabase">
-                          Atjaunot no DB
-                        </button>
-                      `
-                    : null}
                   ${highlightAbsenceId
                     ? html`
                         <button type="button" class="btn btn-ghost btn-small" onClick=${onClearHighlight}>
@@ -4403,17 +4405,7 @@
                         </div>
                       `
                     : null}
-                  <button
-                    type="button"
-                    class=${`btn btn-small ${myFilterActive ? "btn-danger" : "btn-ghost"}`}
-                    onClick=${() => {
-                      if (myFilterActive) clearFilter("name");
-                      else applyFilter("name", myNameForFilter);
-                      ensureHistoryOpen();
-                    }}
-                  >
-                    Tikai mani
-                  </button>
+                  
                   <!-- (nav) -->
                 </div>
               </div>
@@ -5539,6 +5531,49 @@
             setPendingCitsNav(Boolean(V?.shouldShowPendingCitsNavBadge?.(list, uid, canAppr)));
             setHomeAbsencesSnapshot(Array.isArray(list) ? list : []);
           }, []);
+          useEffect(() => {
+            let cancelled = false;
+            (async () => {
+              if (!session?.user || !supabase) return;
+              if (homeAbsencesSnapshot.length > 0) return;
+              await ensureDbReadableSession();
+              const { data: rows } = await supabase.from("prombutnes_dati").select("*");
+              const { data: profs } = await supabase.from("users").select("*");
+              const { data: typesRows } = await supabase.from("prombutnes_veidi").select("*");
+              if (cancelled) return;
+              const pmap = new Map((profs ?? []).map((p) => [String(p.id), normalizeTeamUserRecord(p)]));
+              const tmap = new Map(
+                (typesRows ?? []).map((t) => {
+                  const nt = normalizeAbsenceTypeRecord(t);
+                  return [String(nt.id), nt];
+                })
+              );
+              const list = (rows ?? [])
+                .map((r) => {
+                  detectAbsenceColumnsFromRow(r);
+                  return normalizeAbsenceRecord(r);
+                })
+                .map((r) => {
+                  const employee = pmap.get(String(r.user_id)) ?? null;
+                  const dn = userDisplayName(employee);
+                  const employeeName =
+                    dn ||
+                    String(r["Vārds uzvārds"] ?? r["Vards uzvards"] ?? "").trim() ||
+                    String(r.user_id ?? "").trim();
+                  return {
+                    ...r,
+                    employee: employee
+                      ? { ...employee, [COL_USER_NAME]: employeeName }
+                      : { id: r.user_id, [COL_USER_NAME]: employeeName },
+                    type: tmap.get(String(r.type_id ?? "")) ?? null,
+                  };
+                });
+              setHomeAbsencesSnapshot(list);
+            })();
+            return () => {
+              cancelled = true;
+            };
+          }, [session?.user, homeAbsencesSnapshot.length]);
           useEffect(() => {
             if (!session?.user) {
               globalThis.__PDD_ACTOR_DISPLAY_NAME__ = "";
