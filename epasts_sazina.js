@@ -115,6 +115,73 @@ async function sendResendEmailStrict(resend, { from, to, subject, text }) {
   return recipients;
 }
 
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function hrefAttr(u) {
+  return String(u ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+async function sendResendHtml(resend, { from, to, subject, html }) {
+  const { error } = await resend.emails.send({
+    from,
+    to: Array.isArray(to) ? to : [to],
+    subject,
+    html,
+  });
+  if (error) throw new Error(error.message || "Neizdevās nosūtīt e-pastu.");
+}
+
+/** Izsauc `api/pdd-resend.js` — tās pašas adreses kā `onRequestCreated`. */
+async function sendCitsPendingNotificationFromApi(resend, fromEmail, { start, end, link = "", applicantEmail = "" }) {
+  const safeStart = escapeHtml(start);
+  const safeEnd = escapeHtml(end);
+  const url = String(link || "").trim() || APPROVAL_LINK;
+  const linkBlock = `<p><a href="${hrefAttr(url)}">Atvērt PDD — Prombūtnes vēsture</a></p>`;
+
+  const htmlManager = `
+    <p>Ir reģistrēts jauns <strong>Cits</strong> prombūtnes pieteikums (gaida apstiprinājumu).</p>
+    <p>Periods: <strong>${safeStart}</strong> — <strong>${safeEnd}</strong></p>
+    ${linkBlock}
+  `;
+
+  const managerSubject = "PDD: Cits — jauns pieteikums (gaida apstiprinājumu)";
+  const notifyTo = uniqEmails([MANAGER_NOTIFY_EMAIL, MANAGER_NOTIFY_COPY_EMAIL]);
+  if (!notifyTo.length) throw new Error("Nav paziņojuma saņēmēju.");
+
+  const sent = [];
+  for (const to of notifyTo) {
+    await sendResendHtml(resend, { from: fromEmail, to, subject: managerSubject, html: htmlManager });
+    sent.push(to);
+  }
+
+  const appEm = String(applicantEmail || "").trim();
+  const inNotifyList = notifyTo.some((e) => norm(appEm) === norm(e));
+  if (appEm.includes("@") && !inNotifyList) {
+    const appUrl = String(link || "").trim() || APPROVAL_LINK;
+    const htmlApp = `
+      <p>Jūsu <strong>Cits</strong> pieteikums ir reģistrēts un nodots saskaņošanai.</p>
+      <p>Periods: <strong>${safeStart}</strong> — <strong>${safeEnd}</strong></p>
+      <p><a href="${hrefAttr(appUrl)}">Saite / atvērt sistēmā</a></p>
+    `;
+    await sendResendHtml(resend, {
+      from: fromEmail,
+      to: appEm,
+      subject: "PDD: Jūsu Cits pieteikums nodots saskaņošanai",
+      html: htmlApp,
+    });
+    sent.push(appEm);
+  }
+  return sent;
+}
+
 async function onRequestCreated({
   supabase,
   resend,
@@ -311,6 +378,7 @@ module.exports = {
   APPROVAL_LINK,
   startsWithCits,
   onRequestCreated,
+  sendCitsPendingNotificationFromApi,
   approveRequest,
   rejectRequest,
   canShowActions,

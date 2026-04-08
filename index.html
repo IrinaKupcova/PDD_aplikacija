@@ -905,6 +905,9 @@
         /** Pilna URL uz Resend API (piem. https://xxx.vercel.app/api/pdd-resend). Tukšs = e-pasti netiek sūtīti. */
         const FILE_PDD_RESEND_API_URL = "";
         const LS_RESEND_API = "pdd_resend_api_url";
+        /** Pilna URL uz Supabase Edge Function send-pdd-email (ja tukšs, tiek veidots no Supabase URL). */
+        const FILE_PDD_EMAIL_FN_URL = "";
+        const LS_PDD_EMAIL_FN_URL = "pdd_send_pdd_email_fn_url";
 
         function loadConfig() {
           const url = FILE_SUPABASE_URL.includes("YOUR_PROJECT")
@@ -930,6 +933,17 @@
             /* ignore */
           }
           return "";
+        }
+
+        function getSendPddEmailFnUrl() {
+          const f = String(FILE_PDD_EMAIL_FN_URL || "").trim().replace(/\/$/, "");
+          if (f) return f;
+          const ls = String(localStorage.getItem(LS_PDD_EMAIL_FN_URL) || "").trim().replace(/\/$/, "");
+          if (ls) return ls;
+          const cfg = loadConfig();
+          const base = normalizeProjectUrl(cfg.url || "");
+          if (!base || !isValidSupabaseProjectUrl(base)) return "";
+          return `${base}/functions/v1/send-pdd-email`;
         }
 
         function normalizeProjectUrl(url) {
@@ -1024,6 +1038,40 @@
             return { ok: r.ok, status: r.status, body: j };
           } catch (e) {
             console.warn("[pdd-resend]", e);
+            return { ok: false, error: e };
+          }
+        }
+
+        async function callSendPddEmail({ name, veids }) {
+          if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !supabase) return { skipped: true };
+          const fnUrl = getSendPddEmailFnUrl();
+          if (!fnUrl) return { ok: false, reason: "missing_fn_url" };
+          const cfg = loadConfig();
+          const apiKey = String(cfg.key || "").trim();
+          if (!apiKey) return { ok: false, reason: "missing_anon_key" };
+          const { data } = await supabase.auth.getSession();
+          const token = String(data?.session?.access_token || "").trim() || apiKey;
+          try {
+            const r = await fetch(fnUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                apikey: apiKey,
+                Authorization: "Bearer " + token,
+              },
+              body: JSON.stringify({ name, veids }),
+            });
+            const txt = await r.text();
+            let j = null;
+            try {
+              j = JSON.parse(txt);
+            } catch {
+              /* ignore */
+            }
+            if (!r.ok) console.warn("[send-pdd-email]", r.status, txt);
+            return { ok: r.ok, status: r.status, body: j, raw: txt };
+          } catch (e) {
+            console.warn("[send-pdd-email]", e);
             return { ok: false, error: e };
           }
         }
@@ -2660,6 +2708,18 @@
                   "prombutne.cits_pieteikts",
                   `Darbinieks ${finalUserId}: ${startDate} — ${endDate}`
                 );
+                const selectedUser = usersForSelect.find((u) => String(u?.id ?? "") === String(finalUserId)) || null;
+                const employeeNameForEmail = String(userDisplayName(selectedUser) || finalUserId).trim();
+                const emailResult = await callSendPddEmail({
+                  name: employeeNameForEmail,
+                  veids: String(typeObj?.name || "Cits"),
+                });
+                if (!emailResult?.ok) {
+                  const msg =
+                    String(emailResult?.body?.error || emailResult?.raw || emailResult?.reason || "").trim() ||
+                    "Nezināma kļūda";
+                  alert("Pieteikums saglabāts, bet e-pasta izsūtīšana neizdevās: " + msg);
+                }
                 void callPddResendApi({
                   action: "cits_absence_created",
                   absence_id: rowId,
@@ -3960,8 +4020,7 @@
             return (isAdmin || own) && !isApprovedCitsAbsence(a);
           }
           function canDeleteAbsence(a) {
-            const own = approverView ? isOwnAbsence(a) : true;
-            return own;
+            return canEditAbsence(a);
           }
           const anyActions = filteredList.some((a) => {
             const canEdit = canEditAbsence(a);

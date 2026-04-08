@@ -9,6 +9,7 @@
 
 const { createClient } = require("@supabase/supabase-js");
 const { Resend } = require("resend");
+const { sendCitsPendingNotificationFromApi } = require("../epasts_sazina.js");
 
 function normLoose(v) {
   return String(v ?? "")
@@ -97,9 +98,19 @@ async function callerCanApprove(admin, authUid) {
   return true;
 }
 
-async function canCreateNotify(admin, jwtId, ownerId) {
+async function canCreateNotify(admin, jwtId, ownerId, jwtEmail) {
   if (!jwtId || !ownerId) return false;
   if (jwtId === ownerId) return true;
+  const jwtEm = normLoose(String(jwtEmail || "").trim());
+  if (jwtEm) {
+    const { data: ownerRow } = await admin
+      .from("users")
+      .select("email, \"i-mail\", \"e-mail\", \"e-pasts\"")
+      .eq("id", ownerId)
+      .maybeSingle();
+    const ownerEm = normLoose(pickUserEmailRow(ownerRow));
+    if (ownerEm && jwtEm === ownerEm) return true;
+  }
   const { data: u } = await admin.from("users").select("role").eq("id", jwtId).maybeSingle();
   const role = String(u?.role ?? "").trim().toLowerCase();
   return role === "manager" || role === "admin";
@@ -187,6 +198,7 @@ module.exports = async (req, res) => {
     return res.end(JSON.stringify({ error: "Nederīgs sesijas tokens" }));
   }
   const jwtId = userData.user.id;
+  const jwtEmail = String(userData.user.email || "").trim();
 
   let body = {};
   try {
@@ -214,7 +226,7 @@ module.exports = async (req, res) => {
         return res.end(JSON.stringify({ error: "Ieraksts nav atrasts" }));
       }
       const ownerId = pickOwnerId(row);
-      const okCreate = await canCreateNotify(admin, jwtId, ownerId);
+      const okCreate = await canCreateNotify(admin, jwtId, ownerId, jwtEmail);
       if (!okCreate) {
         res.statusCode = 403;
         return res.end(JSON.stringify({ error: "Pieeja liegta" }));
@@ -225,42 +237,17 @@ module.exports = async (req, res) => {
         res.statusCode = 400;
         return res.end(JSON.stringify({ error: "Nav Cits veids" }));
       }
-      const fromBodyMgr = String(body.notify_manager_email || "").trim();
-      const adminEmail =
-        (fromBodyMgr.includes("@") ? fromBodyMgr : "") || (await getFirstAdminOrManagerEmail(admin));
       const { data: applicantRow } = await admin.from("users").select("*").eq("id", ownerId).maybeSingle();
       const applicantEmail = pickUserEmailRow(applicantRow);
-      if (!adminEmail && !applicantEmail) {
-        res.statusCode = 400;
-        return res.end(JSON.stringify({ error: "Nav e-pasta adreses (admin/vadītājs vai pieteicējs)" }));
-      }
       const start = row.Sakuma_datums ?? row.sakuma_datums ?? row.start_date ?? "";
       const end = row.Beigu_datums ?? row.beigu_datums ?? row.end_date ?? "";
       const link = appBase ? `${appBase}?citsRow=${encodeURIComponent(absenceId)}` : "";
-      const htmlAdmin = `
-        <p>Ir reģistrēts jauns <strong>Cits</strong> prombūtnes pieteikums (gaida apstiprinājumu).</p>
-        <p>Periods: <strong>${start}</strong> — <strong>${end}</strong></p>
-        ${link ? `<p><a href="${link}">Atvērt PDD — Prombūtnes vēsture</a></p>` : ""}
-      `;
-      const htmlApp = `
-        <p>Jūsu <strong>Cits</strong> pieteikums ir reģistrēts un nodots saskaņošanai.</p>
-        <p>Periods: <strong>${start}</strong> — <strong>${end}</strong></p>
-        ${link ? `<p><a href="${link}">Saite uz ierakstu</a></p>` : ""}
-      `;
-      const sent = await sendAdminApplicant(
-        resend,
-        from,
-        adminEmail,
+      const sent = await sendCitsPendingNotificationFromApi(resend, from, {
+        start,
+        end,
+        link,
         applicantEmail,
-        {
-          subject: "PDD: Cits — jauns pieteikums (gaida apstiprinājumu)",
-          html: htmlAdmin,
-        },
-        {
-          subject: "PDD: Jūsu Cits pieteikums nodots saskaņošanai",
-          html: htmlApp,
-        }
-      );
+      });
       res.statusCode = 200;
       return res.end(JSON.stringify({ ok: true, sent }));
     }
