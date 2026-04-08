@@ -234,22 +234,20 @@ function editAktualitate(id) {
   setFormMode(true);
 }
 
-function visibleAktualitatesToday() {
+function visibleAktualitatesActive() {
   const today = ymd(new Date());
   const cleaned = cleanExpired(loadAktualitates());
   saveAktualitates(cleaned);
   return cleaned.filter((x) => {
-    const s = pick(x.start || "");
     const e = pick(x.end || "");
-    if (!s || !e) return false;
-    return s <= today && today <= e;
+    return !e || e >= today;
   });
 }
 
 function renderTodayInfo({ html, absences }) {
   if (typeof html !== "function") return null;
   const awayRows = todayRows(absences);
-  const aktualitates = visibleAktualitatesToday();
+  const aktualitates = visibleAktualitatesActive();
   const today = ymd(new Date());
   return html`
     <section
