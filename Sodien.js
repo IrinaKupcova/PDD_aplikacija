@@ -89,6 +89,34 @@ let sodienUiOpts = {
 };
 let selectedEditorImage = null;
 let selectedEditorAttachment = null;
+let sodienDraft = {
+  usePeriod: false,
+  start: "",
+  end: "",
+};
+
+function ensureSodienDraftDefaults() {
+  const today = ymd(new Date());
+  if (!sodienDraft.start) sodienDraft.start = today;
+  if (!sodienDraft.end) sodienDraft.end = sodienDraft.start || today;
+}
+
+function onToggleUsePeriod(ev) {
+  sodienDraft.usePeriod = Boolean(ev?.target?.checked);
+}
+
+function onStartDateChange(ev) {
+  const v = pick(ev?.target?.value || "");
+  if (!v) return;
+  sodienDraft.start = v;
+  if (!sodienDraft.end) sodienDraft.end = v;
+}
+
+function onEndDateChange(ev) {
+  const v = pick(ev?.target?.value || "");
+  if (!v) return;
+  sodienDraft.end = v;
+}
 
 function ymd(d) {
   const dt = d instanceof Date ? d : new Date(d);
@@ -582,11 +610,12 @@ async function addAktualitate() {
     return;
   }
   const today = ymd(new Date());
+  ensureSodienDraftDefaults();
   const usePeriodChecked = Boolean(document.getElementById("sodien-use-period")?.checked);
-  const startPicked = pick(document.getElementById("sodien-start")?.value || today);
-  const endPicked = pick(document.getElementById("sodien-end")?.value || startPicked || today);
+  const startPicked = pick(document.getElementById("sodien-start")?.value || sodienDraft.start || today);
+  const endPicked = pick(document.getElementById("sodien-end")?.value || sodienDraft.end || startPicked || today);
   // Ja lietotājs izvēlas datumus, traktējam to kā periodu pat tad, ja checkbox nav ieķeksējies.
-  const usePeriod = usePeriodChecked || startPicked !== today || endPicked !== today;
+  const usePeriod = Boolean(sodienDraft.usePeriod || usePeriodChecked || startPicked !== today || endPicked !== today);
   const start = usePeriod ? startPicked : today;
   const end = usePeriod ? endPicked : start || today;
   if (start && end && end < start) {
@@ -709,6 +738,7 @@ function resetAktualitateForm() {
   const editField = currentEditIdField();
   if (editField) editField.value = "";
   const today = ymd(new Date());
+  sodienDraft = { usePeriod: false, start: today, end: today };
   const cb = document.getElementById("sodien-use-period");
   const start = document.getElementById("sodien-start");
   const end = document.getElementById("sodien-end");
@@ -732,6 +762,11 @@ function editAktualitate(id) {
     selectedEditorAttachment.classList.remove("sodien-selected-attachment");
     selectedEditorAttachment = null;
   }
+  sodienDraft = {
+    usePeriod: Boolean(item.use_period),
+    start: pick(item.start || ymd(new Date())),
+    end: pick(item.end || item.start || ymd(new Date())),
+  };
   const editField = currentEditIdField();
   if (editField) editField.value = String(item.id);
   const cb = document.getElementById("sodien-use-period");
@@ -826,6 +861,7 @@ const sodienAktHtmlBox = {
 function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, useSupabase, syncError, loadingAktualitates }) {
   if (typeof html !== "function") return null;
   ensureSodienAktStyleOnce();
+  ensureSodienDraftDefaults();
   sodienUiOpts = {
     useSupabase: Boolean(useSupabase),
     refreshAktualitates: typeof refreshAktualitates === "function" ? refreshAktualitates : null,
@@ -838,7 +874,7 @@ function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, us
       : Array.isArray(aktualitates)
         ? aktualitates
         : visibleAktualitatesActive();
-  const today = ymd(new Date());
+  const today = sodienDraft.start || ymd(new Date());
   return html`
     <section
       id="sodien-aktualitates-panel"
@@ -1017,17 +1053,17 @@ function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, us
           </div>
 
           <label style=${{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
-            <input id="sodien-use-period" type="checkbox" />
+            <input id="sodien-use-period" type="checkbox" checked=${Boolean(sodienDraft.usePeriod)} onChange=${onToggleUsePeriod} />
             Atzīmēt periodu
           </label>
           <div class="row" style=${{ gap: "0.75rem" }}>
             <div class="field" style=${{ flex: "1 1 140px" }}>
               <label>Sākums</label>
-              <input id="sodien-start" type="date" class="input" value=${today} />
+              <input id="sodien-start" type="date" class="input" value=${sodienDraft.start || today} onInput=${onStartDateChange} />
             </div>
             <div class="field" style=${{ flex: "1 1 140px" }}>
               <label>Beigas</label>
-              <input id="sodien-end" type="date" class="input" value=${today} />
+              <input id="sodien-end" type="date" class="input" value=${sodienDraft.end || today} onInput=${onEndDateChange} />
             </div>
           </div>
 
