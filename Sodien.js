@@ -231,6 +231,16 @@ function rowFromDb(r, nameMap) {
   };
 }
 
+function applyLegacyMatchFilter(q, item) {
+  const html = pick(item?.html);
+  const start = pick(item?.start);
+  const end = pick(item?.end);
+  const autors = pick(item?.autors_id);
+  let qq = q.eq("Kas_sodien_vel_aktuals", html).eq("Sakums", start).eq("Beigas", end);
+  if (autors) qq = qq.eq("Autors", autors);
+  return qq;
+}
+
 function visibleAktualitatesActive() {
   const today = ymd(new Date());
   const cleaned = cleanExpired(loadAktualitates());
@@ -375,11 +385,18 @@ async function addAktualitate() {
       const t = await resolveAktualitatesTableName(sb);
       if (editId) {
         if (String(editId).startsWith("syn-")) {
-          alert("Šim ierakstam nav datubāzes id — labošana nav pieejama. Pievienojiet tabulai id (uuid) kolonnu.");
-          return;
+          const cur = (sodienUiOpts.__lastAktList || []).find((x) => String(x?.id) === String(editId));
+          if (!cur) {
+            alert("Neizdevās atrast labojamo ierakstu.");
+            return;
+          }
+          const q = applyLegacyMatchFilter(sb.from(t).update(payload), cur);
+          const { error } = await q;
+          if (error) throw error;
+        } else {
+          const { error } = await sb.from(t).update(payload).eq("id", editId);
+          if (error) throw error;
         }
-        const { error } = await sb.from(t).update(payload).eq("id", editId);
-        if (error) throw error;
       } else {
         const { data: sess } = await sb.auth.getSession();
         const uid = sess?.session?.user?.id;
@@ -426,14 +443,21 @@ async function deleteAktualitate(id) {
   const sb = globalThis.__PDD_SUPABASE__;
   const useRemote = Boolean(sodienUiOpts.useSupabase && sb);
   if (useRemote) {
-    if (String(id).startsWith("syn-")) {
-      alert("Šim ierakstam nav datubāzes id — dzēšanai tabulā vajag id (uuid) kolonnu.");
-      return;
-    }
     try {
       const t = await resolveAktualitatesTableName(sb);
-      const { error } = await sb.from(t).delete().eq("id", id);
-      if (error) throw error;
+      if (String(id).startsWith("syn-")) {
+        const cur = (sodienUiOpts.__lastAktList || []).find((x) => String(x?.id) === String(id));
+        if (!cur) {
+          alert("Neizdevās atrast dzēšamo ierakstu.");
+          return;
+        }
+        const q = applyLegacyMatchFilter(sb.from(t).delete(), cur);
+        const { error } = await q;
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from(t).delete().eq("id", id);
+        if (error) throw error;
+      }
     } catch (e) {
       alert("Neizdevās dzēst: " + (e?.message || String(e)));
       return;
