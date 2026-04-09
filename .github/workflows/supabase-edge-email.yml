@@ -1,0 +1,45 @@
+# Automātiski: Resend secrets + Edge Function „sendEmail” deploy uz Supabase.
+# Vienreiz: GitHub repo → Settings → Secrets and variables → Actions → New repository secret:
+#   SUPABASE_ACCESS_TOKEN   (https://supabase.com/dashboard/account/tokens)
+#   SUPABASE_PROJECT_REF    (Settings → General → Reference ID, piem. fdnkvecgqetmwilwolgt)
+#   RESEND_API_KEY          (Resend → API Keys)
+#   RESEND_FROM             (piem. PDD <onboarding@resend.dev> vai verificēts domēns)
+# Tālāk katrs push uz main/master vai Actions → šī darbplūsma → Run workflow.
+name: Supabase Edge — sendEmail + Resend
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' && secrets.SUPABASE_PROJECT_REF != '' }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Resend secrets uz Supabase Edge
+        if: ${{ secrets.RESEND_API_KEY != '' }}
+        env:
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM: ${{ secrets.RESEND_FROM }}
+        run: |
+          set -e
+          if [ -n "$RESEND_FROM" ]; then
+            supabase secrets set --project-ref "$REF" RESEND_API_KEY="$RESEND_API_KEY" RESEND_FROM="$RESEND_FROM"
+          else
+            supabase secrets set --project-ref "$REF" RESEND_API_KEY="$RESEND_API_KEY"
+          fi
+
+      - name: Deploy sendEmail (--no-verify-jwt)
+        env:
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: supabase functions deploy sendEmail --project-ref "$REF" --no-verify-jwt

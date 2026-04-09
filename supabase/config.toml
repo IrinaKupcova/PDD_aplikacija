@@ -1,2 +1,12 @@
 # Projekta ref (Dashboard → Settings → General → Reference ID)
 project_id = "fdnkvecgqetmwilwolgt"
+
+# Bez šī bieži HTTP 401 no pārlūka (īpaši ar sb_publishable_* atslēgu vai lietotāja JWT).
+[functions.sendEmail]
+verify_jwt = false
+
+[functions."resend-email"]
+verify_jwt = false
+
+[functions."send-pdd-email"]
+verify_jwt = false

@@ -724,7 +724,7 @@ async function deleteAktualitate(id) {
 
 function setFormMode(isEdit) {
   const btn = document.getElementById("sodien-submit-btn");
-  if (btn) btn.textContent = isEdit ? "Saglabāt" : "Pievienot";
+  if (btn) btn.textContent = isEdit ? "Saglabāt" : "Pievienot aktualitāti";
 }
 
 function resetAktualitateForm() {
@@ -982,7 +982,7 @@ function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, us
           : html`<p style=${{ margin: "0 0 0.75rem", color: "var(--muted)" }}>Papildu aktualitātes nav pievienotas.</p>`}
 
       <details id="sodien-editor-details">
-        <summary style=${{ cursor: "pointer", fontWeight: 600 }}>Pievienot</summary>
+        <summary style=${{ cursor: "pointer", fontWeight: 600 }}>Pievienot aktualitāti</summary>
         <div class="stack" style=${{ marginTop: "0.6rem", gap: "0.5rem" }}>
           <input id="sodien-edit-id" type="hidden" value="" />
           <div class="row" style=${{ gap: "0.35rem", flexWrap: "wrap" }}>
@@ -1088,7 +1088,7 @@ function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, us
           </div>
 
           <div class="row">
-            <button id="sodien-submit-btn" type="button" class="btn btn-primary btn-small" onClick=${() => void addAktualitate()}>Pievienot</button>
+            <button id="sodien-submit-btn" type="button" class="btn btn-primary btn-small" onClick=${() => void addAktualitate()}>Pievienot aktualitāti</button>
             <button type="button" class="btn btn-ghost btn-small" onClick=${resetAktualitateForm}>Atcelt</button>
           </div>
         </div>

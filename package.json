@@ -6,6 +6,7 @@
     "node": ">=18"
   },
   "scripts": {
+    "deploy:send-email": "supabase functions deploy sendEmail --no-verify-jwt",
     "deploy:resend-email": "supabase functions deploy resend-email --no-verify-jwt"
   },
   "devDependencies": {

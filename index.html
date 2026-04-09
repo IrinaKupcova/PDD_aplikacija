@@ -439,7 +439,7 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script src="./Komanda.js?v=20260407"></script>
-      <script src="./Sodien.js?v=2026040912"></script>
+      <script src="./Sodien.js?v=2026040913"></script>
       <script src="./Kalendars.js?v=20260407"></script>
       <script src="./Filtr.js?v=20260407"></script>
       <script src="./Saskaņošana.js?v=20260407"></script>
@@ -998,9 +998,10 @@
         const TIKAI_VIENKARSI_SKATS = false;
 
         /*
-         * „Cits” e-pasts: Edge Function `resend-email` jābūt tam pašam Supabase projektam kā FILE_SUPABASE_URL.
-         * Supabase → Edge Functions → Secrets: RESEND_API_KEY, RESEND_FROM (verificēts Resend).
-         * Deploy (datorā ar CLI): supabase login && supabase functions deploy resend-email --no-verify-jwt
+         * „Cits” e-pasts: Edge Function `sendEmail` (vai `resend-email`) — tam pašam projektam kā FILE_SUPABASE_URL.
+         * Ja pārlūkā „Failed to fetch”: bieži funkcijas slug nav deploy (404 uz OPTIONS) — šajā projektā strādā `sendEmail`.
+         * Secrets: RESEND_API_KEY, RESEND_FROM. Ja invoke dod HTTP 401: sendEmail → Settings → izslēdz „Verify JWT with legacy secret” vai deploy ar --no-verify-jwt.
+         * Deploy: supabase functions deploy sendEmail --no-verify-jwt
          * Ja izmanto citu projektu nekā šajā failā — nomaini URL + anon/public key (Settings → API).
          */
         // Publisko atslēgu kopē: Supabase → Project Settings → API → anon / publishable (ne service_role).
@@ -1013,8 +1014,8 @@
         /** Pilna URL uz atsevišķu Resend API (piem. Vercel: …/api/pdd-resend). Tukšs = OK uz GitHub Pages; tad tikai Edge Function. */
         const FILE_PDD_RESEND_API_URL = "";
         const LS_RESEND_API = "pdd_resend_api_url";
-        /** Pilna URL uz Edge Function (prioritāte: resend-email). Ja tukšs — tiek veidots no FILE_SUPABASE_URL. */
-        const FILE_PDD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/resend-email";
+        /** Pilna URL uz Edge Function. Ja tukšs — no FILE_SUPABASE_URL + /functions/v1/sendEmail */
+        const FILE_PDD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendEmail";
         const LS_PDD_EMAIL_FN_URL = "pdd_send_pdd_email_fn_url";
         /** Testa SMS numurs "Cits" pieteikuma paziņojumam (E.164 formāts). */
         const FILE_PDD_SMS_NOTIFY_PHONE = "+37125935288";
@@ -1053,7 +1054,7 @@
           const cfg = loadConfig();
           const base = normalizeProjectUrl(cfg.url || "");
           if (!base || !isValidSupabaseProjectUrl(base)) return "";
-          return `${base}/functions/v1/resend-email`;
+          return `${base}/functions/v1/sendEmail`;
         }
 
         function normalizeProjectUrl(url) {
@@ -1162,16 +1163,10 @@
           return body.success === true || body.ok === true;
         }
 
+        /** Tikai viens URL — citādi pārlūks mēģina arī nedepployotus slug (404 OPTIONS → „Failed to fetch”). */
         function getEdgeFnCandidateUrls(primaryFnUrl) {
           const p = String(primaryFnUrl || "").trim().replace(/\/+$/, "");
-          if (!p) return [];
-          const slugs = ["resend-email", "sendEmail", "send-pdd-email"];
-          const m = p.match(/^(https:\/\/[^/]+\/functions\/v1)\/([^/]+)$/i);
-          if (m) {
-            const base = m[1];
-            return [...new Set(slugs.map((slug) => `${base}/${slug}`))];
-          }
-          return [p];
+          return p ? [p] : [];
         }
 
         async function getAccessTokenForFunctions() {
@@ -1196,7 +1191,7 @@
           const baseFromFile = normalizeProjectUrl(cfg.url || "");
           const fnUrl =
             (baseFromClient && /^https:\/\/[a-z0-9][a-z0-9-]*\.supabase\.co$/i.test(baseFromClient)
-              ? `${baseFromClient}/functions/v1/resend-email`
+              ? `${baseFromClient}/functions/v1/sendEmail`
               : "") || getSendPddEmailFnUrl();
           if (!fnUrl) return { ok: false, reason: "missing_fn_url", fnUrl: "" };
 
@@ -1271,29 +1266,44 @@
             });
           }
 
-          const invokeNames = ["resend-email", "sendEmail", "send-pdd-email"];
+          const invokeNames = ["sendEmail", "resend-email", "send-pdd-email"];
+          const invokeHeaderVariants = [
+            {
+              via: "invoke_bearer_publishable",
+              headers: { Authorization: "Bearer " + apiKey, apikey: apiKey },
+            },
+            { via: "invoke_default_session", headers: null },
+          ];
+          if (accessToken) {
+            invokeHeaderVariants.splice(1, 0, {
+              via: "invoke_bearer_session_jwt",
+              headers: { Authorization: "Bearer " + accessToken, apikey: apiKey },
+            });
+          }
           for (const fnName of invokeNames) {
-            try {
-              const { data, error } = await supabase.functions.invoke(fnName, {
-                body: emailPayload,
-              });
-              if (!error && isSendPddEmailResponseOk(data, true)) {
-                return { ok: true, status: 200, body: data, fnUrl };
+            for (const hv of invokeHeaderVariants) {
+              try {
+                const invokeOpts = { body: emailPayload };
+                if (hv.headers) invokeOpts.headers = { ...hv.headers };
+                const { data, error } = await supabase.functions.invoke(fnName, invokeOpts);
+                if (!error && isSendPddEmailResponseOk(data, true)) {
+                  return { ok: true, status: 200, body: data, fnUrl };
+                }
+                failures.push({
+                  via: hv.via,
+                  target: fnName,
+                  status: error?.context?.status,
+                  error: error ? String(error?.message || error) : null,
+                  body: data || null,
+                });
+                if (error) console.warn("[send-pdd-email invoke]", hv.via, fnName, error.message || error, error);
+                if (!error && data) {
+                  console.warn("[send-pdd-email invoke]", hv.via, fnName, "non-ok body", data);
+                }
+              } catch (e) {
+                failures.push({ via: hv.via, target: fnName, error: String(e?.message || e) });
+                console.warn("[send-pdd-email invoke]", hv.via, fnName, e);
               }
-              failures.push({
-                via: "invoke",
-                target: fnName,
-                status: error?.context?.status,
-                error: error ? String(error?.message || error) : null,
-                body: data || null,
-              });
-              if (error) console.warn("[send-pdd-email invoke]", fnName, error.message || error, error);
-              if (!error && data) {
-                console.warn("[send-pdd-email invoke]", fnName, "non-ok body", data);
-              }
-            } catch (e) {
-              failures.push({ via: "invoke", target: fnName, error: String(e?.message || e) });
-              console.warn("[send-pdd-email invoke]", fnName, e);
             }
           }
           return { ok: false, reason: "all_email_function_attempts_failed", fnUrl, body: { failures } };
@@ -3202,6 +3212,15 @@
                       notify_phone: FILE_PDD_SMS_NOTIFY_PHONE,
                     });
                 if (!emailResult?.ok && !resendResult?.ok) {
+                  const manualLink = `${window.location.href.split("?")[0]}?citsRow=${encodeURIComponent(rowId)}`;
+                  openManualCitsEmailFallback({
+                    name: employeeNameForEmail,
+                    veids: String(typeObj?.name || "Cits"),
+                    startDate,
+                    endDate,
+                    link: manualLink,
+                  });
+
                   const edgeErr =
                     String(
                       emailResult?.body?.error ||
@@ -3209,7 +3228,7 @@
                         emailResult?.error?.message ||
                         emailResult?.error ||
                         emailResult?.reason ||
-                        ""
+                        "",
                     ).trim() || "Nezināma kļūda";
                   const edgeFailures = Array.isArray(emailResult?.body?.failures) ? emailResult.body.failures : [];
                   const edgeFailuresText = edgeFailures.length
@@ -3255,18 +3274,29 @@
                     ? ` (HTTP ${resendResult.status})`
                     : "";
 
-                  alert(
-                    "Pieteikums saglabāts, bet e-pasta izsūtīšana neizdevās.\n\n" +
-                      `Edge Function: ${edgeErr}${edgeStatus}${edgeWhere ? `\nURL: ${edgeWhere}` : ""}${edgeFailuresText}\n` +
-                      `API fallback: ${apiErr}${apiStatus}`
+                  const has401 = edgeFailures.some(
+                    (f) =>
+                      Number(f?.status) === 401 ||
+                      String(f?.error || f?.body?.error || "").includes("401"),
                   );
-                  openManualCitsEmailFallback({
-                    name: employeeNameForEmail,
-                    veids: String(typeObj?.name || "Cits"),
-                    startDate,
-                    endDate,
-                    link: `${window.location.href.split("?")[0]}?citsRow=${encodeURIComponent(rowId)}`,
-                  });
+                  const hint401 = has401
+                    ? "\n\nĀtri: Edge „sendEmail” → Settings → izslēdz „Verify JWT with legacy secret”, vai repo darbplūsma supabase-edge-email.yml (automātisks deploy)."
+                    : "";
+
+                  const techBlock =
+                    `Edge Function: ${edgeErr}${edgeStatus}${edgeWhere ? `\nURL: ${edgeWhere}` : ""}${edgeFailuresText}\n` +
+                    `API fallback: ${apiErr}${apiStatus}` +
+                    hint401;
+                  try {
+                    console.error("[PDD Cits e-pasts]", techBlock);
+                  } catch {
+                    /* ignore */
+                  }
+                  alert(
+                    "Pieteikums saglabāts. E-pasta programmā ir sagatavota vēstule vadītājam — lūdzu nosūti to.\n\n" +
+                      "Automātiskais sūtīšanas mēģinājums šoreiz nesanāca. Tehnisko tekstu meklē pārlūkā F12 → Console (sarkanais „[PDD Cits e-pasts]”)." +
+                      hint401,
+                  );
                 }
                 const base = window.location.href.split("?")[0];
                 const link = `${base}?citsRow=${encodeURIComponent(rowId)}`;
