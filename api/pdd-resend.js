@@ -154,6 +154,47 @@ async function sendAdminApplicant(resend, from, adminEmail, applicantEmail, pack
   return sent;
 }
 
+function normalizePhone(v) {
+  return String(v ?? "").trim().replace(/\s+/g, "");
+}
+
+async function sendSmsIfConfigured({ toPhone, message }) {
+  const to = normalizePhone(toPhone);
+  if (!to) return { ok: false, skipped: true, reason: "missing_to_phone" };
+  const sid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
+  const token = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
+  const from = normalizePhone(process.env.TWILIO_FROM_NUMBER);
+  if (!sid || !token || !from) {
+    return { ok: false, skipped: true, reason: "twilio_not_configured" };
+  }
+  const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const body = new URLSearchParams({
+    To: to,
+    From: from,
+    Body: String(message || "").slice(0, 1500),
+  });
+  const r = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+  const txt = await r.text();
+  let parsed = null;
+  try {
+    parsed = txt ? JSON.parse(txt) : null;
+  } catch {
+    parsed = txt;
+  }
+  if (!r.ok) {
+    return { ok: false, skipped: false, reason: "twilio_error", details: parsed };
+  }
+  return { ok: true, sid: parsed?.sid || null };
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -248,8 +289,17 @@ module.exports = async (req, res) => {
         link,
         applicantEmail,
       });
+      const smsTo =
+        String(body.notify_phone || "").trim() ||
+        String(process.env.PDD_SMS_TEST_TO || "").trim();
+      const sms = await sendSmsIfConfigured({
+        toPhone: smsTo,
+        message:
+          `PDD: jauns "Cits" pieteikums (${start} - ${end}). ` +
+          (link ? `Apstiprināšana: ${link}` : "Ieej PDD aplikācijā."),
+      });
       res.statusCode = 200;
-      return res.end(JSON.stringify({ ok: true, sent }));
+      return res.end(JSON.stringify({ ok: true, sent, sms }));
     }
 
     if (action === "cits_absence_decided") {

@@ -1008,9 +1008,11 @@
         /** Pilna URL uz Resend API (piem. https://xxx.vercel.app/api/pdd-resend). Tukšs = e-pasti netiek sūtīti. */
         const FILE_PDD_RESEND_API_URL = "";
         const LS_RESEND_API = "pdd_resend_api_url";
-        /** Pilna URL uz Supabase Edge Function send-pdd-email (ja tukšs, tiek veidots no Supabase URL). */
-        const FILE_PDD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/send-pdd-email";
+        /** Pilna URL uz Supabase Edge Function sendEmail (ja tukšs, tiek veidots no Supabase URL). */
+        const FILE_PDD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendEmail";
         const LS_PDD_EMAIL_FN_URL = "pdd_send_pdd_email_fn_url";
+        /** Testa SMS numurs "Cits" pieteikuma paziņojumam (E.164 formāts). */
+        const FILE_PDD_SMS_NOTIFY_PHONE = "+37125935288";
 
         function loadConfig() {
           const url = FILE_SUPABASE_URL.includes("YOUR_PROJECT")
@@ -1046,7 +1048,7 @@
           const cfg = loadConfig();
           const base = normalizeProjectUrl(cfg.url || "");
           if (!base || !isValidSupabaseProjectUrl(base)) return "";
-          return `${base}/functions/v1/send-pdd-email`;
+          return `${base}/functions/v1/sendEmail`;
         }
 
         function normalizeProjectUrl(url) {
@@ -1156,10 +1158,13 @@
         function getEdgeFnCandidateUrls(primaryFnUrl) {
           const p = String(primaryFnUrl || "").trim().replace(/\/+$/, "");
           if (!p) return [];
-          const out = [p];
-          if (p.endsWith("/send-pdd-email")) out.push(p.replace(/\/send-pdd-email$/i, "/sendEmail"));
-          else if (p.endsWith("/sendEmail")) out.push(p.replace(/\/sendEmail$/i, "/send-pdd-email"));
-          return [...new Set(out)];
+          const slugs = ["sendEmail", "resend-email", "send-pdd-email"];
+          const m = p.match(/^(https:\/\/[^/]+\/functions\/v1)\/([^/]+)$/i);
+          if (m) {
+            const base = m[1];
+            return [...new Set(slugs.map((slug) => `${base}/${slug}`))];
+          }
+          return [p];
         }
 
         async function getAccessTokenForFunctions() {
@@ -1184,30 +1189,19 @@
           const baseFromFile = normalizeProjectUrl(cfg.url || "");
           const fnUrl =
             (baseFromClient && /^https:\/\/[a-z0-9][a-z0-9-]*\.supabase\.co$/i.test(baseFromClient)
-              ? `${baseFromClient}/functions/v1/send-pdd-email`
+              ? `${baseFromClient}/functions/v1/sendEmail`
               : "") || getSendPddEmailFnUrl();
           if (!fnUrl) return { ok: false, reason: "missing_fn_url", fnUrl: "" };
 
           const accessToken = await getAccessTokenForFunctions();
-          if (!accessToken) {
-            return {
-              ok: false,
-              reason: "no_jwt",
-              fnUrl,
-              body: {
-                error:
-                  "Nav derīga sesijas žetona (JWT). Supabase → Authentication → Providers → ieslēdz „Anonymous sign-ins”, vai lapā lieto klasisko anon atslēgu eyJ….",
-              },
-            };
-          }
 
-          async function tryFetch(url) {
+          async function tryFetchWithBearer(url, bearer) {
             const r = await fetch(url, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
                 apikey: apiKey,
-                Authorization: "Bearer " + accessToken,
+                Authorization: "Bearer " + String(bearer || "").trim(),
               },
               body: JSON.stringify({ name, veids }),
             });
@@ -1225,17 +1219,46 @@
           }
 
           const fetchUrls = getEdgeFnCandidateUrls(fnUrl);
+          const failures = [];
+          // 1) Publishable/anon kā Bearer — atbilst Supabase „Verify JWT with legacy secret” + Invoke paraugam.
           for (const u of fetchUrls) {
             try {
-              const out = await tryFetch(u);
+              const out = await tryFetchWithBearer(u, apiKey);
               if (out.ok) return out;
+              failures.push({
+                via: "fetch_publishable_bearer",
+                target: u,
+                status: out.status,
+                body: out.body || out.raw || null,
+              });
               console.warn("[send-pdd-email fetch]", u, out.status, out.raw || out.body);
             } catch (e) {
+              failures.push({ via: "fetch_publishable_bearer", target: u, error: String(e?.message || e) });
               console.warn("[send-pdd-email fetch]", u, e);
             }
           }
+          // 2) Lietotāja / anon sesijas JWT
+          if (accessToken) {
+            for (const u of fetchUrls) {
+              try {
+                const out = await tryFetchWithBearer(u, accessToken);
+                if (out.ok) return out;
+                failures.push({ via: "fetch_session_jwt", target: u, status: out.status, body: out.body || out.raw || null });
+                console.warn("[send-pdd-email fetch]", u, out.status, out.raw || out.body);
+              } catch (e) {
+                failures.push({ via: "fetch_session_jwt", target: u, error: String(e?.message || e) });
+                console.warn("[send-pdd-email fetch]", u, e);
+              }
+            }
+          } else {
+            failures.push({
+              via: "note",
+              message:
+                "Nav sesijas JWT (eyJ…). Ja Edge Function prasa Bearer, izmanto publishable atslēgu abos headeros vai ieslēdz Anonymous sign-ins.",
+            });
+          }
 
-          const invokeNames = ["send-pdd-email", "sendEmail"];
+          const invokeNames = ["sendEmail", "resend-email", "send-pdd-email"];
           for (const fnName of invokeNames) {
             try {
               const { data, error } = await supabase.functions.invoke(fnName, {
@@ -1244,15 +1267,23 @@
               if (!error && isSendPddEmailResponseOk(data, true)) {
                 return { ok: true, status: 200, body: data, fnUrl };
               }
+              failures.push({
+                via: "invoke",
+                target: fnName,
+                status: error?.context?.status,
+                error: error ? String(error?.message || error) : null,
+                body: data || null,
+              });
               if (error) console.warn("[send-pdd-email invoke]", fnName, error.message || error, error);
               if (!error && data) {
                 console.warn("[send-pdd-email invoke]", fnName, "non-ok body", data);
               }
             } catch (e) {
+              failures.push({ via: "invoke", target: fnName, error: String(e?.message || e) });
               console.warn("[send-pdd-email invoke]", fnName, e);
             }
           }
-          return { ok: false, reason: "all_email_function_attempts_failed", fnUrl };
+          return { ok: false, reason: "all_email_function_attempts_failed", fnUrl, body: { failures } };
         }
 
         function openManualCitsEmailFallback({ name, veids, startDate, endDate, link }) {
@@ -3154,6 +3185,7 @@
                       action: "cits_absence_created",
                       absence_id: rowId,
                       notify_manager_email: to,
+                      notify_phone: FILE_PDD_SMS_NOTIFY_PHONE,
                     });
                 if (!emailResult?.ok && !resendResult?.ok) {
                   const edgeErr =
@@ -3165,6 +3197,19 @@
                         emailResult?.reason ||
                         ""
                     ).trim() || "Nezināma kļūda";
+                  const edgeFailures = Array.isArray(emailResult?.body?.failures) ? emailResult.body.failures : [];
+                  const edgeFailuresText = edgeFailures.length
+                    ? "\nMēģinājumi:\n" +
+                      edgeFailures
+                        .map((f, i) => {
+                          const via = String(f?.via || "?");
+                          const target = String(f?.target || "?");
+                          const st = f?.status != null ? ` HTTP ${f.status}` : "";
+                          const er = String(f?.error || f?.body?.error || "").trim();
+                          return `${i + 1}) ${via} → ${target}${st}${er ? ` :: ${er}` : ""}`;
+                        })
+                        .join("\n")
+                    : "";
                   const edgeWhere = String(emailResult?.fnUrl || "").trim();
                   const edgeStatus = Number.isFinite(Number(emailResult?.status))
                     ? ` (HTTP ${emailResult.status})`
@@ -3184,7 +3229,7 @@
 
                   alert(
                     "Pieteikums saglabāts, bet e-pasta izsūtīšana neizdevās.\n\n" +
-                      `Edge Function: ${edgeErr}${edgeStatus}${edgeWhere ? `\nURL: ${edgeWhere}` : ""}\n` +
+                      `Edge Function: ${edgeErr}${edgeStatus}${edgeWhere ? `\nURL: ${edgeWhere}` : ""}${edgeFailuresText}\n` +
                       `API fallback: ${apiErr}${apiStatus}`
                   );
                   openManualCitsEmailFallback({

@@ -1,3 +1,8 @@
+/**
+ * PDD: Edge Function slug `resend-email`
+ * Tāds pats līgums kā `send-pdd-email`: POST JSON { name, veids } → Resend ar TO + CC.
+ * Secrets: RESEND_API_KEY (obligāts), RESEND_FROM, RESEND_TO, RESEND_CC (komatu atdalīts), APPROVAL_URL
+ */
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -9,6 +14,7 @@ const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const DEFAULT_APPROVAL_URL =
   "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
 const DEFAULT_TO = "katrina.jirgensone@vid.gov.lv";
+/** Noklusējuma CC: pamata kopija + testa adrese (RESEND_CC var pārrakstīt, komati atdala vairākas). */
 const DEFAULT_CC = "irina.kupcova@vid.gov.lv,pliada@inbox.lv";
 
 function parseEmailList(raw: string | undefined | null, fallback: string): string[] {
@@ -138,7 +144,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    return jsonResponse({ success: true, provider: "resend", result: parsed }, 200);
+    return jsonResponse({ success: true, ok: true, provider: "resend", result: parsed }, 200);
   } catch (err) {
     return jsonResponse(
       {
