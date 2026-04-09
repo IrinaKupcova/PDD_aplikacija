@@ -130,14 +130,15 @@
           width: 54px;
           height: 54px;
           object-fit: contain;
-          border-radius: 8px;
+          border-radius: 12px;
           flex: 0 0 auto;
-          background: rgba(255, 255, 255, 0.45);
-          padding: 2px;
+          background: #fff;
+          padding: 0;
           cursor: zoom-in;
           transition: transform 0.18s ease, box-shadow 0.18s ease;
           position: relative;
           z-index: 2;
+          overflow: hidden;
         }
         .app-brand-logo.is-zoomed {
           position: fixed;
@@ -1149,7 +1150,16 @@
           if (!httpOk) return false;
           if (!body || typeof body !== "object") return false;
           if (body.error || body.message === "Edge Function returned a non-2xx status code") return false;
-          return body.success === true;
+          return body.success === true || body.ok === true;
+        }
+
+        function getEdgeFnCandidateUrls(primaryFnUrl) {
+          const p = String(primaryFnUrl || "").trim().replace(/\/+$/, "");
+          if (!p) return [];
+          const out = [p];
+          if (p.endsWith("/send-pdd-email")) out.push(p.replace(/\/send-pdd-email$/i, "/sendEmail"));
+          else if (p.endsWith("/sendEmail")) out.push(p.replace(/\/sendEmail$/i, "/send-pdd-email"));
+          return [...new Set(out)];
         }
 
         async function getAccessTokenForFunctions() {
@@ -1191,8 +1201,8 @@
             };
           }
 
-          async function tryFetch() {
-            const r = await fetch(fnUrl, {
+          async function tryFetch(url) {
+            const r = await fetch(url, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -1209,38 +1219,40 @@
               j = { parse_error: true, raw: txt };
             }
             if (isSendPddEmailResponseOk(j, r.ok)) {
-              return { ok: true, status: r.status, body: j, fnUrl };
+              return { ok: true, status: r.status, body: j, fnUrl: url };
             }
-            return { ok: false, status: r.status, body: j, raw: txt, fnUrl };
+            return { ok: false, status: r.status, body: j, raw: txt, fnUrl: url };
           }
 
-          try {
-            const out = await tryFetch();
-            if (out.ok) return out;
-            console.warn("[send-pdd-email fetch]", out.status, out.raw || out.body);
-          } catch (e) {
-            console.warn("[send-pdd-email fetch]", e);
+          const fetchUrls = getEdgeFnCandidateUrls(fnUrl);
+          for (const u of fetchUrls) {
+            try {
+              const out = await tryFetch(u);
+              if (out.ok) return out;
+              console.warn("[send-pdd-email fetch]", u, out.status, out.raw || out.body);
+            } catch (e) {
+              console.warn("[send-pdd-email fetch]", u, e);
+            }
           }
 
-          try {
-            const { data, error } = await supabase.functions.invoke("send-pdd-email", {
-              body: { name, veids },
-            });
-            if (!error && isSendPddEmailResponseOk(data, true)) {
-              return { ok: true, status: 200, body: data, fnUrl };
+          const invokeNames = ["send-pdd-email", "sendEmail"];
+          for (const fnName of invokeNames) {
+            try {
+              const { data, error } = await supabase.functions.invoke(fnName, {
+                body: { name, veids },
+              });
+              if (!error && isSendPddEmailResponseOk(data, true)) {
+                return { ok: true, status: 200, body: data, fnUrl };
+              }
+              if (error) console.warn("[send-pdd-email invoke]", fnName, error.message || error, error);
+              if (!error && data) {
+                console.warn("[send-pdd-email invoke]", fnName, "non-ok body", data);
+              }
+            } catch (e) {
+              console.warn("[send-pdd-email invoke]", fnName, e);
             }
-            if (error) console.warn("[send-pdd-email invoke]", error.message || error, error);
-            return {
-              ok: false,
-              status: error?.context?.status,
-              body: data,
-              error,
-              fnUrl,
-            };
-          } catch (e) {
-            console.warn("[send-pdd-email invoke]", e);
-            return { ok: false, error: e, fnUrl };
           }
+          return { ok: false, reason: "all_email_function_attempts_failed", fnUrl };
         }
 
         function openManualCitsEmailFallback({ name, veids, startDate, endDate, link }) {
