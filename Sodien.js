@@ -1053,17 +1053,37 @@ function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, us
           </div>
 
           <label style=${{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
-            <input id="sodien-use-period" type="checkbox" checked=${Boolean(sodienDraft.usePeriod)} onChange=${onToggleUsePeriod} />
+            <input
+              id="sodien-use-period"
+              type="checkbox"
+              defaultChecked=${Boolean(sodienDraft.usePeriod)}
+              onInput=${onToggleUsePeriod}
+              onChange=${onToggleUsePeriod}
+            />
             Atzīmēt periodu
           </label>
           <div class="row" style=${{ gap: "0.75rem" }}>
             <div class="field" style=${{ flex: "1 1 140px" }}>
               <label>Sākums</label>
-              <input id="sodien-start" type="date" class="input" value=${sodienDraft.start || today} onInput=${onStartDateChange} />
+              <input
+                id="sodien-start"
+                type="date"
+                class="input"
+                defaultValue=${sodienDraft.start || today}
+                onInput=${onStartDateChange}
+                onChange=${onStartDateChange}
+              />
             </div>
             <div class="field" style=${{ flex: "1 1 140px" }}>
               <label>Beigas</label>
-              <input id="sodien-end" type="date" class="input" value=${sodienDraft.end || today} onInput=${onEndDateChange} />
+              <input
+                id="sodien-end"
+                type="date"
+                class="input"
+                defaultValue=${sodienDraft.end || today}
+                onInput=${onEndDateChange}
+                onChange=${onEndDateChange}
+              />
             </div>
           </div>
 
