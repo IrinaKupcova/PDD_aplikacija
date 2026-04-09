@@ -1152,6 +1152,8 @@
           if (!httpOk) return false;
           if (!body || typeof body !== "object") return false;
           if (body.error || body.message === "Edge Function returned a non-2xx status code") return false;
+          // Edge atgriež { success: true, skipped: true } ja „nav Cits” — e-pasts netika sūtīts, nedrīkst uzskatīt par OK.
+          if (body.skipped === true) return false;
           return body.success === true || body.ok === true;
         }
 
@@ -1180,7 +1182,7 @@
           return "";
         }
 
-        async function callSendPddEmail({ name, veids }) {
+        async function callSendPddEmail({ name, veids, type }) {
           if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !supabase) return { skipped: true };
           const cfg = loadConfig();
           const apiKey = String(cfg.key || "").trim();
@@ -1195,6 +1197,12 @@
 
           const accessToken = await getAccessTokenForFunctions();
 
+          const emailPayload = {
+            name,
+            veids,
+            ...(String(type || "").trim() ? { type: String(type).trim() } : {}),
+          };
+
           async function tryFetchWithBearer(url, bearer) {
             const r = await fetch(url, {
               method: "POST",
@@ -1203,7 +1211,7 @@
                 apikey: apiKey,
                 Authorization: "Bearer " + String(bearer || "").trim(),
               },
-              body: JSON.stringify({ name, veids }),
+              body: JSON.stringify(emailPayload),
             });
             const txt = await r.text();
             let j = null;
@@ -1262,7 +1270,7 @@
           for (const fnName of invokeNames) {
             try {
               const { data, error } = await supabase.functions.invoke(fnName, {
-                body: { name, veids },
+                body: emailPayload,
               });
               if (!error && isSendPddEmailResponseOk(data, true)) {
                 return { ok: true, status: 200, body: data, fnUrl };
@@ -3178,6 +3186,7 @@
                 const emailResult = await callSendPddEmail({
                   name: employeeNameForEmail,
                   veids: String(typeObj?.name || "Cits"),
+                  type: "cits",
                 });
                 const resendResult = emailResult?.ok
                   ? { skipped: true, reason: "edge_ok" }

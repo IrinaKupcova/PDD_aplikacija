@@ -58,8 +58,13 @@ function normalizeBody(input: RequestBody): { name: string; veids: string } {
 
 function isCitsPayload(raw: RequestBody, veids: string): boolean {
   const t = String(raw?.type ?? "").trim().toLowerCase();
-  if (t) return t === "cits";
-  return veids.trim().toLowerCase() === "cits";
+  if (t === "cits") return true;
+  const v = veids.trim().toLowerCase();
+  if (v === "cits") return true;
+  // DB veida pilns nosaukums, piem. „Cits (ar vadītāja saskaņojumu)” — bez diakritikas salīdzināšana.
+  const n = v.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (n.includes("cits") && n.includes("saskan")) return true;
+  return false;
 }
 
 Deno.serve(async (req: Request) => {
