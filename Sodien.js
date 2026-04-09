@@ -581,10 +581,14 @@ async function addAktualitate() {
     alert("Ievadi aktualitātes tekstu.");
     return;
   }
-  const usePeriod = Boolean(document.getElementById("sodien-use-period")?.checked);
   const today = ymd(new Date());
-  const start = usePeriod ? pick(document.getElementById("sodien-start")?.value || today) : today;
-  const end = usePeriod ? pick(document.getElementById("sodien-end")?.value || start || today) : start || today;
+  const usePeriodChecked = Boolean(document.getElementById("sodien-use-period")?.checked);
+  const startPicked = pick(document.getElementById("sodien-start")?.value || today);
+  const endPicked = pick(document.getElementById("sodien-end")?.value || startPicked || today);
+  // Ja lietotājs izvēlas datumus, traktējam to kā periodu pat tad, ja checkbox nav ieķeksējies.
+  const usePeriod = usePeriodChecked || startPicked !== today || endPicked !== today;
+  const start = usePeriod ? startPicked : today;
+  const end = usePeriod ? endPicked : start || today;
   if (start && end && end < start) {
     alert("Perioda beigu datums nevar būt mazāks par sākuma datumu.");
     return;
