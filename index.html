@@ -404,7 +404,7 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script src="./Komanda.js?v=20260407"></script>
-      <script src="./Sodien.js?v=2026040822"></script>
+      <script src="./Sodien.js?v=2026040824"></script>
       <script src="./Kalendars.js?v=20260407"></script>
       <script src="./Filtr.js?v=20260407"></script>
       <script src="./Saskaņošana.js?v=20260407"></script>
@@ -2235,6 +2235,9 @@
         function AktualitatesVestureView() {
           const [rows, setRows] = useState(undefined);
           const [err, setErr] = useState(null);
+          useEffect(() => {
+            globalThis.PDDSodien?.ensureSodienAktStyleOnce?.();
+          }, []);
           const refresh = useCallback(async () => {
             const V = globalThis.PDDSodien;
             const sb = globalThis.__PDD_SUPABASE__;
@@ -2297,8 +2300,8 @@
             return `${m[3]}.${m[2]}.${m[1]}`;
           }
           return html`
-            <section class="stack" style=${{ gap: "1rem" }}>
-              <div>
+            <section class="stack" style=${{ gap: "1rem", minWidth: 0, maxWidth: "100%", width: "100%", boxSizing: "border-box" }}>
+              <div style=${{ minWidth: 0, maxWidth: "100%" }}>
                 <h2 style=${{ margin: 0, fontSize: "1.15rem" }}>Aktualitāšu vēsture</h2>
                 <p class="app-sub" style=${{ margin: "0.25rem 0 0" }}>
                   Visi saglabātie ieraksti (tabula ${globalThis.__PDD_AKTUALITATES_TABLE__ || globalThis.PDDSodien?.TABLE_AKTUALITATES || "AKTUALITATES"}), ieskaitot beigušos periodus.
@@ -2310,7 +2313,7 @@
                 : rows.length === 0
                   ? html`<p style=${{ color: "var(--muted)" }}>Vēl nav ierakstu.</p>`
                   : html`
-                      <div class="stack" style=${{ gap: "0.65rem" }}>
+                      <div class="stack" style=${{ gap: "0.65rem", minWidth: 0, maxWidth: "100%", width: "100%", boxSizing: "border-box" }}>
                         ${rows.map((x) => {
                           const active = !x.end || x.end >= todayIso;
                           return html`
@@ -2322,6 +2325,11 @@
                                 padding: "0.75rem",
                                 background: active ? "rgba(255,255,255,0.85)" : "rgba(248,250,252,0.92)",
                                 opacity: active ? 1 : 0.92,
+                                boxSizing: "border-box",
+                                minWidth: 0,
+                                maxWidth: "100%",
+                                width: "100%",
+                                overflowX: "hidden",
                               }}
                             >
                               <div
@@ -2345,7 +2353,16 @@
                               </div>
                               <div
                                 class="akt-vesture-html"
-                                style=${{ fontSize: "0.92rem" }}
+                                style=${{
+                                  fontSize: "0.92rem",
+                                  boxSizing: "border-box",
+                                  minWidth: 0,
+                                  maxWidth: "100%",
+                                  width: "100%",
+                                  overflowWrap: "anywhere",
+                                  wordBreak: "break-word",
+                                  overflowX: "auto",
+                                }}
                                 dangerouslySetInnerHTML=${{ __html: String(x.html || "") }}
                               ></div>
                             </article>
@@ -5896,8 +5913,10 @@
             if (!session?.user) {
               globalThis.__PDD_ACTOR_DISPLAY_NAME__ = "";
               globalThis.__PDD_ACTOR_EMAIL__ = "";
+              globalThis.__PDD_SESSION_USER_ID__ = "";
               return;
             }
+            globalThis.__PDD_SESSION_USER_ID__ = String(session.user.id ?? "").trim();
             const em = String(profile?.email ?? session.user.email ?? "").trim();
             globalThis.__PDD_ACTOR_EMAIL__ = em;
             let name = "";

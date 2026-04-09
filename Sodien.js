@@ -10,18 +10,45 @@ const AKTUALITATES_NAME_CANDIDATES = [
   "AKTUALIT\u0100TES",
 ];
 
-/** PostgREST embed: FK nosaukums = {tabulas_relname}_Autors_fkey (PostgreSQL). */
-function aktualitatesUserEmbed(tableResolved) {
-  const rel = String(tableResolved || "AKTUALITATES");
-  return `users!${rel}_Autors_fkey (
-  id,
-  email,
-  full_name,
-  "Vārds uzvārds"
-)`;
+let resolvedAktualitatesTableName = null;
+
+function normUserId(s) {
+  return String(s ?? "").trim().toLowerCase();
 }
 
-let resolvedAktualitatesTableName = null;
+function extractUserDisplayName(p) {
+  if (!p || typeof p !== "object") return "";
+  return pick(
+    p["Vārds uzvārds"] ||
+      p["Vards uzvards"] ||
+      p.vards_uzvards ||
+      p.full_name ||
+      p.email,
+  );
+}
+
+/** Vārdi no public.users; UUID salīdzināšana normalizēta; trūkstošiem — atsevišķs vaicājums. */
+async function fetchAuthorNameMap(sb, rawRows) {
+  const ids = [...new Set((rawRows || []).map((r) => pick(r?.Autors ?? r?.autors)).filter(Boolean))];
+  if (ids.length === 0 || !sb) return new Map();
+  const m = new Map();
+  const { data: profs, error } = await sb.from("users").select("*").in("id", ids);
+  if (!error && Array.isArray(profs)) {
+    for (const p of profs) {
+      const id = pick(p.id);
+      const label = extractUserDisplayName(p);
+      if (id && label) m.set(normUserId(id), label);
+    }
+  }
+  for (const id of ids) {
+    const nk = normUserId(id);
+    if (m.has(nk)) continue;
+    const { data: one } = await sb.from("users").select("*").eq("id", id).maybeSingle();
+    const label = extractUserDisplayName(one);
+    if (label) m.set(nk, label);
+  }
+  return m;
+}
 
 /**
  * Atrod tabulas nosaukumu PostgREST kešatmiņā (mēģina vairākus variantus).
@@ -150,7 +177,15 @@ function stableSyntheticRowId(html, start, end, autorsOrTag) {
   return `syn-${Math.abs(h)}`;
 }
 
-function authorLabelFromDbRow(r) {
+function authorLabelFromDbRow(r, nameMap) {
+  const aid = pick(r?.Autors ?? r?.autors);
+  const aidN = normUserId(aid);
+  if (nameMap && aidN && nameMap.has(aidN)) return nameMap.get(aidN);
+  const sid = normUserId(globalThis.__PDD_SESSION_USER_ID__);
+  if (aidN && sid && aidN === sid) {
+    const self = pick(globalThis.__PDD_ACTOR_DISPLAY_NAME__);
+    if (self) return self;
+  }
   const emb = r?.users;
   if (emb && typeof emb === "object" && !Array.isArray(emb)) {
     const n = pick(emb["Vārds uzvārds"] || emb.full_name || emb.email);
@@ -161,11 +196,10 @@ function authorLabelFromDbRow(r) {
     const n = pick(u0["Vārds uzvārds"] || u0.full_name || u0.email);
     if (n) return n;
   }
-  const aid = pick(r?.Autors ?? r?.autors);
   return aid ? `${aid.slice(0, 8)}…` : "—";
 }
 
-function rowFromDb(r) {
+function rowFromDb(r, nameMap) {
   if (!r || typeof r !== "object") return null;
   const html = pick(r.Kas_sodien_vel_aktuals ?? r.kas_sodien_vel_aktuals);
   const start = pick(r.Sakums ?? r.sakums);
@@ -175,7 +209,7 @@ function rowFromDb(r) {
   if (!html || !start || !end) return null;
   const dbRowId = pick(r.id);
   const use_period = start !== end;
-  const authorLabel = authorLabelFromDbRow(r);
+  const authorLabel = authorLabelFromDbRow(r, nameMap);
   const id = dbRowId || stableSyntheticRowId(html, start, end, autors_id || authorLabel);
   return {
     id,
@@ -208,27 +242,16 @@ function visibleAktualitatesActive() {
 async function fetchActiveAktualitatesFromSupabase(sb) {
   const t = await resolveAktualitatesTableName(sb);
   const today = ymd(new Date());
-  const embed = aktualitatesUserEmbed(t);
-  let { data, error } = await sb
+  const { data, error } = await sb
     .from(t)
-    .select(`*, ${embed}`)
+    .select("*")
     .lte("Sakums", today)
     .gte("Beigas", today)
     .order("Sakums", { ascending: false })
     .order("Beigas", { ascending: false });
-  if (error) {
-    const r2 = await sb
-      .from(t)
-      .select("*")
-      .lte("Sakums", today)
-      .gte("Beigas", today)
-      .order("Sakums", { ascending: false })
-      .order("Beigas", { ascending: false });
-    data = r2.data;
-    error = r2.error;
-  }
   if (error) throw error;
-  return (data ?? []).map(rowFromDb).filter(Boolean);
+  const nameMap = await fetchAuthorNameMap(sb, data ?? []);
+  return (data ?? []).map((row) => rowFromDb(row, nameMap)).filter(Boolean);
 }
 
 /**
@@ -237,25 +260,15 @@ async function fetchActiveAktualitatesFromSupabase(sb) {
  */
 async function fetchAllAktualitatesFromSupabase(sb) {
   const t = await resolveAktualitatesTableName(sb);
-  const embed = aktualitatesUserEmbed(t);
-  let { data, error } = await sb
+  const { data, error } = await sb
     .from(t)
-    .select(`*, ${embed}`)
+    .select("*")
     .order("Sakums", { ascending: false })
     .order("Beigas", { ascending: false })
     .limit(500);
-  if (error) {
-    const r2 = await sb
-      .from(t)
-      .select("*")
-      .order("Sakums", { ascending: false })
-      .order("Beigas", { ascending: false })
-      .limit(500);
-    data = r2.data;
-    error = r2.error;
-  }
   if (error) throw error;
-  return (data ?? []).map(rowFromDb).filter(Boolean);
+  const nameMap = await fetchAuthorNameMap(sb, data ?? []);
+  return (data ?? []).map((row) => rowFromDb(row, nameMap)).filter(Boolean);
 }
 
 function currentEditor() {
@@ -472,6 +485,11 @@ function ensureSodienAktStyleOnce() {
   const s = document.createElement("style");
   s.id = "pdd-sodien-akt-style";
   s.textContent = `
+    #sodien-aktualitates-panel .sodien-akt-html {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      max-width: 100%;
+    }
     #sodien-aktualitates-panel .sodien-akt-html img,
     #sodien-aktualitates-panel .sodien-akt-html svg,
     #sodien-aktualitates-panel .sodien-akt-html video {
@@ -484,6 +502,30 @@ function ensureSodienAktStyleOnce() {
       overflow-x: auto;
     }
     #sodien-aktualitates-panel .sodien-akt-html pre {
+      max-width: 100%;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .akt-vesture-html {
+      box-sizing: border-box;
+      min-width: 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .akt-vesture-html img,
+    .akt-vesture-html svg,
+    .akt-vesture-html video {
+      max-width: 100% !important;
+      height: auto !important;
+    }
+    .akt-vesture-html table {
+      max-width: 100%;
+      display: block;
+      overflow-x: auto;
+    }
+    .akt-vesture-html pre {
       max-width: 100%;
       overflow-x: auto;
       white-space: pre-wrap;
@@ -717,5 +759,6 @@ window.PDDSodien = {
   fetchActiveAktualitatesFromSupabase,
   fetchAllAktualitatesFromSupabase,
   primeAktualitatesTable,
+  ensureSodienAktStyleOnce,
   TABLE_AKTUALITATES,
 };
