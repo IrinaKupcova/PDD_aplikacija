@@ -439,7 +439,7 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script src="./Komanda.js?v=20260407"></script>
-      <script src="./Sodien.js?v=2026040913"></script>
+      <script src="./Sodien.js?v=2026041014"></script>
       <script src="./Kalendars.js?v=20260407"></script>
       <script src="./Filtr.js?v=20260407"></script>
       <script src="./Saskaņošana.js?v=20260407"></script>
@@ -1327,7 +1327,7 @@
         }
 
         function openManualCitsEmailFallback({ name, veids, startDate, endDate, link }) {
-          const to = ["katrina.jirgensone@vid.gov.lv", "irina.kupcova@vid.gov.lv"].join(",");
+          const to = ["katrina.jirgensone@vid.gov.lv", "irina.kupcova@vid.gov.lv"].join("; ");
           const subject = "Jauns pieteikums";
           const lines = [
             `Vārds: ${String(name || "").trim() || "-"}`,
@@ -4562,6 +4562,13 @@
                 .toLowerCase();
               if (uem && uem === want) return true;
             }
+            const mine = String(myNameForFilter ?? "").trim().toLowerCase();
+            if (mine && a?.employee) {
+              const userFull = String(userDisplayName(a.employee) ?? "").trim().toLowerCase();
+              const shown = String(userShownFromFull(userDisplayName(a.employee)) ?? "").trim().toLowerCase();
+              if (shown && shown === mine) return true;
+              if (userFull && userFull === mine) return true;
+            }
             return false;
           }
           const sortedList = useMemo(() => {
@@ -4569,7 +4576,7 @@
             return [...list].sort((a, b) =>
               String(b.created_at || "").localeCompare(String(a.created_at || ""))
             );
-          }, [absences, approverView, userId, sessionEmail]);
+          }, [absences, approverView, userId, sessionEmail, myNameForFilter]);
           const filteredList = useMemo(() => {
             const includesMatch =
               window.PDDFiltr?.includesMatch ??
@@ -4653,11 +4660,13 @@
             return isCitsSaskanotsTypeName(typeName) && String(a?.status || "").toLowerCase() === "approved";
           }
           function canEditAbsence(a) {
-            const own = approverView ? isOwnAbsence(a) : true;
-            return (isAdmin || own) && !isApprovedCitsAbsence(a);
+            if (isApprovedCitsAbsence(a)) return false;
+            if (isAdmin) return true;
+            return isOwnAbsence(a);
           }
           function canDeleteAbsence(a) {
-            return true;
+            if (isAdmin) return true;
+            return isOwnAbsence(a);
           }
           const anyActions = filteredList.some((a) => {
             const canEdit = canEditAbsence(a);
@@ -4680,6 +4689,10 @@
               alert("Apstiprinātu Cits prombūtni vairs labot nevar.");
               return;
             }
+            if (!canEditAbsence(a)) {
+              alert("Var labot tikai savu ierakstu.");
+              return;
+            }
             setEditing(a.id);
             setForm({
               type_id: String(a.type_id),
@@ -4692,14 +4705,25 @@
             e.preventDefault();
             if (!editing) return;
             const editedRow = (absences ?? []).find((x) => String(x.id) === String(editing));
+            if (!editedRow) {
+              alert("Ieraksts nav atrasts.");
+              setEditing(null);
+              return;
+            }
             if (isApprovedCitsAbsence(editedRow)) {
               alert("Apstiprinātu Cits prombūtni vairs labot nevar.");
               setEditing(null);
               return;
             }
+            if (!isAdmin && !isOwnAbsence(editedRow)) {
+              alert("Var labot tikai savu ierakstu.");
+              setEditing(null);
+              return;
+            }
+            const editId = editedRow.id;
             if (isLocalMode()) {
               const rows = getLocalAbsences().map((r) =>
-                r.id === editing
+                String(r.id) === String(editId)
                   ? {
                       ...r,
                       type_id: Number(form.type_id),
@@ -4715,7 +4739,7 @@
               onRefresh();
               return;
             }
-            if (editedRow && typeof editedRow === "object") detectAbsenceColumnsFromRow(editedRow);
+            if (typeof editedRow === "object") detectAbsenceColumnsFromRow(editedRow);
             const rawType = String(form.type_id ?? "").trim();
             const typeNum = Number(rawType);
             const typeForPayload =
@@ -4747,7 +4771,7 @@
               const r = await supabase
                 .from("prombutnes_dati")
                 .update(p)
-                .eq("id", editing)
+                .eq("id", editId)
                 .select("id");
               if (r.error) {
                 lastError = r.error;
@@ -4762,7 +4786,7 @@
             if (!saved) {
               for (const p of payloadVariants) {
                 const restRetry = await mutatePrombutnesDatiViaRest({
-                  id: editing,
+                  id: editId,
                   method: "PATCH",
                   payload: p,
                 });
@@ -4781,8 +4805,19 @@
           }
           async function confirmDelete() {
             if (!delId) return;
+            const rowToDel = (absences ?? []).find((x) => String(x.id) === String(delId));
+            if (!rowToDel && !isLocalMode() && !isAdmin) {
+              alert("Ieraksts nav atrasts.");
+              setDelId(null);
+              return;
+            }
+            if (rowToDel && !isAdmin && !isOwnAbsence(rowToDel)) {
+              alert("Var dzēst tikai savu ierakstu.");
+              setDelId(null);
+              return;
+            }
             if (isLocalMode()) {
-              setLocalAbsences(getLocalAbsences().filter((r) => r.id !== delId));
+              setLocalAbsences(getLocalAbsences().filter((r) => String(r.id) !== String(delId)));
               pushChangeLog("prombutne.dzest", `Ieraksts ${delId} dzēsts`);
               setDelId(null);
               onRefresh();

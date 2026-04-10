@@ -19,6 +19,16 @@ function parseEmailList(raw: string | undefined | null, fallback: string): strin
     .filter((x) => x.length > 0);
 }
 
+function parseToRecipients(raw: string | undefined | null, fallbackSingle: string): string[] {
+  const s = String(raw ?? "").trim().replace(/^\uFEFF/, "");
+  if (!s) return [fallbackSingle];
+  const parts = s
+    .split(/[,;]+/)
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+  return parts.length > 0 ? parts : [fallbackSingle];
+}
+
 type RequestBody = {
   name?: unknown;
   veids?: unknown;
@@ -70,7 +80,7 @@ Deno.serve(async (req: Request) => {
   const from =
     Deno.env.get("RESEND_FROM")?.trim() ||
     "PDD <onboarding@resend.dev>";
-  const toPrimary = Deno.env.get("RESEND_TO")?.trim() || DEFAULT_TO;
+  const toList = parseToRecipients(Deno.env.get("RESEND_TO"), DEFAULT_TO);
   const ccList = parseEmailList(Deno.env.get("RESEND_CC"), DEFAULT_CC);
   const allowCc = !from.toLowerCase().includes("@resend.dev");
 
@@ -109,7 +119,7 @@ Deno.serve(async (req: Request) => {
 </html>`;
 
   try {
-    const emailBody: Record<string, unknown> = { from, to: [toPrimary], subject, html };
+    const emailBody: Record<string, unknown> = { from, to: toList, subject, html };
     if (allowCc && ccList.length > 0) emailBody.cc = ccList;
 
     const resendResp = await fetch(RESEND_ENDPOINT, {

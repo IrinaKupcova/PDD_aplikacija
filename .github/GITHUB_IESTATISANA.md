@@ -23,6 +23,7 @@ Darbplūsma: `Supabase Edge — sendEmail + Resend`.
 | `SUPABASE_PROJECT_REF` | Supabase → Project Settings → General → **Reference ID** (piem. `fdnkvecgqetmwilwolgt`) |
 | `RESEND_API_KEY` | [Resend](https://resend.com) → API Keys |
 | `RESEND_FROM` | Resend atļauts sūtītājs, piem. `PDD <onboarding@resend.dev>` vai verificēts domēns. Ar `*@resend.dev` funkcija **nesūta CC** (Resend ierobežojums); ar savu domēnu CC atkal strādā. |
+| `RESEND_TO` (neobligāti) | Viena adrese vai vairākas, atdalītas ar **semikolu** vai **komatu** (ar atstarpēm), piem. `katrina.jirgensone@vid.gov.lv; irina.kupcova@vid.gov.lv`. Nedrīkst likt abas kā vienu garu stringu bez atdalītāja. |
 
 Ja `SUPABASE_ACCESS_TOKEN` vai `SUPABASE_PROJECT_REF` nav, šī darbplūsma **netiek palaista** (nekļūda).
 

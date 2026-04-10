@@ -1,7 +1,7 @@
 /**
  * PDD: Edge Function slug `resend-email`
  * Tāds pats līgums kā `send-pdd-email`: POST JSON { name, veids } → Resend ar TO + CC.
- * Secrets: RESEND_API_KEY (obligāts), RESEND_FROM, RESEND_TO, RESEND_CC (komatu atdalīts), APPROVAL_URL
+ * Secrets: RESEND_API_KEY (obligāts), RESEND_FROM, RESEND_TO (vairākas ar `,` vai `;`), RESEND_CC, APPROVAL_URL
  */
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -23,6 +23,16 @@ function parseEmailList(raw: string | undefined | null, fallback: string): strin
     .split(/[,;]+/)
     .map((x) => x.trim())
     .filter((x) => x.length > 0);
+}
+
+function parseToRecipients(raw: string | undefined | null, fallbackSingle: string): string[] {
+  const s = String(raw ?? "").trim().replace(/^\uFEFF/, "");
+  if (!s) return [fallbackSingle];
+  const parts = s
+    .split(/[,;]+/)
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+  return parts.length > 0 ? parts : [fallbackSingle];
 }
 
 type RequestBody = {
@@ -77,7 +87,7 @@ Deno.serve(async (req: Request) => {
   const from =
     Deno.env.get("RESEND_FROM")?.trim() ||
     "PDD <onboarding@resend.dev>";
-  const toPrimary = Deno.env.get("RESEND_TO")?.trim() || DEFAULT_TO;
+  const toList = parseToRecipients(Deno.env.get("RESEND_TO"), DEFAULT_TO);
   const ccList = parseEmailList(Deno.env.get("RESEND_CC"), DEFAULT_CC);
   const allowCc = !from.toLowerCase().includes("@resend.dev");
 
@@ -116,7 +126,7 @@ Deno.serve(async (req: Request) => {
 </html>`;
 
   try {
-    const emailBody: Record<string, unknown> = { from, to: [toPrimary], subject, html };
+    const emailBody: Record<string, unknown> = { from, to: toList, subject, html };
     if (allowCc && ccList.length > 0) emailBody.cc = ccList;
 
     const resendResp = await fetch(RESEND_ENDPOINT, {

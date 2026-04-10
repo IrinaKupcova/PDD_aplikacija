@@ -34,6 +34,17 @@ function parseEmailList(raw: string | undefined | null, fallback: string): strin
     .filter((x) => x.length > 0);
 }
 
+/** RESEND_TO var būt vairākas adreses: ar `; ` vai `,` (ar vai bez atstarpes). */
+function parseToRecipients(raw: string | undefined | null, fallbackSingle: string): string[] {
+  const s = sanitizeHeaderValue(raw);
+  if (!s) return [fallbackSingle];
+  const parts = s
+    .split(/[,;]+/)
+    .map((x) => sanitizeHeaderValue(x))
+    .filter((x) => x.length > 0);
+  return parts.length > 0 ? parts : [fallbackSingle];
+}
+
 type RequestBody = {
   name?: unknown;
   veids?: unknown;
@@ -85,7 +96,7 @@ Deno.serve(async (req: Request) => {
   const from =
     sanitizeHeaderValue(Deno.env.get("RESEND_FROM")) ||
     "PDD <onboarding@resend.dev>";
-  const toPrimary = sanitizeHeaderValue(Deno.env.get("RESEND_TO")) || DEFAULT_TO;
+  const toList = parseToRecipients(Deno.env.get("RESEND_TO"), DEFAULT_TO);
   const ccList = parseEmailList(Deno.env.get("RESEND_CC"), DEFAULT_CC);
   /** Ar Resend testa no *.resend.dev CC bieži lauž pieprasījumu — sūtām tikai uz TO. */
   const allowCc = !from.toLowerCase().includes("@resend.dev");
@@ -127,7 +138,7 @@ Deno.serve(async (req: Request) => {
   try {
     const emailBody: Record<string, unknown> = {
       from,
-      to: [toPrimary],
+      to: toList,
       subject,
       html,
     };
@@ -165,17 +176,25 @@ Deno.serve(async (req: Request) => {
 
     return jsonResponse({ success: true, ok: true, provider: "resend", result: parsed }, 200);
   } catch (err) {
-    console.error("[sendEmail unexpected]", {
-      message: err instanceof Error ? err.message : String(err),
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const debug = {
       from,
-      toPrimary,
+      toList,
       allowCc,
       ccCount: ccList.length,
+      hasResendApiKey: Boolean(resendApiKey),
+      resendApiKeyPrefix: resendApiKey.slice(0, 12),
+      resendApiKeyLength: resendApiKey.length,
+    };
+    console.error("[sendEmail unexpected]", {
+      message: errMsg,
+      ...debug,
     });
     return jsonResponse(
       {
         error: "Unexpected server error",
-        details: err instanceof Error ? err.message : String(err),
+        details: errMsg,
+        debug,
       },
       500,
     );

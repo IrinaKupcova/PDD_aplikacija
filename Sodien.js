@@ -26,27 +26,30 @@ function extractUserDisplayName(p) {
       p["Vards Uzvards"] ||
       p.vards_uzvards ||
       p.full_name ||
+      p["i-mail"] ||
+      p.imail ||
       p.email,
   );
 }
 
-/** Vārdi no public.users; UUID salīdzināšana normalizēta; trūkstošiem — atsevišķs vaicājums. */
+/** Vārdi: RPC (users + auth meta), tad public.users atsevišķi trūkstošajiem. */
 async function fetchAuthorNameMap(sb, rawRows) {
   const ids = [...new Set((rawRows || []).map((r) => pick(r?.Autors ?? r?.autors)).filter(Boolean))];
   if (ids.length === 0 || !sb) return new Map();
   const m = new Map();
-  const { data: profs, error } = await sb.from("users").select("*").in("id", ids);
-  if (!error && Array.isArray(profs)) {
-    for (const p of profs) {
-      const id = pick(p.id);
-      const label = extractUserDisplayName(p);
-      if (id && label) m.set(normUserId(id), label);
+  const { data: rpcRows, error: rpcErr } = await sb.rpc("pdd_display_name_for_user_ids", { p_ids: ids });
+  if (!rpcErr && Array.isArray(rpcRows)) {
+    for (const row of rpcRows) {
+      const uid = pick(row.user_id);
+      const label = pick(row.display_name);
+      if (uid && label) m.set(normUserId(uid), label);
     }
   }
+  const userCols = 'id, email, full_name, "Vārds uzvārds", "i-mail"';
   for (const id of ids) {
     const nk = normUserId(id);
     if (m.has(nk)) continue;
-    const { data: one } = await sb.from("users").select("*").eq("id", id).maybeSingle();
+    const { data: one } = await sb.from("users").select(userCols).eq("id", id).maybeSingle();
     const label = extractUserDisplayName(one);
     if (label) m.set(nk, label);
   }
@@ -217,22 +220,20 @@ function authorLabelFromDbRow(r, nameMap) {
   const sid = normUserId(globalThis.__PDD_SESSION_USER_ID__);
   const selfName = pick(globalThis.__PDD_ACTOR_DISPLAY_NAME__);
   const selfEmail = pick(globalThis.__PDD_ACTOR_EMAIL__);
+  // Tikai savam ierakstam drīkst rādīt sesijas vārdu/e-pastu kā rezervi — nevis visiem.
   if (aidN && sid && aidN === sid) {
     if (selfName) return selfName;
     if (selfEmail) return selfEmail;
   }
   const emb = r?.users;
   if (emb && typeof emb === "object" && !Array.isArray(emb)) {
-    const n = pick(emb["Vārds uzvārds"] || emb.full_name || emb.email);
+    const n = extractUserDisplayName(emb);
     if (n) return n;
   }
   if (Array.isArray(emb) && emb[0]) {
-    const u0 = emb[0];
-    const n = pick(u0["Vārds uzvārds"] || u0.full_name || u0.email);
+    const n = extractUserDisplayName(emb[0]);
     if (n) return n;
   }
-  if (selfName) return selfName;
-  if (selfEmail) return selfEmail;
   return "—";
 }
 
@@ -269,6 +270,7 @@ function isCurrentActorAdmin() {
 function canCurrentActorManageAktualitate(item) {
   if (!item || typeof item !== "object") return false;
   if (isCurrentActorAdmin()) return true;
+  if (!sodienUiOpts.useSupabase) return true;
   const myId = normUserId(globalThis.__PDD_SESSION_USER_ID__);
   const authorId = normUserId(item?.autors_id);
   return Boolean(myId && authorId && myId === authorId);
@@ -635,13 +637,17 @@ async function addAktualitate() {
     try {
       const t = await resolveAktualitatesTableName(sb);
       if (editId) {
+        const curEdit = (sodienUiOpts.__lastAktList || []).find((x) => String(x?.id) === String(editId));
+        if (curEdit && !canCurrentActorManageAktualitate(curEdit)) {
+          alert("Labot drīkst tikai autors vai administrators.");
+          return;
+        }
         if (String(editId).startsWith("syn-")) {
-          const cur = (sodienUiOpts.__lastAktList || []).find((x) => String(x?.id) === String(editId));
-          if (!cur) {
+          if (!curEdit) {
             alert("Neizdevās atrast labojamo ierakstu.");
             return;
           }
-          const q = applyLegacyMatchFilter(sb.from(t).update(payload), cur);
+          const q = applyLegacyMatchFilter(sb.from(t).update(payload), curEdit);
           const { error } = await q;
           if (error) throw error;
         } else {
@@ -695,6 +701,10 @@ async function deleteAktualitate(id) {
   const useRemote = Boolean(sodienUiOpts.useSupabase && sb);
   if (useRemote) {
     const cur = (sodienUiOpts.__lastAktList || []).find((x) => String(x?.id) === String(id));
+    if (cur && !canCurrentActorManageAktualitate(cur)) {
+      alert("Dzēst drīkst tikai autors vai administrators.");
+      return;
+    }
     try {
       const t = await resolveAktualitatesTableName(sb);
       if (String(id).startsWith("syn-")) {
@@ -753,6 +763,10 @@ function editAktualitate(id) {
   const list = useRemote ? sodienUiOpts.__lastAktList || [] : cleanExpired(loadAktualitates());
   const item = list.find((x) => String(x.id) === String(id));
   if (!item) return;
+  if (useRemote && !canCurrentActorManageAktualitate(item)) {
+    alert("Labot drīkst tikai autors vai administrators.");
+    return;
+  }
   const details = document.getElementById("sodien-editor-details");
   if (details) details.open = true;
   const ed = currentEditor();
