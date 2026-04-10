@@ -3238,7 +3238,7 @@
                     link: manualLink,
                   });
 
-                  const edgeErr =
+                  let edgeErr =
                     String(
                       emailResult?.body?.error ||
                         emailResult?.raw ||
@@ -3247,6 +3247,12 @@
                         emailResult?.reason ||
                         "",
                     ).trim() || "Nezināma kļūda";
+                  const edgeResDet = emailResult?.body?.details;
+                  if (edgeResDet != null) {
+                    edgeErr +=
+                      "\nResend: " +
+                      (typeof edgeResDet === "string" ? edgeResDet : JSON.stringify(edgeResDet));
+                  }
                   const edgeFailures = Array.isArray(emailResult?.body?.failures) ? emailResult.body.failures : [];
                   const edgeFailuresText = edgeFailures.length
                     ? "\nMēģinājumi:\n" +
@@ -3309,9 +3315,18 @@
                   } catch {
                     /* ignore */
                   }
+                  const resendShort =
+                    edgeResDet != null
+                      ? "\n\n" +
+                        (typeof edgeResDet === "object" && edgeResDet && "message" in edgeResDet
+                          ? String(edgeResDet.message)
+                          : String(typeof edgeResDet === "string" ? edgeResDet : JSON.stringify(edgeResDet)))
+                      : "";
                   alert(
                     "Pieteikums saglabāts. E-pasta programmā ir sagatavota vēstule vadītājam — lūdzu nosūti to.\n\n" +
-                      "Automātiskais sūtīšanas mēģinājums šoreiz nesanāca. Tehnisko tekstu meklē pārlūkā F12 → Console (sarkanais „[PDD Cits e-pasts]”)." +
+                      "Automātiskais sūtīšanas mēģinājums šoreiz nesanāca." +
+                      resendShort +
+                      (resendShort ? "" : " Tehnisko tekstu meklē F12 → Console „[PDD Cits e-pasts]”.") +
                       hint401,
                   );
                 }

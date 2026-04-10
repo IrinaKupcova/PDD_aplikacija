@@ -71,14 +71,15 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
 
-  const resendApiKey = Deno.env.get("RESEND_API_KEY");
+  const resendApiKey = Deno.env.get("RESEND_API_KEY")?.trim();
   if (!resendApiKey) return jsonResponse({ error: "Missing RESEND_API_KEY" }, 500);
 
   const from =
     Deno.env.get("RESEND_FROM")?.trim() ||
-    "PDD <irina.kupcova@vid.gov.lv>";
+    "PDD <onboarding@resend.dev>";
   const toPrimary = Deno.env.get("RESEND_TO")?.trim() || DEFAULT_TO;
   const ccList = parseEmailList(Deno.env.get("RESEND_CC"), DEFAULT_CC);
+  const allowCc = !from.toLowerCase().includes("@resend.dev");
 
   let rawBody: RequestBody;
   try {
@@ -115,19 +116,16 @@ Deno.serve(async (req: Request) => {
 </html>`;
 
   try {
+    const emailBody: Record<string, unknown> = { from, to: [toPrimary], subject, html };
+    if (allowCc && ccList.length > 0) emailBody.cc = ccList;
+
     const resendResp = await fetch(RESEND_ENDPOINT, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${resendApiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        from,
-        to: [toPrimary],
-        cc: ccList,
-        subject,
-        html,
-      }),
+      body: JSON.stringify(emailBody),
     });
 
     const raw = await resendResp.text();

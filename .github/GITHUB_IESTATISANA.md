@@ -22,7 +22,7 @@ Darbplūsma: `Supabase Edge — sendEmail + Resend`.
 | `SUPABASE_ACCESS_TOKEN` | [Supabase Account → Access Tokens](https://supabase.com/dashboard/account/tokens) — izveido jaunu |
 | `SUPABASE_PROJECT_REF` | Supabase → Project Settings → General → **Reference ID** (piem. `fdnkvecgqetmwilwolgt`) |
 | `RESEND_API_KEY` | [Resend](https://resend.com) → API Keys |
-| `RESEND_FROM` | Resend atļauts sūtītājs, piem. `PDD <onboarding@resend.dev>` vai verificēts domēns |
+| `RESEND_FROM` | Resend atļauts sūtītājs, piem. `PDD <onboarding@resend.dev>` vai verificēts domēns. Ar `*@resend.dev` funkcija **nesūta CC** (Resend ierobežojums); ar savu domēnu CC atkal strādā. |
 
 Ja `SUPABASE_ACCESS_TOKEN` vai `SUPABASE_PROJECT_REF` nav, šī darbplūsma **netiek palaista** (nekļūda).
 
