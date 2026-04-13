@@ -1117,7 +1117,14 @@
         }
 
         const html = htm.bind(React.createElement);
-        const AppShellWithNav = globalThis.PDD_NAV.createAppShellWithNav(html);
+        const AppShellWithNav =
+          globalThis.PDD_NAV?.createAppShellWithNav?.(html) ??
+          (({ header, children }) => html`
+            <div class="app-shell">
+              ${header}
+              ${children}
+            </div>
+          `);
         const __cfg = loadConfig();
         const supabase = configured()
           ? createClient(normalizeProjectUrl(__cfg.url), String(__cfg.key).trim().replace(/\s+/g, ""))
