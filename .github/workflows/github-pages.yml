@@ -44,13 +44,15 @@ jobs:
               .trim();
           const url = strip(process.env.SUPA_URL);
           const key = strip(process.env.SUPA_KEY);
-          if (url) {
+          const isProbablySupabaseUrl = /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url);
+          const isProbablySupabaseKey = /^(sb_|eyJ)/.test(key);
+          if (isProbablySupabaseUrl) {
             h = h.replace(
               /const FILE_SUPABASE_URL = "https:\/\/[^"]+";/,
               "const FILE_SUPABASE_URL = " + JSON.stringify(url) + ";"
             );
           }
-          if (key) {
+          if (isProbablySupabaseKey) {
             h = h.replace(
               /const FILE_SUPABASE_ANON_KEY = "[^"]*";/,
               "const FILE_SUPABASE_ANON_KEY = " + JSON.stringify(key) + ";"
