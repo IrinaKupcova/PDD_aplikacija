@@ -192,7 +192,8 @@
       children,
     }) {
       ensureNavigacijaExtraStyles();
-      const historyNavOpen = view === "prombutnes" || view === "home" || view === "aktualitatesHistory";
+      const historyNavOpen =
+        view === "prombutnes" || view === "home" || view === "aktualitatesHistory" || view === "team";
       const showBack = Boolean(canGoBack && typeof onGoBack === "function");
 
       return html`
