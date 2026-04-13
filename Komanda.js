@@ -2,6 +2,7 @@
   const LS_TEAM_USERS = "pdd_team_users_v1";
   const LS_LOCAL_USER_ID = "pdd_local_user_id";
   const LOCAL_USER_ID = "local-user-1";
+  const TEAM_SECTION_IMAGE_SRC = "./public/komanda-info.png?v=20260413";
 
   // Lokāls seed (varēsi labot/dzēst/papildināt UI).
   // Shape atbilst Supabase public.users kolonnām (tā, lai UI šeit un migrācijās nesajūk):
@@ -171,6 +172,7 @@
     saveTeamUsers,
     upsertTeamUser,
     deleteTeamUser,
+    TEAM_SECTION_IMAGE_SRC,
   };
 })();
 

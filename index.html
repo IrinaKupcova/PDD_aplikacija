@@ -438,7 +438,7 @@
       <div id="root"></div>
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
-      <script src="./Komanda.js?v=20260407"></script>
+      <script src="./Komanda.js?v=20260413"></script>
       <script src="./Sodien.js?v=20260420"></script>
       <script src="./Kalendars.js?v=20260410"></script>
       <script src="./Navigacija.js?v=20260420"></script>
@@ -3645,9 +3645,14 @@
         function TeamUsersDirectory({ users, canAdmin, currentUserId, onReload }) {
           const { cols, labels } = teamUsersTableColumns(users);
           const colCount = Math.max(cols.length, 1);
+          const teamImageSrc = String(
+            window.KOMANDA?.TEAM_SECTION_IMAGE_SRC ?? "./public/komanda-info.png?v=20260413"
+          ).trim();
           const [page, setPage] = useState(0);
           const [busy, setBusy] = useState(false);
           const [authHint, setAuthHint] = useState("");
+          const [teamImageOpen, setTeamImageOpen] = useState(false);
+          const [teamImageFailed, setTeamImageFailed] = useState(false);
           const isLocalTeams = false;
           const total = users?.length ?? 0;
           const totalPages = Math.max(1, Math.ceil(total / TEAM_PAGE_SIZE) || 1);
@@ -3823,6 +3828,79 @@
                 : total
                   ? html`<p style=${{ margin: "0.55rem 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>Kopā ${total} rindas.</p>`
                   : null}
+              ${teamImageSrc && !teamImageFailed
+                ? html`
+                    <div
+                      style=${{
+                        marginTop: "0.95rem",
+                        display: "flex",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        class="btn btn-ghost"
+                        style=${{
+                          padding: "0.25rem",
+                          borderRadius: "12px",
+                          border: "1px solid var(--border)",
+                          background: "var(--bg)",
+                        }}
+                        title="Spied, lai palielinātu"
+                        onClick=${() => setTeamImageOpen(true)}
+                      >
+                        <img
+                          src=${teamImageSrc}
+                          alt="Komandas informatīvais attēls"
+                          onError=${() => setTeamImageFailed(true)}
+                          style=${{
+                            display: "block",
+                            width: "min(100%, 300px)",
+                            height: "auto",
+                            borderRadius: "10px",
+                          }}
+                        />
+                      </button>
+                    </div>
+                  `
+                : null}
+              ${teamImageOpen
+                ? html`
+                    <div
+                      style=${{
+                        position: "fixed",
+                        inset: 0,
+                        zIndex: 70,
+                        background: "rgba(0,0,0,0.72)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "1rem",
+                      }}
+                      onClick=${() => setTeamImageOpen(false)}
+                    >
+                      <div style=${{ maxWidth: "min(96vw, 980px)", maxHeight: "92vh" }} onClick=${(e) => e.stopPropagation()}>
+                        <img
+                          src=${teamImageSrc}
+                          alt="Komandas informatīvais attēls (palielināts)"
+                          style=${{
+                            display: "block",
+                            width: "100%",
+                            height: "auto",
+                            maxHeight: "92vh",
+                            borderRadius: "12px",
+                            border: "1px solid rgba(255,255,255,0.2)",
+                          }}
+                        />
+                        <div class="row" style=${{ justifyContent: "flex-end", marginTop: "0.5rem" }}>
+                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => setTeamImageOpen(false)}>
+                            Aizvērt
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  `
+                : null}
             </div>
           `;
         }
@@ -4110,6 +4188,29 @@
                           </button>
                         </div>
                       </div>
+                    </div>
+                  `
+                : null}
+              ${teamImageSrc
+                ? html`
+                    <div
+                      style=${{
+                        marginTop: "0.95rem",
+                        border: "1px solid var(--border)",
+                        borderRadius: "12px",
+                        overflow: "hidden",
+                        background: "var(--bg)",
+                      }}
+                    >
+                      <img
+                        src=${teamImageSrc}
+                        alt="Komandas informatīvais attēls"
+                        style=${{
+                          display: "block",
+                          width: "100%",
+                          height: "auto",
+                        }}
+                      />
                     </div>
                   `
                 : null}
@@ -5912,12 +6013,19 @@
                   : promSub === "deputy"
                     ? "Apstiprinātāja maiņa"
                     : "";
+          const headerSubLabel = promSub === "teamUsers" ? "" : promSubLabel;
           return html`
             <section class="stack" style=${{ gap: "1.25rem" }}>
-              <div>
-                <h2 style=${{ margin: 0, fontSize: "1.15rem" }}>Prombūtnes</h2>
-                <p class="app-sub" style=${{ margin: "0.25rem 0 0" }}>${promSubLabel}</p>
-              </div>
+              ${promSub === "teamUsers"
+                ? null
+                : html`
+                    <div>
+                      <h2 style=${{ margin: 0, fontSize: "1.15rem" }}>Prombūtnes</h2>
+                      ${headerSubLabel
+                        ? html`<p class="app-sub" style=${{ margin: "0.25rem 0 0" }}>${headerSubLabel}</p>`
+                        : null}
+                    </div>
+                  `}
               ${error
                 ? html`
                     <div class="banner-warn" role="alert">Kļūda: ${error}</div>
