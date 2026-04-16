@@ -439,9 +439,11 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script src="./Komanda.js?v=20260413"></script>
+      <script src="./IAD.js?v=20260428"></script>
+      <script src="./supabase/migrations/izmainas.js?v=20260413"></script>
       <script src="./Sodien.js?v=20260420"></script>
       <script src="./Kalendars.js?v=20260410"></script>
-      <script src="./Navigacija.js?v=20260420"></script>
+      <script src="./Navigacija.js?v=20260421"></script>
       <script src="./Filtr.js?v=20260407"></script>
       <script src="./Saskaņošana.js?v=20260407"></script>
       <script src="./Prombutnes_vesture.js?v=20260407"></script>
@@ -472,7 +474,7 @@
         const LS_LOCAL_USER_ID = "pdd_local_user_id";
         const LS_LOCAL_EMAIL = "pdd_local_email";
         /** Adminam: atļaut atvērt bez ielogošanās (lokāli). */
-        const ADMIN_AUTO_ENTER = true;
+        const ADMIN_AUTO_ENTER = false;
         const LS_ABS = "pdd_local_absences";
         const LS_TYPES = "pdd_local_types";
         const LS_LOCAL_CITS = "pdd_local_cits_requests";
@@ -503,6 +505,7 @@
         const COL_USER_NAME = "Vārds uzvārds";
         const COL_USER_IMAIL = "i-mail";
         const COL_USER_AMATS = "Amats";
+        const COL_USER_AIZVIETO = "Aizvieto";
         const COL_USER_ROLE = "LOMA";
         const COL_USER_APPROVER_STATUS = "Apstiprinātāja statuss";
         const COL_USER_APPROVER_FROM = "Apstiprinājuma lomas periods no";
@@ -526,6 +529,17 @@
           "Apstiprinajuma lomas periods lidz",
           "apstiprinajuma_lomas_periods_lidz",
           "approver_period_to",
+        ];
+        const USER_AIZVIETO_ALIASES = [
+          "Aizvieto",
+          "aizvieto",
+          "Aizvietotājs",
+          "Aizvietotajs",
+          "aizvietotājs",
+          "aizvietotajs",
+          "replacement_user",
+          "replacement_name",
+          "replaced_by",
         ];
         const TEAM_PAGE_SIZE = 20;
         const ABSENCE_ALT_KEYS = {
@@ -657,6 +671,8 @@
           typeId,
           startDate,
           endDate,
+          fromTime,
+          toTime,
           comment,
           replacementUserId,
           extraInfo,
@@ -669,6 +685,8 @@
             type_id: Number(typeId),
             start_date: startDate,
             end_date: endDate,
+            laiks_no: fromTime ?? null,
+            laiks_lidz: toTime ?? null,
             comment: comment ?? null,
             Mani_aizvieto: replacementUserId ?? null,
             Papildu_info: extraInfo ?? null,
@@ -691,6 +709,8 @@
           typeId,
           startDate,
           endDate,
+          fromTime,
+          toTime,
           comment,
           replacementUserId,
           extraInfo,
@@ -703,6 +723,8 @@
             [ABSENCE_COLS_RUNTIME.type_id]: Number(typeId),
             [ABSENCE_COLS_RUNTIME.start_date]: startDate,
             [ABSENCE_COLS_RUNTIME.end_date]: endDate,
+            [ABSENCE_COLS_RUNTIME.laiks_no]: fromTime ?? null,
+            [ABSENCE_COLS_RUNTIME.laiks_lidz]: toTime ?? null,
             [ABSENCE_COLS_RUNTIME.comment]: comment ?? null,
             Mani_aizvieto: replacementUserId ?? null,
             Papildu_info: extraInfo ?? null,
@@ -717,6 +739,8 @@
           typeId,
           startDate,
           endDate,
+          fromTime,
+          toTime,
           comment,
           replacementUserId,
           extraInfo,
@@ -728,6 +752,8 @@
             "Prombūtnes veids": Number(typeId),
             "Sākuma datums": startDate,
             "Beigu datums": endDate,
+            "Laiks no": fromTime ?? null,
+            "Laiks līdz": toTime ?? null,
             "Komentāri": comment ?? null,
             Mani_aizvieto: replacementUserId ?? null,
             Papildu_info: extraInfo ?? null,
@@ -743,6 +769,8 @@
           typeId,
           startDate,
           endDate,
+          fromTime,
+          toTime,
           comment,
           replacementUserId,
           extraInfo,
@@ -754,6 +782,8 @@
             type: Number(typeId),
             sakuma_datums: startDate,
             beigu_datums: endDate,
+            Laiks_no: fromTime ?? null,
+            Laiks_lidz: toTime ?? null,
             Komentārs: comment ?? null,
             Mani_aizvieto: replacementUserId ?? null,
             Papildu_info: extraInfo ?? null,
@@ -769,6 +799,8 @@
           typeId,
           startDate,
           endDate,
+          fromTime,
+          toTime,
           comment,
           replacementUserId,
           extraInfo,
@@ -780,6 +812,8 @@
             type: Number(typeId),
             Sakuma_datums: startDate,
             Beigu_datums: endDate,
+            Laiks_no: fromTime ?? null,
+            Laiks_lidz: toTime ?? null,
             Komentars: comment ?? null,
             Mani_aizvieto: replacementUserId ?? null,
             Papildu_info: extraInfo ?? null,
@@ -961,6 +995,7 @@
           ).trim();
           const email = String(firstUserEmailField(u) ?? "").trim();
           const amats = String(u?.[COL_USER_AMATS] ?? u?.Amats ?? u?.amats ?? "").trim();
+          const aizvieto = String(pickByAliases(u, USER_AIZVIETO_ALIASES, "") ?? "").trim();
           const approverRaw = pickByAliases(u, USER_APPROVER_STATUS_ALIASES, u?.is_approver);
           const approverMode = normalizeApproverMode(approverRaw);
           const approverFrom = String(pickByAliases(u, USER_APPROVER_FROM_ALIASES, "") ?? "").trim();
@@ -974,6 +1009,7 @@
             ["e-mail"]: email || null,
             email: email || null,
             [COL_USER_AMATS]: amats || null,
+            [COL_USER_AIZVIETO]: aizvieto || null,
             [COL_USER_ROLE]: userRoleValue(u),
             role: userRoleValue(u),
             raw_role: u?.role ?? null,
@@ -1908,7 +1944,17 @@
 
         function localSessionActive() {
           if (ADMIN_AUTO_ENTER && isLocalMode()) return true;
-          return getStickyAuthValue(LS_LOCAL_OK) === "1";
+          if (getStickyAuthValue(LS_LOCAL_OK) !== "1") return false;
+          const entered = String(getStickyAuthValue(LS_LOCAL_EMAIL) || "").trim().toLowerCase();
+          if (!entered || !entered.includes("@")) return false;
+          const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
+          const list = Array.isArray(users) ? users : [];
+          return list.some(
+            (u) =>
+              String(u?.email ?? u?.["i-mail"] ?? u?.["e-mail"] ?? u?.["e-pasts"] ?? "")
+                .trim()
+                .toLowerCase() === entered
+          );
         }
 
         function ensureLocalAdminSession() {
@@ -2020,7 +2066,7 @@
               setLoading(false);
               return;
             }
-            if (getStickyAuthValue(LS_LOCAL_OK) === "1") {
+            if (localSessionActive()) {
               const uid = getStickyAuthValue(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
               const em = getStickyAuthValue(LS_LOCAL_EMAIL) || "demo@local";
               setSession({ user: { id: uid, email: em } });
@@ -2395,7 +2441,15 @@
           `;
         }
 
-        function Dashboard({ onOpenPrombutnes, absencesToday }) {
+        function PddAppChangesView() {
+          const View = globalThis.PDD_IZMAINAS?.createChangesView?.(html, React);
+          if (!View) {
+            return html`<section class="list-panel"><p>Izmaiņu modulis nav ielādēts.</p></section>`;
+          }
+          return html`<${View} supabase=${supabase} />`;
+        }
+
+        function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenTodayTask, absencesToday }) {
           const [sodienRows, setSodienRows] = useState(() => {
             try {
               if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !configured() || !globalThis.__PDD_SUPABASE__) {
@@ -2407,6 +2461,7 @@
             return undefined;
           });
           const [sodienErr, setSodienErr] = useState(null);
+          const [todayTaskItems, setTodayTaskItems] = useState([]);
           const refreshSodienAktualitates = useCallback(async () => {
             const V = globalThis.PDDSodien;
             const sb = globalThis.__PDD_SUPABASE__;
@@ -2425,10 +2480,66 @@
               setSodienRows(V?.visibleAktualitatesActive?.() ?? []);
             }
           }, []);
+          const refreshTodayTasks = useCallback(async () => {
+            const I = globalThis.IAD;
+            const sb = globalThis.__PDD_SUPABASE__;
+            const providers = [];
+            if (I?.buildTodayTaskItems) {
+              providers.push({
+                key: "iad-default",
+                getItems: async () => {
+                  if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !sb || !I?.fetchIadRowsFromSupabase) {
+                    const localRows = Array.isArray(I?.loadLocalRows?.()) ? I.loadLocalRows() : [];
+                    return I.buildTodayTaskItems(localRows);
+                  }
+                  await ensureDbReadableSession();
+                  const iadRows = await I.fetchIadRowsFromSupabase(sb);
+                  return I.buildTodayTaskItems(iadRows);
+                },
+              });
+            }
+            const externalProviders = Array.isArray(globalThis.__PDD_TASK_TODAY_PROVIDERS__)
+              ? globalThis.__PDD_TASK_TODAY_PROVIDERS__
+              : [];
+            for (const p of externalProviders) {
+              if (p && typeof p.getItems === "function") providers.push(p);
+            }
+            if (!providers.length) {
+              setTodayTaskItems([]);
+              return;
+            }
+            try {
+              const combined = [];
+              for (const provider of providers) {
+                try {
+                  const chunk = await provider.getItems({ supabase: sb, ensureDbReadableSession, isLocalMode, simpleMode: TIKAI_VIENKARSI_SKATS });
+                  if (Array.isArray(chunk)) combined.push(...chunk);
+                } catch {
+                  // provider-level errors are ignored to keep dashboard responsive
+                }
+              }
+              const dedup = new Map();
+              for (const item of combined) {
+                const key = String(item?.key ?? `${item?.module ?? ""}:${item?.title ?? ""}:${item?.dueDate ?? ""}`);
+                if (!dedup.has(key)) dedup.set(key, item);
+              }
+              setTodayTaskItems(Array.from(dedup.values()));
+            } catch {
+              if (!I?.buildTodayTaskItems) {
+                setTodayTaskItems([]);
+                return;
+              }
+              const localRows = Array.isArray(I?.loadLocalRows?.()) ? I.loadLocalRows() : [];
+              setTodayTaskItems(I.buildTodayTaskItems(localRows));
+            }
+          }, []);
           useEffect(() => {
             if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !globalThis.__PDD_SUPABASE__) return;
             void refreshSodienAktualitates();
           }, [refreshSodienAktualitates]);
+          useEffect(() => {
+            void refreshTodayTasks();
+          }, [refreshTodayTasks]);
           useEffect(() => {
             const sb = globalThis.__PDD_SUPABASE__;
             if (!sb || isLocalMode() || TIKAI_VIENKARSI_SKATS) return undefined;
@@ -2458,6 +2569,36 @@
               if (ch) void sb.removeChannel(ch);
             };
           }, [refreshSodienAktualitates]);
+          useEffect(() => {
+            const sb = globalThis.__PDD_SUPABASE__;
+            if (!sb || isLocalMode() || TIKAI_VIENKARSI_SKATS) return undefined;
+            let ch = null;
+            let cancelled = false;
+            (async () => {
+              try {
+                const I = globalThis.IAD;
+                if (!I?.fetchIadRowsFromSupabase) return;
+                const tbl = await (async () => {
+                  for (const name of ["IAD", "iad", "Iad"]) {
+                    const probe = await sb.from(name).select("*").limit(1);
+                    if (!probe.error) return name;
+                  }
+                  return "";
+                })();
+                if (cancelled || !tbl) return;
+                ch = sb
+                  .channel("pdd-iad-dashboard")
+                  .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshTodayTasks())
+                  .subscribe();
+              } catch (_) {
+                // ignore realtime errors for task cards
+              }
+            })();
+            return () => {
+              cancelled = true;
+              if (ch) void sb.removeChannel(ch);
+            };
+          }, [refreshTodayTasks]);
           const sodienBlock = useMemo(() => {
             try {
               return (
@@ -2469,12 +2610,14 @@
                   useSupabase: Boolean(globalThis.__PDD_SUPABASE__) && !TIKAI_VIENKARSI_SKATS && !isLocalMode(),
                   syncError: sodienErr,
                   loadingAktualitates: sodienRows === undefined,
+                  todayTaskItems,
+                  onOpenTodayTask: onOpenTodayTask,
                 }) ?? null
               );
             } catch {
               return null;
             }
-          }, [absencesToday, sodienRows, sodienErr, refreshSodienAktualitates]);
+          }, [absencesToday, sodienRows, sodienErr, refreshSodienAktualitates, todayTaskItems, onOpenTodayTask]);
           return html`
             <section aria-labelledby="dashboard-title">
               <h2 id="dashboard-title" class="app-sub" style=${{ marginBottom: "1rem", fontSize: "1rem" }}>
@@ -2485,10 +2628,10 @@
                   <h3>Prombūtnes</h3>
                   <p>Kalendārs, pieteikums un apstiprinātāja maiņa; „Cits (ar vadītāja saskaņojumu)” — caur e-pastu.</p>
                 </button>
-                <div class="card" style=${{ opacity: 0.65, cursor: "default" }}>
-                  <h3>Modulis2</h3>
-                  <p>Plānots.</p>
-                </div>
+                <button type="button" class="card" onClick=${onOpenDarbaUzdevumi}>
+                  <h3>Darba uzdevumi</h3>
+                  <p>IaD ieteikumi un citi apakšmoduļi.</p>
+                </button>
                 <div class="card" style=${{ opacity: 0.65, cursor: "default" }}>
                   <h3>Modulis3</h3>
                   <p>Plānots.</p>
@@ -2575,7 +2718,12 @@
               const s = String(a?.start_date ?? "").slice(0, 10);
               const e = String(a?.end_date ?? "").slice(0, 10);
               if (!s || !e) return false;
-              return key >= s && key <= e;
+              if (!(key >= s && key <= e)) return false;
+              const typeName = a?.type?.name ?? a?.type_id ?? "";
+              if (isCitsSaskanotsTypeName(typeName)) {
+                return String(a?.status ?? "").trim().toLowerCase() === "approved";
+              }
+              return true;
             });
           };
           const title = format(month, "LLLL yyyy", { locale: lv });
@@ -2756,6 +2904,11 @@
               String(userId ?? "").trim() || String(sessionStorage.getItem(LS_LOCAL_USER_ID) ?? "").trim();
             return u || null;
           });
+          const [selectedUserIds, setSelectedUserIds] = useState(() => {
+            const u =
+              String(userId ?? "").trim() || String(sessionStorage.getItem(LS_LOCAL_USER_ID) ?? "").trim();
+            return u ? [u] : [];
+          });
           const [citsRows, setCitsRows] = useState([]);
           const [decisionReason, setDecisionReason] = useState({});
           const currentTypeObj = types.find((t) => String(t.id) === String(typeId)) ?? null;
@@ -2830,6 +2983,7 @@
           function cancelAbsenceForm() {
             const uid = String(resolvedUserId ?? "").trim();
             setSelectedUserId(uid || null);
+            setSelectedUserIds(uid ? [uid] : []);
             setTypeId("");
             setStartDate("");
             setEndDate("");
@@ -2870,17 +3024,18 @@
             })();
           }, []);
 
-          // Kad izvēlas Cits veidu, ieliekam noklusētos “visa diena” / “no-līdz”.
+          // Pēc veida maiņas vienmēr atgriežamies pie noklusējuma "Visa diena".
           useEffect(() => {
-            if (!isCitsFlow) {
-              setCitsAllDay(true);
-              return;
-            }
             setCitsAllDay(true);
-          }, [isCitsFlow]);
+            setCitsFromTime("09:00");
+            setCitsToTime("17:00");
+          }, [typeId]);
           useEffect(() => {
             const uid = String(resolvedUserId ?? "").trim();
-            if (uid) setSelectedUserId(uid);
+            if (uid) {
+              setSelectedUserId(uid);
+              setSelectedUserIds([uid]);
+            }
           }, [resolvedUserId]);
           useEffect(() => {
             let cancelled = false;
@@ -2976,6 +3131,16 @@
                 const first = String(safeList[0]?.id ?? "").trim();
                 if (first) return first;
                 return uid || null;
+              });
+              setSelectedUserIds((prev) => {
+                const opts = new Set((safeList ?? []).map((u) => String(u?.id ?? "").trim()).filter(Boolean));
+                const valid = Array.isArray(prev)
+                  ? prev.map((v) => String(v ?? "").trim()).filter((v) => opts.has(v))
+                  : [];
+                if (valid.length) return Array.from(new Set(valid));
+                if (uid && opts.has(uid)) return [uid];
+                const first = String(safeList[0]?.id ?? "").trim();
+                return first ? [first] : [];
               });
             })();
             return () => {
@@ -3079,16 +3244,34 @@
           }
           async function handleSubmit(e) {
             e.preventDefault();
-            const finalUserId = String(employeeSelectValue ?? "").trim();
+            const finalUserIds = Array.from(
+              new Set(
+                (Array.isArray(selectedUserIds) ? selectedUserIds : [])
+                  .map((v) => String(v ?? "").trim())
+                  .filter(Boolean)
+              )
+            );
+            const targetUserIds = finalUserIds.length
+              ? finalUserIds
+              : String(employeeSelectValue ?? "").trim()
+                ? [String(employeeSelectValue ?? "").trim()]
+                : [];
+            const finalUserId = targetUserIds[0] ?? "";
             const replacementUser =
               usersForSelect.find((u) => String(u?.id ?? "") === String(replacementUserId ?? "")) ?? null;
             const replacementLabel = String(userDisplayName(replacementUser) || "").trim();
-            if (!typeId || !finalUserId) {
+            if (!typeId || !targetUserIds.length) {
               alert("Nav lietotāju atlase");
               return;
             }
             const typeObj = types.find((t) => String(t.id) === String(typeId));
             const isCitsFlow = typeObj && isCitsSaskanotsTypeName(typeObj.name);
+            if (isCitsFlow && targetUserIds.length > 1) {
+              alert("Veidam \"Cits (ar vadītāja saskaņojumu)\" vienlaikus var iesniegt tikai vienam darbiniekam.");
+              return;
+            }
+            const requestFromTime = citsAllDay ? null : String(citsFromTime ?? "").trim();
+            const requestToTime = citsAllDay ? null : String(citsToTime ?? "").trim();
             setBusy(true);
             try {
               if (isCitsFlow) {
@@ -3106,8 +3289,8 @@
                     type: Number(typeId),
                     Sakuma_datums: startDate,
                     Beigu_datums: endDate,
-                    Laiks_no: citsAllDay ? null : citsFromTime,
-                    Laiks_lidz: citsAllDay ? null : citsToTime,
+                    Laiks_no: requestFromTime,
+                    Laiks_lidz: requestToTime,
                     Komentārs: normalizeCitsCommentWithPeriodLv({
                       allDay: citsAllDay,
                       fromTime: citsFromTime,
@@ -3266,50 +3449,59 @@
                 setCitsToTime("17:00");
                 setTypeId("");
                 setSelectedUserId(null);
+                setSelectedUserIds([]);
                 onCreated();
                 return;
               }
               if (isLocalMode()) {
                 const nowIso = new Date().toISOString();
                 const rows = getLocalAbsences();
-                rows.push({
-                  id: crypto.randomUUID(),
-                  user_id: finalUserId,
-                  type_id: Number(typeId),
-                  start_date: startDate,
-                  end_date: endDate,
-                  comment: comment.trim() || null,
-                  Mani_aizvieto: replacementLabel || null,
-                  Papildu_info: extraInfo.trim() || null,
-                  status: "approved",
-                  approved_by: userId,
-                  approved_at: nowIso,
-                  created_at: nowIso,
-                });
+                for (const uid of targetUserIds) {
+                  rows.push({
+                    id: crypto.randomUUID(),
+                    user_id: uid,
+                    type_id: Number(typeId),
+                    start_date: startDate,
+                    end_date: endDate,
+                    laiks_no: requestFromTime,
+                    laiks_lidz: requestToTime,
+                    comment: comment.trim() || null,
+                    Mani_aizvieto: replacementLabel || null,
+                    Papildu_info: extraInfo.trim() || null,
+                    status: "approved",
+                    approved_by: userId,
+                    approved_at: nowIso,
+                    created_at: nowIso,
+                  });
+                }
                 setLocalAbsences(rows);
                 pushChangeLog(
                   "prombutne.pievienota",
-                  `Darbinieks ${finalUserId}: ${startDate} — ${endDate}`
+                  `Darbinieki ${targetUserIds.join(", ")}: ${startDate} — ${endDate}`
                 );
               } else {
                 const nowIso = new Date().toISOString();
-                const selectedUser = (users ?? []).find((u) => String(u?.id) === String(finalUserId)) ?? null;
-                const error = await insertAbsenceWithFallback({
-                  userId: finalUserId,
-                  userName: selectedUser ? userDisplayName(selectedUser) : "",
-                  typeId: Number(typeId),
-                  startDate,
-                  endDate,
-                  comment: comment.trim() || null,
-                  replacementUserId: replacementLabel || null,
-                  extraInfo: extraInfo.trim() || null,
-                  status: "approved",
-                  approvedBy: null,
-                  approvedAt: nowIso,
-                });
-                if (error) {
-                  alert("Kļūda: " + error.message);
-                  return;
+                for (const uid of targetUserIds) {
+                  const selectedUser = (users ?? []).find((u) => String(u?.id) === String(uid)) ?? null;
+                  const error = await insertAbsenceWithFallback({
+                    userId: uid,
+                    userName: selectedUser ? userDisplayName(selectedUser) : "",
+                    typeId: Number(typeId),
+                    startDate,
+                    endDate,
+                    fromTime: requestFromTime,
+                    toTime: requestToTime,
+                    comment: comment.trim() || null,
+                    replacementUserId: replacementLabel || null,
+                    extraInfo: extraInfo.trim() || null,
+                    status: "approved",
+                    approvedBy: null,
+                    approvedAt: nowIso,
+                  });
+                  if (error) {
+                    alert("Kļūda: " + error.message);
+                    return;
+                  }
                 }
               }
               setStartDate("");
@@ -3319,6 +3511,7 @@
               setExtraInfo("");
               setTypeId("");
               setSelectedUserId(null);
+              setSelectedUserIds([]);
               onCreated();
             } finally {
               setBusy(false);
@@ -3326,7 +3519,6 @@
           }
           return html`
             <div class="list-panel">
-              <h2>Prombūtnes pieteikums</h2>
               <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
                 <strong>Cits (ar vadītāja saskaņojumu)</strong> — obligāta e-pasta saskaņošana: pieprasījums un saite uz
                 <strong> katrina.jirgensone@vid.gov.lv</strong>. Pārējie veidi tiek ierakstīti kā apstiprināti un
@@ -3334,26 +3526,58 @@
               </p>
               <form class="stack" onSubmit=${handleSubmit}>
                 <div class="field">
-                  <label for="employee">Darbinieks</label>
-                  <select
-                    id="employee"
-                    class="select"
-                    required
-                    value=${employeeSelectValue}
-                    onChange=${(ev) => {
-                      const v = String(ev.target.value ?? "").trim();
-                      setSelectedUserId(v || null);
+                  <label>Darbinieks</label>
+                  <div
+                    style=${{
+                      display: "grid",
+                      gap: "0.35rem",
+                      maxHeight: "180px",
+                      overflow: "auto",
+                      border: "1px solid var(--border)",
+                      borderRadius: "10px",
+                      padding: "0.5rem",
+                      background: "var(--bg)",
                     }}
                   >
-                    ${usersForSelect.map(
-                      (u) => html`
-                        <option key=${u.id} value=${u.id}>${userDisplayName(u)}</option>
-                      `
-                    )}
-                  </select>
+                    ${usersForSelect.map((u) => {
+                      const uid = String(u?.id ?? "").trim();
+                      const checked = selectedUserIds.includes(uid);
+                      return html`
+                        <label
+                          key=${`emp-chk-${uid}`}
+                          style=${{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.45rem",
+                            fontSize: "0.9rem",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked=${checked}
+                            onChange=${(ev) => {
+                              const isOn = Boolean(ev.target.checked);
+                              setSelectedUserIds((prev) => {
+                                const list = Array.isArray(prev) ? [...prev] : [];
+                                const has = list.includes(uid);
+                                if (isOn && !has) list.push(uid);
+                                if (!isOn && has) {
+                                  const i = list.indexOf(uid);
+                                  if (i >= 0) list.splice(i, 1);
+                                }
+                                setSelectedUserId(list[0] ?? null);
+                                return list;
+                              });
+                            }}
+                          />
+                          <span>${userDisplayName(u)}</span>
+                        </label>
+                      `;
+                    })}
+                  </div>
                   <span style=${{ fontSize: "0.78rem", color: "var(--muted)" }}>
                     ${selfRowLabel
-                      ? html`Pēc noklusējuma izvēlēts: <strong>${selfRowLabel}</strong>. Citus darbiniekus vari atlasīt, ja nepieciešams.`
+                      ? html`Pēc noklusējuma izvēlēts: <strong>${selfRowLabel}</strong>. Vari atzīmēt vairākus darbiniekus uzreiz.`
                       : html`Ielādē tavu vārdu no konta…`}
                   </span>
                 </div>
@@ -3399,7 +3623,7 @@
                   </div>
                 </div>
 
-                ${isCitsFlow
+                ${typeId
                   ? html`
                       <div class="field" style=${{ marginTop: "-0.15rem" }}>
                         <label style=${{ display: "flex", alignItems: "center", gap: "0.55rem" }}>
@@ -3599,6 +3823,7 @@
           { key: COL_USER_NAME, label: "Vārds uzvārds" },
           { key: COL_USER_IMAIL, label: "e-pasts" },
           { key: COL_USER_AMATS, label: "Amats" },
+          { key: COL_USER_AIZVIETO, label: "Aizvieto" },
         ];
 
         function teamUsersTableColumns(_users) {
@@ -3651,6 +3876,8 @@
           const [page, setPage] = useState(0);
           const [busy, setBusy] = useState(false);
           const [authHint, setAuthHint] = useState("");
+          const [aizvietoDraft, setAizvietoDraft] = useState({});
+          const [aizvietoSaving, setAizvietoSaving] = useState({});
           const [teamImageOpen, setTeamImageOpen] = useState(false);
           const [teamImageFailed, setTeamImageFailed] = useState(false);
           const isLocalTeams = false;
@@ -3667,6 +3894,40 @@
             const tp = Math.max(1, Math.ceil((users?.length ?? 0) / TEAM_PAGE_SIZE) || 1);
             setPage((p) => Math.min(p, tp - 1));
           }, [users?.length]);
+          useEffect(() => {
+            const next = {};
+            for (const u of users ?? []) {
+              const uid = String(u?.id ?? "").trim();
+              if (!uid) continue;
+              next[uid] = String(u?.[COL_USER_AIZVIETO] ?? "").trim();
+            }
+            setAizvietoDraft(next);
+          }, [users]);
+
+          async function saveAizvietoRow(u) {
+            const uid = String(u?.id ?? "").trim();
+            if (!uid) return;
+            const value = String(aizvietoDraft?.[uid] ?? "").trim();
+            setAizvietoSaving((m) => ({ ...m, [uid]: true }));
+            setAuthHint("");
+            try {
+              const fn = window.KOMANDA?.setUserAizvieto;
+              if (typeof fn !== "function") {
+                setAuthHint("Aizvieto saglabāšana nav pieejama.");
+                return;
+              }
+              const r = await fn({ userId: uid, replacementName: value, syncDb: true });
+              if (r?.error) {
+                setAuthHint(String(r.error?.message ?? "Neizdevās saglabāt Aizvieto."));
+                return;
+              }
+              await onReload?.();
+            } catch (e) {
+              setAuthHint(String(e?.message ?? "Neizdevās saglabāt Aizvieto."));
+            } finally {
+              setAizvietoSaving((m) => ({ ...m, [uid]: false }));
+            }
+          }
 
           return html`
             <div class="list-panel team-users-panel">
@@ -3691,6 +3952,48 @@
                       ? pagedUsers.map((u) => html`
                           <tr key=${u.id}>
                             ${cols.map((key) => {
+                              if (key === COL_USER_AIZVIETO) {
+                                const uid = String(u?.id ?? "").trim();
+                                const canEditAizvieto = Boolean(canAdmin || String(currentUserId ?? "") === uid);
+                                const draftVal = String(aizvietoDraft?.[uid] ?? "").trim();
+                                const options = (window.KOMANDA?.getReplacementOptions?.(uid) ?? [])
+                                  .filter((x) => String(x?.name ?? "").trim())
+                                  .sort((a, b) =>
+                                    String(a?.name ?? "").localeCompare(String(b?.name ?? ""), "lv")
+                                  );
+                                return html`
+                                  <td key=${key}>
+                                    ${canEditAizvieto
+                                      ? html`
+                                          <div class="row" style=${{ gap: "0.35rem", alignItems: "center" }}>
+                                            <select
+                                              class="select"
+                                              style=${{ minWidth: "170px" }}
+                                              value=${draftVal}
+                                              onChange=${(ev) => {
+                                                const v = String(ev.target.value ?? "").trim();
+                                                setAizvietoDraft((m) => ({ ...m, [uid]: v }));
+                                              }}
+                                            >
+                                              <option value="">Nav norādīts</option>
+                                              ${options.map(
+                                                (opt) => html`<option key=${`aizv-${uid}-${opt.id}`} value=${opt.name}>${opt.name}</option>`
+                                              )}
+                                            </select>
+                                            <button
+                                              type="button"
+                                              class="btn btn-ghost btn-small"
+                                              disabled=${Boolean(aizvietoSaving?.[uid])}
+                                              onClick=${() => saveAizvietoRow(u)}
+                                            >
+                                              ${aizvietoSaving?.[uid] ? "Saglabā…" : "Saglabāt"}
+                                            </button>
+                                          </div>
+                                        `
+                                      : formatUserTableCell(key, u[key])}
+                                  </td>
+                                `;
+                              }
                               const cellVal = key === COL_USER_IMAIL ? userImail(u) : u[key];
                               return html`<td key=${key}>${formatUserTableCell(key, cellVal)}</td>`;
                             })}
@@ -6221,11 +6524,18 @@
           const [view, setView] = useState("home");
           const [promSub, setPromSub] = useState("calendar");
           const [navPast, setNavPast] = useState([]);
+          const [darbaUzdevumiFocus, setDarbaUzdevumiFocus] = useState(null);
+          const APP_CHANGES_SEEN_KEY = "pdd_app_changes_seen_stamp_v1";
+          const [showPddAppChangesBadge, setShowPddAppChangesBadge] = useState(false);
           const PINNED_SECTIONS_LS_KEY = "pdd_pinned_sections_v1";
-          function makeSectionLabel(sectionView, sectionPromSub) {
+          function makeSectionLabel(sectionView, sectionPromSub, sectionAnchor) {
             if (sectionView === "home") return "Sākums";
             if (sectionView === "team") return "Komanda";
+            if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-current") return "IaD: Aktuālie";
+            if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-done") return "IaD: Neaktuālie";
+            if (sectionView === "darbaUzdevumiIad") return "IaD ieteikumi";
             if (sectionView === "aktualitatesHistory") return "Aktualitāšu vēsture";
+            if (sectionView === "pddAppChanges") return "Izmaiņas PDD aplikācijā";
             if (sectionView !== "prombutnes") return "Sadaļa";
             if (sectionPromSub === "request") return "Prombūtnes pieteikums";
             if (sectionPromSub === "history") return "Prombūtnes vēsture";
@@ -6234,18 +6544,26 @@
             if (sectionPromSub === "teamUsers") return "Komanda";
             return "Prombūtnes kalendārs";
           }
-          function normalizeSection(sectionView, sectionPromSub) {
+          function normalizeSection(sectionView, sectionPromSub, sectionAnchor) {
             const safeView = String(sectionView ?? "").trim();
             const safePromSub = String(sectionPromSub ?? "").trim();
+            const safeAnchor = String(sectionAnchor ?? "").trim();
             if (!safeView) return null;
             const normalizedSub = safeView === "prombutnes" ? safePromSub || "calendar" : "";
-            const key = `${safeView}:${normalizedSub}`;
+            const key = `${safeView}:${normalizedSub}:${safeAnchor}`;
             return {
               key,
               view: safeView,
               promSub: normalizedSub,
-              label: makeSectionLabel(safeView, normalizedSub),
+              anchor: safeAnchor,
+              label: makeSectionLabel(safeView, normalizedSub, safeAnchor),
             };
+          }
+          function makeIadListPinnedSection(listKey) {
+            const normalized = String(listKey ?? "").trim().toLowerCase();
+            const anchor = normalized === "done" ? "iad-done" : normalized === "current" ? "iad-current" : "";
+            if (!anchor) return null;
+            return normalizeSection("darbaUzdevumiIad", "", anchor);
           }
           const [pinnedSections, setPinnedSections] = useState(() => {
             try {
@@ -6254,7 +6572,7 @@
               const parsed = JSON.parse(raw);
               if (!Array.isArray(parsed)) return [];
               return parsed
-                .map((x) => normalizeSection(x?.view, x?.promSub))
+                .map((x) => normalizeSection(x?.view, x?.promSub, x?.anchor))
                 .filter(Boolean)
                 .slice(0, 12);
             } catch (_) {
@@ -6282,6 +6600,7 @@
             setNavPast((p) => [...p, { view, promSub }]);
             setView(v);
             if (v === "prombutnes") setPromSub("calendar");
+            if (v !== "darbaUzdevumiIad") setDarbaUzdevumiFocus(null);
           }, [view, promSub]);
           const handlePromSubChange = useCallback((sub) => {
             setNavPast((p) => [...p, { view, promSub }]);
@@ -6314,12 +6633,53 @@
             if (!item?.view) return;
             if (item.view === "prombutnes") {
               handlePromSubChange(item.promSub || "calendar");
+            } else if (item.view === "darbaUzdevumiIad" && item.anchor) {
+              const listKey = item.anchor === "iad-done" ? "done" : "current";
+              setDarbaUzdevumiFocus({ submodule: "iad", listKey });
+              handleChangeView("darbaUzdevumiIad");
             } else {
               handleChangeView(item.view);
             }
           }, [handleChangeView, handlePromSubChange]);
+          const handleIadListPinChange = useCallback((listKey, shouldPin) => {
+            const section = makeIadListPinnedSection(listKey);
+            if (!section) return;
+            setPinnedSections((prev) => {
+              const exists = prev.some((x) => x.key === section.key);
+              if (shouldPin) {
+                if (exists) return prev;
+                return [...prev, section];
+              }
+              if (!exists) return prev;
+              return prev.filter((x) => x.key !== section.key);
+            });
+          }, []);
+          const iadPinnedListKeys = useMemo(
+            () => ({
+              current: pinnedSections.some((x) => x.anchor === "iad-current"),
+              done: pinnedSections.some((x) => x.anchor === "iad-done"),
+            }),
+            [pinnedSections]
+          );
           const [pendingCitsNav, setPendingCitsNav] = useState(false);
           const [homeAbsencesSnapshot, setHomeAbsencesSnapshot] = useState([]);
+          const refreshAppChangesBadge = useCallback(async () => {
+            try {
+              const M = globalThis.PDD_IZMAINAS;
+              const sb = globalThis.__PDD_SUPABASE__;
+              if (!M?.fetchRows || !M?.latestStamp || !sb || TIKAI_VIENKARSI_SKATS || isLocalMode()) {
+                setShowPddAppChangesBadge(false);
+                return;
+              }
+              await ensureDbReadableSession();
+              const rows = await M.fetchRows(sb);
+              const latest = String(M.latestStamp(rows) || "").trim();
+              const seen = String(localStorage.getItem(APP_CHANGES_SEEN_KEY) || "").trim();
+              setShowPddAppChangesBadge(Boolean(latest && latest !== seen));
+            } catch {
+              setShowPddAppChangesBadge(false);
+            }
+          }, []);
           const onAbsencesSnapshot = useCallback((list, uid, canAppr) => {
             const V = globalThis.PDDPrombutnesVesture;
             setPendingCitsNav(Boolean(V?.shouldShowPendingCitsNavBadge?.(list, uid, canAppr)));
@@ -6368,6 +6728,55 @@
               cancelled = true;
             };
           }, [session?.user, homeAbsencesSnapshot.length]);
+          useEffect(() => {
+            void refreshAppChangesBadge();
+          }, [refreshAppChangesBadge]);
+          useEffect(() => {
+            if (view !== "pddAppChanges") return;
+            (async () => {
+              try {
+                const M = globalThis.PDD_IZMAINAS;
+                const sb = globalThis.__PDD_SUPABASE__;
+                if (!M?.fetchRows || !M?.latestStamp || !sb) return;
+                await ensureDbReadableSession();
+                const rows = await M.fetchRows(sb);
+                const latest = String(M.latestStamp(rows) || "").trim();
+                if (latest) localStorage.setItem(APP_CHANGES_SEEN_KEY, latest);
+                setShowPddAppChangesBadge(false);
+              } catch {
+                // ignore
+              }
+            })();
+          }, [view]);
+          useEffect(() => {
+            const sb = globalThis.__PDD_SUPABASE__;
+            if (!sb || isLocalMode() || TIKAI_VIENKARSI_SKATS) return undefined;
+            let ch = null;
+            let cancelled = false;
+            (async () => {
+              try {
+                let tbl = "";
+                for (const name of ["Aplikacijas_papildinajums", "aplikacijas_papildinajums", "Aplikacijas_papildinājums", "aplikacijas_papildinājums"]) {
+                  const probe = await sb.from(name).select("*").limit(1);
+                  if (!probe.error) {
+                    tbl = name;
+                    break;
+                  }
+                }
+                if (cancelled || !tbl) return;
+                ch = sb
+                  .channel("pdd-app-changes-nav")
+                  .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshAppChangesBadge())
+                  .subscribe();
+              } catch {
+                // ignore
+              }
+            })();
+            return () => {
+              cancelled = true;
+              if (ch) void sb.removeChannel(ch);
+            };
+          }, [refreshAppChangesBadge]);
           useEffect(() => {
             if (!session?.user) {
               globalThis.__PDD_ACTOR_DISPLAY_NAME__ = "";
@@ -6556,6 +6965,7 @@
               onPromSubChange=${handlePromSubChange}
               showPromDeputyTab=${showPromDeputyTab}
               showPendingCitsBadge=${pendingCitsNav}
+              showPddAppChangesBadge=${showPddAppChangesBadge}
               canGoBack=${navPast.length > 0}
               onGoBack=${handleGoBack}
               onPinCurrentSection=${handlePinCurrentSection}
@@ -6579,6 +6989,21 @@
                 </header>
               `}
             >
+              ${(() => {
+                const IadPanel = globalThis.IAD?.createIadModule?.(html, React);
+                if (view === "darbaUzdevumiIad") {
+                  return IadPanel
+                    ? html`<${IadPanel}
+                        supabase=${supabase}
+                        focusTask=${darbaUzdevumiFocus}
+                        onFocusHandled=${() => setDarbaUzdevumiFocus(null)}
+                        pinnedListKeys=${iadPinnedListKeys}
+                        onPinListChange=${handleIadListPinChange}
+                      />`
+                    : html`<section class="list-panel"><p>IaD modulis nav ielādēts.</p></section>`;
+                }
+                return null;
+              })()}
               ${view === "home"
                 ? html`<${Dashboard}
                     onOpenPrombutnes=${() => {
@@ -6586,10 +7011,24 @@
                       setView("prombutnes");
                       setPromSub("calendar");
                     }}
+                    onOpenDarbaUzdevumi=${() => {
+                      setNavPast((p) => [...p, { view, promSub }]);
+                      setDarbaUzdevumiFocus(null);
+                      setView("darbaUzdevumiIad");
+                    }}
+                    onOpenTodayTask=${(task) => {
+                      setNavPast((p) => [...p, { view, promSub }]);
+                      setDarbaUzdevumiFocus(task?.target ?? null);
+                      setView("darbaUzdevumiIad");
+                    }}
                     absencesToday=${homeAbsencesSnapshot}
                   />`
                 : view === "aktualitatesHistory"
                   ? html`<${AktualitatesVestureView} />`
+                  : view === "pddAppChanges"
+                    ? html`<${PddAppChangesView} />`
+                  : view === "darbaUzdevumiIad"
+                    ? null
                   : view === "team"
                     ? html`<${PrombutnesSection}
                         userId=${effectiveUserId}

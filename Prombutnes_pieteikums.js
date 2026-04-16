@@ -45,6 +45,15 @@ function buildCitsCommentWithPeriodLv({ allDay, fromTime, toTime, comment }) {
   return c || null;
 }
 
+// Universāls alias visiem prombūtnes veidiem (ne tikai "Cits").
+function buildPrombutnePeriodLabelLv({ allDay, fromTime, toTime }) {
+  return buildCitsPeriodLabelLv({ allDay, fromTime, toTime });
+}
+
+function buildPrombutneCommentWithPeriodLv({ allDay, fromTime, toTime, comment }) {
+  return buildCitsCommentWithPeriodLv({ allDay, fromTime, toTime, comment });
+}
+
 function sanitizeShortText(v) {
   return String(v ?? "").trim().slice(0, 300);
 }
@@ -128,6 +137,8 @@ function getExtraFieldsDefinition() {
 window.PDD_CITS_PERIOD_HELPERS = {
   buildCitsPeriodLabelLv,
   buildCitsCommentWithPeriodLv,
+  buildPrombutnePeriodLabelLv,
+  buildPrombutneCommentWithPeriodLv,
   getExtraFieldsDefinition,
   normalizeExtraFields,
   mergeExtraFieldsIntoPayload,

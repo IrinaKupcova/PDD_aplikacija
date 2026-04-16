@@ -66,6 +66,18 @@
         width: 100%;
         margin: 0;
       }
+      .app-nav-accordion {
+        width: 100%;
+        margin: 0;
+      }
+      .app-nav-accordion-summary {
+        list-style: none;
+        cursor: pointer;
+        user-select: none;
+      }
+      .app-nav-accordion-summary::-webkit-details-marker {
+        display: none;
+      }
       @media (max-width: 720px) {
         .app-nav-vesture-details {
           flex: 1 1 100%;
@@ -82,6 +94,18 @@
       }
       .app-nav-vesture-details .app-nav-sub {
         margin-top: 0.2rem;
+      }
+      .app-nav-badge-new {
+        display: inline-flex;
+        align-items: center;
+        margin-left: 0.45rem;
+        padding: 0.08rem 0.36rem;
+        border-radius: 999px;
+        background: #dc2626;
+        color: #fff;
+        font-size: 0.64rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
       }
       .pdd-pinned-bar {
         position: sticky;
@@ -181,6 +205,7 @@
       onPromSubChange,
       showPromDeputyTab,
       showPendingCitsBadge,
+      showPddAppChangesBadge,
       canGoBack,
       onGoBack,
       onPinCurrentSection,
@@ -193,7 +218,8 @@
     }) {
       ensureNavigacijaExtraStyles();
       const historyNavOpen =
-        view === "prombutnes" || view === "home" || view === "aktualitatesHistory" || view === "team";
+        view === "prombutnes" || view === "home" || view === "aktualitatesHistory" || view === "pddAppChanges" || view === "team" || view === "darbaUzdevumiIad";
+      const darbaUzdevumiNavOpen = view === "darbaUzdevumiIad";
       const showBack = Boolean(canGoBack && typeof onGoBack === "function");
 
       return html`
@@ -303,6 +329,18 @@
               >
                 Komanda
               </button>
+              <details class="app-nav-accordion" open=${darbaUzdevumiNavOpen}>
+                <summary class=${`app-nav-link app-nav-accordion-summary ${view === "darbaUzdevumiIad" ? "active" : ""}`}>Darba uzdevumi</summary>
+                <div class="app-nav-sub" role="group" aria-label="Darba uzdevumu apakšsadaļas">
+                  <button
+                    type="button"
+                    class=${`app-nav-sublink ${view === "darbaUzdevumiIad" ? "active" : ""}`}
+                    onClick=${() => onChangeView("darbaUzdevumiIad")}
+                  >
+                    IaD ieteikumi
+                  </button>
+                </div>
+              </details>
               ${historyNavOpen
                 ? html`
                     <details class="app-nav-vesture-details">
@@ -324,6 +362,14 @@
                           onClick=${() => onChangeView("aktualitatesHistory")}
                         >
                           Aktualitāšu vēsture
+                        </button>
+                        <button
+                          type="button"
+                          class=${`app-nav-sublink ${view === "pddAppChanges" ? "active" : ""}`}
+                          onClick=${() => onChangeView("pddAppChanges")}
+                        >
+                          Izmaiņas PDD aplikācijā
+                          ${showPddAppChangesBadge ? html`<span class="app-nav-badge-new">NEW</span>` : null}
                         </button>
                       </div>
                     </details>

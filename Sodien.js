@@ -126,6 +126,13 @@ function ymd(d) {
   return Number.isNaN(dt.getTime()) ? "" : dt.toISOString().slice(0, 10);
 }
 
+function toDateInput(v) {
+  const s = pick(v);
+  if (!s) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return ymd(s);
+}
+
 function pick(v) {
   return String(v ?? "").trim();
 }
@@ -240,8 +247,8 @@ function authorLabelFromDbRow(r, nameMap) {
 function rowFromDb(r, nameMap) {
   if (!r || typeof r !== "object") return null;
   const html = pick(r.Kas_sodien_vel_aktuals ?? r.kas_sodien_vel_aktuals);
-  const start = pick(r.Sakums ?? r.sakums);
-  const end = pick(r.Beigas ?? r.beigas);
+  const start = toDateInput(r.Sakums ?? r.sakums);
+  const end = toDateInput(r.Beigas ?? r.beigas);
   const created_at = pick(r.created_at);
   const autors_id = pick(r.Autors ?? r.autors);
   if (!html || !start || !end) return null;
@@ -614,12 +621,11 @@ async function addAktualitate() {
   const today = ymd(new Date());
   ensureSodienDraftDefaults();
   const usePeriodChecked = Boolean(document.getElementById("sodien-use-period")?.checked);
-  const startPicked = pick(document.getElementById("sodien-start")?.value || sodienDraft.start || today);
-  const endPicked = pick(document.getElementById("sodien-end")?.value || sodienDraft.end || startPicked || today);
-  // Ja lietotājs izvēlas datumus, traktējam to kā periodu pat tad, ja checkbox nav ieķeksējies.
-  const usePeriod = Boolean(sodienDraft.usePeriod || usePeriodChecked || startPicked !== today || endPicked !== today);
-  const start = usePeriod ? startPicked : today;
-  const end = usePeriod ? endPicked : start || today;
+  const startPicked = toDateInput(document.getElementById("sodien-start")?.value || sodienDraft.start || today);
+  const endPicked = toDateInput(document.getElementById("sodien-end")?.value || sodienDraft.end || startPicked || today);
+  const start = startPicked || today;
+  const end = endPicked || start || today;
+  const usePeriod = Boolean(sodienDraft.usePeriod || usePeriodChecked || start !== end);
   if (start && end && end < start) {
     alert("Perioda beigu datums nevar būt mazāks par sākuma datumu.");
     return;
@@ -634,6 +640,7 @@ async function addAktualitate() {
       Sakums: start || today,
       Beigas: end || start || today,
     };
+    const actorEmail = pick(globalThis.__PDD_ACTOR_EMAIL__ || sessionStorage.getItem("pdd_local_email") || "");
     try {
       const t = await resolveAktualitatesTableName(sb);
       if (editId) {
@@ -647,12 +654,27 @@ async function addAktualitate() {
             alert("Neizdevās atrast labojamo ierakstu.");
             return;
           }
-          const q = applyLegacyMatchFilter(sb.from(t).update(payload), curEdit);
-          const { error } = await q;
+          const q = applyLegacyMatchFilter(sb.from(t).update(payload), curEdit).select("id, Sakums, Beigas");
+          const { data, error } = await q;
           if (error) throw error;
+          if (!Array.isArray(data) || data.length === 0) {
+            throw new Error("Aktualitātes ieraksts netika atjaunots.");
+          }
         } else {
-          const { error } = await sb.from(t).update(payload).eq("id", editId);
+          const { data, error } = await sb.from(t).update(payload).eq("id", editId).select("id, Sakums, Beigas").maybeSingle();
           if (error) throw error;
+          if (!data) {
+            if (!actorEmail) throw new Error("Aktualitātes ieraksts netika atjaunots.");
+            const { data: rpcData, error: rpcError } = await sb.rpc("pdd_update_aktualitate_by_email", {
+              p_actor_email: actorEmail,
+              p_id: editId,
+              p_html: payload.Kas_sodien_vel_aktuals,
+              p_sakums: payload.Sakums,
+              p_beigas: payload.Beigas,
+            });
+            if (rpcError) throw rpcError;
+            if (!rpcData) throw new Error("Aktualitātes ieraksts netika atjaunots.");
+          }
         }
       } else {
         const { data: sess } = await sb.auth.getSession();
@@ -789,6 +811,10 @@ async function runDeleteAktualitate(id) {
 function setFormMode(isEdit) {
   const btn = document.getElementById("sodien-submit-btn");
   if (btn) btn.textContent = isEdit ? "Saglabāt" : "Pievienot aktualitāti";
+  const title = document.getElementById("sodien-editor-title");
+  if (title) title.textContent = isEdit ? "Labot aktualitāti" : "Pievienot aktualitāti";
+  const details = document.getElementById("sodien-editor-details");
+  if (details && isEdit) details.open = true;
 }
 
 function resetAktualitateForm() {
@@ -809,6 +835,8 @@ function resetAktualitateForm() {
   if (cb) cb.checked = false;
   if (start) start.value = today;
   if (end) end.value = today;
+  const details = document.getElementById("sodien-editor-details");
+  if (details) details.open = false;
   setFormMode(false);
 }
 
@@ -821,8 +849,9 @@ function editAktualitate(id) {
     alert("Labot drīkst tikai autors vai administrators.");
     return;
   }
-  const details = document.getElementById("sodien-editor-details");
-  if (details) details.open = true;
+  const editorPanel = document.getElementById("sodien-editor-details");
+  if (editorPanel) editorPanel.open = true;
+  if (editorPanel?.scrollIntoView) editorPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   const ed = currentEditor();
   if (ed) ed.innerHTML = String(item.html || "");
   markSelectedEditorImage(null);
@@ -832,8 +861,8 @@ function editAktualitate(id) {
   }
   sodienDraft = {
     usePeriod: Boolean(item.use_period),
-    start: pick(item.start || ymd(new Date())),
-    end: pick(item.end || item.start || ymd(new Date())),
+    start: toDateInput(item.start || ymd(new Date())),
+    end: toDateInput(item.end || item.start || ymd(new Date())),
   };
   const editField = currentEditIdField();
   if (editField) editField.value = String(item.id);
@@ -841,8 +870,8 @@ function editAktualitate(id) {
   const start = document.getElementById("sodien-start");
   const end = document.getElementById("sodien-end");
   if (cb) cb.checked = Boolean(item.use_period);
-  if (start) start.value = pick(item.start || ymd(new Date()));
-  if (end) end.value = pick(item.end || start?.value || ymd(new Date()));
+  if (start) start.value = toDateInput(item.start || ymd(new Date()));
+  if (end) end.value = toDateInput(item.end || start?.value || ymd(new Date()));
   setFormMode(true);
 }
 
@@ -926,7 +955,17 @@ const sodienAktHtmlBox = {
   overflowX: "auto",
 };
 
-function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, useSupabase, syncError, loadingAktualitates }) {
+function renderTodayInfo({
+  html,
+  absences,
+  aktualitates,
+  refreshAktualitates,
+  useSupabase,
+  syncError,
+  loadingAktualitates,
+  todayTaskItems,
+  onOpenTodayTask,
+}) {
   if (typeof html !== "function") return null;
   ensureSodienAktStyleOnce();
   ensureSodienDraftDefaults();
@@ -942,6 +981,7 @@ function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, us
       : Array.isArray(aktualitates)
         ? aktualitates
         : visibleAktualitatesActive();
+  const tasksToday = Array.isArray(todayTaskItems) ? todayTaskItems : [];
   const today = sodienDraft.start || ymd(new Date());
   return html`
     <section
@@ -1019,13 +1059,9 @@ function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, us
                         ...sodienAktFlexibleBox,
                       }}
                     >
-                      ${x.use_period
-                        ? html`
-                            <div style=${{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.3rem", ...sodienAktFlexibleBox }}>
-                              Periods: ${formatLvDate(x.start)} — ${formatLvDate(x.end)}
-                            </div>
-                          `
-                        : null}
+                      <div style=${{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.3rem", ...sodienAktFlexibleBox }}>
+                        ${x.use_period ? `Periods: ${formatLvDate(x.start)} — ${formatLvDate(x.end)}` : `Datums: ${formatLvDate(x.start)}`}
+                      </div>
                       <div style=${{ fontSize: "0.82rem", color: "var(--muted)", marginBottom: "0.3rem", ...sodienAktFlexibleBox }}>
                         Autors: ${pick(x.authorLabel) || "—"}
                       </div>
@@ -1049,9 +1085,9 @@ function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, us
             `
           : html`<p style=${{ margin: "0 0 0.75rem", color: "var(--muted)" }}>Papildu aktualitātes nav pievienotas.</p>`}
 
-      <details id="sodien-editor-details">
-        <summary style=${{ cursor: "pointer", fontWeight: 600 }}>Pievienot aktualitāti</summary>
-        <div class="stack" style=${{ marginTop: "0.6rem", gap: "0.5rem" }}>
+      <details id="sodien-editor-details" class="list-panel" style=${{ marginTop: "0.8rem", background: "rgba(255,255,255,0.45)" }}>
+        <summary id="sodien-editor-title" style=${{ cursor: "pointer", fontWeight: 600, fontSize: "0.98rem" }}>Pievienot aktualitāti</summary>
+        <div class="stack" style=${{ gap: "0.5rem", marginTop: "0.6rem" }}>
           <input id="sodien-edit-id" type="hidden" value="" />
           <div class="row" style=${{ gap: "0.35rem", flexWrap: "wrap" }}>
             <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCmd("bold")}>B</button>
@@ -1161,6 +1197,30 @@ function renderTodayInfo({ html, absences, aktualitates, refreshAktualitates, us
           </div>
         </div>
       </details>
+
+      <div style=${{ fontWeight: 700, borderBottom: "1px solid rgba(14,116,144,0.35)", paddingBottom: "0.35rem", marginBottom: "0.55rem", marginTop: "0.8rem" }}>
+        Darba uzdevumu aktualitātes uz šodienu
+      </div>
+      ${tasksToday.length
+        ? html`
+            <div class="stack" style=${{ gap: "0.45rem", marginBottom: "0.9rem" }}>
+              ${tasksToday.map(
+                (t, i) => html`
+                  <button
+                    key=${String(t?.key || `task-${i}`)}
+                    type="button"
+                    class="btn btn-ghost btn-small"
+                    style=${{ justifyContent: "flex-start", textAlign: "left", width: "100%" }}
+                    onClick=${() => (typeof onOpenTodayTask === "function" ? onOpenTodayTask(t) : null)}
+                  >
+                    ${String(t?.module || "Darba uzdevumi")} · ${String(t?.subtitle || "").trim() ? `${String(t.subtitle).trim()} — ` : ""}${String(t?.title || "Uzdevums")}
+                    ${String(t?.dueDate || "").trim() ? ` (${formatLvDate(String(t.dueDate))})` : ""}
+                  </button>
+                `
+              )}
+            </div>
+          `
+        : html`<p style=${{ margin: "0 0 0.9rem", color: "var(--muted)" }}>Šodien nav darba uzdevumu ar aktuālu izpildes periodu.</p>`}
     </section>
   `;
 }
