@@ -681,7 +681,7 @@
           approvedAt,
         }) {
           return {
-            "Vārds uzvārds": userId,
+            "Vārds uzvārds": dbUserRefValue({ userId, userName, columnName: "Vārds uzvārds" }),
             type_id: Number(typeId),
             start_date: startDate,
             end_date: endDate,
@@ -697,9 +697,16 @@
         }
 
         function dbUserRefValue({ userId, userName, columnName }) {
-          const _unusedName = userName;
           const c = String(columnName ?? "").toLowerCase().trim();
-          if (c) return userId;
+          const name = String(userName ?? "").trim();
+          const id = String(userId ?? "").trim();
+          const isNameCol =
+            c.includes("vārds") || c.includes("vards") || c.includes("name") || c.includes("darbin");
+          const isIdCol = c.includes("id") || c.includes("uuid") || c.includes("user");
+          if (isNameCol && name) return name;
+          if (isIdCol && id) return id;
+          if (name) return name;
+          if (id) return id;
           return userId;
         }
 
@@ -719,7 +726,11 @@
           approvedAt,
         }) {
           return {
-            [ABSENCE_COLS_RUNTIME.user_id]: userId,
+            [ABSENCE_COLS_RUNTIME.user_id]: dbUserRefValue({
+              userId,
+              userName,
+              columnName: ABSENCE_COLS_RUNTIME.user_id,
+            }),
             [ABSENCE_COLS_RUNTIME.type_id]: Number(typeId),
             [ABSENCE_COLS_RUNTIME.start_date]: startDate,
             [ABSENCE_COLS_RUNTIME.end_date]: endDate,
@@ -736,6 +747,7 @@
 
         function absencePayloadLatvian({
           userId,
+          userName,
           typeId,
           startDate,
           endDate,
@@ -749,6 +761,7 @@
           approvedAt,
         }) {
           return {
+            "Vārds uzvārds": dbUserRefValue({ userId, userName, columnName: "Vārds uzvārds" }),
             "Prombūtnes veids": Number(typeId),
             "Sākuma datums": startDate,
             "Beigu datums": endDate,
@@ -779,6 +792,7 @@
           approvedAt,
         }) {
           return {
+            "Vārds uzvārds": dbUserRefValue({ userId, userName, columnName: "Vārds uzvārds" }),
             type: Number(typeId),
             sakuma_datums: startDate,
             beigu_datums: endDate,
@@ -809,6 +823,7 @@
           approvedAt,
         }) {
           return {
+            "Vārds uzvārds": dbUserRefValue({ userId, userName, columnName: "Vārds uzvārds" }),
             type: Number(typeId),
             Sakuma_datums: startDate,
             Beigu_datums: endDate,
@@ -1898,6 +1913,7 @@
             { id: 5, name: "Slimības lapa", color: "#dc2626", sort_order: 5 },
             { id: 6, name: "Neapmaksāta prombūtne", color: "#ca8a04", sort_order: 6 },
             { id: 7, name: "Cits (ar vadītāja saskaņojumu)", color: "#64748b", sort_order: 7 },
+            { id: 8, name: "Prombūtne (jau saskaņota citā kanālā)", color: "#0f766e", sort_order: 8 },
           ];
           localStorage.setItem(LS_TYPES, JSON.stringify(seed));
         }
@@ -1913,6 +1929,15 @@
             }
             return t;
           });
+          if (!normalized.some((t) => String(t?.name ?? "").trim() === "Prombūtne (jau saskaņota citā kanālā)")) {
+            const maxId = normalized.reduce((m, t) => Math.max(m, Number(t?.id ?? 0) || 0), 0);
+            normalized.push({
+              id: maxId + 1,
+              name: "Prombūtne (jau saskaņota citā kanālā)",
+              color: "#0f766e",
+              sort_order: maxId + 1,
+            });
+          }
           if (JSON.stringify(normalized) !== JSON.stringify(rows)) {
             localStorage.setItem(LS_TYPES, JSON.stringify(normalized));
           }
@@ -2684,9 +2709,8 @@
             const cits = list.find((t) => isCitsSaskanotsTypeName(t?.name ?? t?.type ?? ""));
             return cits?.id ?? null;
           })();
-          function extractCitsPeriodLabelLv(a) {
+          function extractPeriodLabelLv(a) {
             const c = String(a?.comment ?? "").trim();
-            if (/^Visa diena\b/i.test(c)) return "Visa diena";
 
             function normTime(s) {
               const str = String(s ?? "").trim();
@@ -2775,8 +2799,8 @@
                       </div>
                       ${items.map((a) => {
                         const isCitsType = Boolean(a?.type?.name) && isCitsSaskanotsTypeName(a.type.name);
-                        const periodLabel = isCitsType ? extractCitsPeriodLabelLv(a) : "";
-                        const notAllDay = Boolean(periodLabel) && String(periodLabel).toLowerCase() !== "visa diena";
+                        const periodLabel = extractPeriodLabelLv(a);
+                        const hasTimePeriod = Boolean(periodLabel);
                         const pendingMark = (() => {
                           const fn = globalThis.PDDPrombutnesVesture?.isPendingCitsAbsence;
                           const base = typeof fn === "function" ? Boolean(fn(a)) : false;
@@ -2819,28 +2843,25 @@
                           >
                             ${userDisplayName(a.employee) || "?"}
                             · ${a.type?.name ?? ""}${
-                              isCitsType && periodLabel
+                              hasTimePeriod
                                 ? html`
-                                    ${notAllDay
-                                      ? html`
-                                          <svg
-                                            width="14"
-                                            height="14"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                            style=${{ marginLeft: "0.5rem", marginRight: "-0.1rem", verticalAlign: "text-bottom" }}
-                                            title="Nav visa diena"
-                                            aria-hidden="true"
-                                          >
-                                            <circle cx="12" cy="12" r="10"></circle>
-                                            <polyline points="12 6 12 12 16 14"></polyline>
-                                          </svg>
-                                        `
-                                      : null} · ${periodLabel}
+                                    <svg
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="2"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                      style=${{ marginLeft: "0.5rem", marginRight: "-0.1rem", verticalAlign: "text-bottom" }}
+                                      title="Norādīts laika periods"
+                                      aria-hidden="true"
+                                    >
+                                      <circle cx="12" cy="12" r="10"></circle>
+                                      <polyline points="12 6 12 12 16 14"></polyline>
+                                    </svg>
+                                    · ${periodLabel}
                                   `
                                 : null
                             }
@@ -4990,11 +5011,11 @@
             return false;
           }
           const sortedList = useMemo(() => {
-            const list = approverView ? absences : absences.filter((a) => isOwnAbsence(a));
+            const list = absences;
             return [...list].sort((a, b) =>
               String(b.created_at || "").localeCompare(String(a.created_at || ""))
             );
-          }, [absences, approverView, userId, sessionEmail, myNameForFilter]);
+          }, [absences]);
           const filteredList = useMemo(() => {
             const includesMatch =
               window.PDDFiltr?.includesMatch ??
@@ -5079,8 +5100,7 @@
           }
           function canEditAbsence(a) {
             if (isApprovedCitsAbsence(a)) return false;
-            if (isAdmin) return true;
-            return isOwnAbsence(a);
+            return true;
           }
           function canDeleteAbsence(a) {
             if (isAdmin) return true;
@@ -5114,7 +5134,7 @@
               return;
             }
             if (!canEditAbsence(a)) {
-              alert("Var labot tikai savu ierakstu.");
+              alert("Šo ierakstu labot nav atļauts.");
               return;
             }
             setEditing(a.id);
@@ -5145,8 +5165,8 @@
               setEditing(null);
               return;
             }
-            if (!isAdmin && !isOwnAbsence(editedRow)) {
-              alert("Var labot tikai savu ierakstu.");
+            if (!canEditAbsence(editedRow)) {
+              alert("Šo ierakstu labot nav atļauts.");
               setEditing(null);
               return;
             }
