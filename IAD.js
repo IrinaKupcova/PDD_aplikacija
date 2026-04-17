@@ -808,6 +808,66 @@
       .iad-list-head { display:flex; align-items:center; justify-content:space-between; gap:.5rem; flex-wrap:wrap; margin-bottom:.45rem; }
       .iad-list-title { margin:0; font-size:.86rem; color:#0f3f68; }
       .iad-list-head-actions { display:flex; align-items:center; gap:.35rem; }
+      .iad-list-icon-btn {
+        border:1px solid #bfdbfe;
+        background:#fff;
+        color:#0f3f68;
+        border-radius:8px;
+        font-size:.82rem;
+        padding:.22rem .42rem;
+        cursor:pointer;
+        line-height:1.1;
+      }
+      .iad-list-icon-btn.is-active {
+        border-color:#0284c7;
+        color:#0284c7;
+        background:#eff6ff;
+      }
+      .iad-search-pop {
+        margin-bottom:.5rem;
+        border:1px solid #bfdbfe;
+        border-radius:10px;
+        background:#fff;
+        padding:.45rem;
+      }
+      .iad-th-filter {
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:.3rem;
+        position:relative;
+      }
+      .iad-filter-btn {
+        border:1px solid #bae6fd;
+        background:#f8fafc;
+        color:#0f3f68;
+        border-radius:999px;
+        font-size:.72rem;
+        padding:.08rem .32rem;
+        cursor:pointer;
+        line-height:1.2;
+      }
+      .iad-filter-btn.is-active {
+        border-color:#0284c7;
+        background:#e0f2fe;
+        color:#0369a1;
+      }
+      .iad-filter-pop {
+        position:absolute;
+        top:calc(100% + 4px);
+        right:0;
+        z-index:6;
+        min-width:170px;
+        border:1px solid #bfdbfe;
+        border-radius:10px;
+        background:#fff;
+        box-shadow:0 8px 24px rgba(15,23,42,.18);
+        padding:.42rem;
+      }
+      .iad-filter-pop .input,
+      .iad-filter-pop .select {
+        width:100%;
+      }
       .iad-list-pin-btn {
         border:1px solid #fecaca;
         background:#fff5f5;
@@ -915,6 +975,8 @@
         done: { numurs: "", nosaukums: "", tema: "", termins: "", atbildigais: "", statuss: "" },
       });
       const [sectionSearch, setSectionSearch] = useState({ current: "", done: "" });
+      const [searchBoxOpen, setSearchBoxOpen] = useState({ current: false, done: false });
+      const [activeColumnFilter, setActiveColumnFilter] = useState({ section: "", column: "" });
 
       const activeRows = rows.filter((r) => !isInactiveStatus(r.IAD_statuss));
       const inactiveRows = rows.filter((r) => isInactiveStatus(r.IAD_statuss));
@@ -980,6 +1042,21 @@
 
       function setSectionSearchValue(sectionKey, value) {
         setSectionSearch((prev) => ({ ...prev, [sectionKey]: String(value ?? "") }));
+      }
+
+      function toggleSectionSearchBox(sectionKey) {
+        setSearchBoxOpen((prev) => ({ ...prev, [sectionKey]: !Boolean(prev?.[sectionKey]) }));
+      }
+
+      function toggleColumnFilter(sectionKey, colKey) {
+        setActiveColumnFilter((prev) => {
+          if (prev?.section === sectionKey && prev?.column === colKey) return { section: "", column: "" };
+          return { section: sectionKey, column: colKey };
+        });
+      }
+
+      function isColumnFilterOpen(sectionKey, colKey) {
+        return activeColumnFilter?.section === sectionKey && activeColumnFilter?.column === colKey;
       }
 
       function findRowForTableFocus(ft, list) {
@@ -1656,29 +1733,68 @@
             <table class="iad-table">
               <thead>
                 <tr>
-                  <th>IaD numurs</th>
-                  <th>IaD nosaukums</th>
-                  <th>IaD ieteikuma tēma (īss apraksts)</th>
-                  <th>IaD ieteikuma termiņš</th>
-                  <th>Atbildīgais</th>
-                  <th>IaD statuss</th>
-                  <th>IaD kartiņa</th>
-                </tr>
-                <tr>
-                  <th><input class="input" placeholder="Filtrs..." value=${f.numurs || ""} onInput=${(e) => setColumnFilter(sectionKey, "numurs", e.target.value)} /></th>
-                  <th><input class="input" placeholder="Filtrs..." value=${f.nosaukums || ""} onInput=${(e) => setColumnFilter(sectionKey, "nosaukums", e.target.value)} /></th>
-                  <th><input class="input" placeholder="Filtrs..." value=${f.tema || ""} onInput=${(e) => setColumnFilter(sectionKey, "tema", e.target.value)} /></th>
-                  <th><input class="input" placeholder="Filtrs..." value=${f.termins || ""} onInput=${(e) => setColumnFilter(sectionKey, "termins", e.target.value)} /></th>
-                  <th><input class="input" placeholder="Filtrs..." value=${f.atbildigais || ""} onInput=${(e) => setColumnFilter(sectionKey, "atbildigais", e.target.value)} /></th>
                   <th>
-                    <select class="select" value=${f.statuss || ""} onChange=${(e) => setColumnFilter(sectionKey, "statuss", e.target.value)}>
-                      <option value="">Visi</option>
-                      <option value="Aktīvs">Aktīvs</option>
-                      <option value="Pabeigts">Pabeigts</option>
-                      <option value="Atcelts">Atcelts</option>
-                    </select>
+                    <div class="iad-th-filter">
+                      <span>IaD numurs</span>
+                      <button type="button" class=${`iad-filter-btn ${f.numurs ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "numurs")}>⏷</button>
+                      ${isColumnFilterOpen(sectionKey, "numurs")
+                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.numurs || ""} onInput=${(e) => setColumnFilter(sectionKey, "numurs", e.target.value)} /></div>`
+                        : null}
+                    </div>
                   </th>
-                  <th></th>
+                  <th>
+                    <div class="iad-th-filter">
+                      <span>IaD nosaukums</span>
+                      <button type="button" class=${`iad-filter-btn ${f.nosaukums ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "nosaukums")}>⏷</button>
+                      ${isColumnFilterOpen(sectionKey, "nosaukums")
+                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.nosaukums || ""} onInput=${(e) => setColumnFilter(sectionKey, "nosaukums", e.target.value)} /></div>`
+                        : null}
+                    </div>
+                  </th>
+                  <th>
+                    <div class="iad-th-filter">
+                      <span>IaD ieteikuma tēma (īss apraksts)</span>
+                      <button type="button" class=${`iad-filter-btn ${f.tema ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "tema")}>⏷</button>
+                      ${isColumnFilterOpen(sectionKey, "tema")
+                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.tema || ""} onInput=${(e) => setColumnFilter(sectionKey, "tema", e.target.value)} /></div>`
+                        : null}
+                    </div>
+                  </th>
+                  <th>
+                    <div class="iad-th-filter">
+                      <span>IaD ieteikuma termiņš</span>
+                      <button type="button" class=${`iad-filter-btn ${f.termins ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "termins")}>⏷</button>
+                      ${isColumnFilterOpen(sectionKey, "termins")
+                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.termins || ""} onInput=${(e) => setColumnFilter(sectionKey, "termins", e.target.value)} /></div>`
+                        : null}
+                    </div>
+                  </th>
+                  <th>
+                    <div class="iad-th-filter">
+                      <span>Atbildīgais</span>
+                      <button type="button" class=${`iad-filter-btn ${f.atbildigais ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "atbildigais")}>⏷</button>
+                      ${isColumnFilterOpen(sectionKey, "atbildigais")
+                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.atbildigais || ""} onInput=${(e) => setColumnFilter(sectionKey, "atbildigais", e.target.value)} /></div>`
+                        : null}
+                    </div>
+                  </th>
+                  <th>
+                    <div class="iad-th-filter">
+                      <span>IaD statuss</span>
+                      <button type="button" class=${`iad-filter-btn ${f.statuss ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "statuss")}>⏷</button>
+                      ${isColumnFilterOpen(sectionKey, "statuss")
+                        ? html`<div class="iad-filter-pop">
+                            <select class="select" value=${f.statuss || ""} onChange=${(e) => setColumnFilter(sectionKey, "statuss", e.target.value)}>
+                              <option value="">Visi</option>
+                              <option value="Aktīvs">Aktīvs</option>
+                              <option value="Pabeigts">Pabeigts</option>
+                              <option value="Atcelts">Atcelts</option>
+                            </select>
+                          </div>`
+                        : null}
+                    </div>
+                  </th>
+                  <th>IaD kartiņa</th>
                 </tr>
               </thead>
               <tbody>
@@ -1768,21 +1884,29 @@
                     <div class="iad-list-head">
                       <p class="iad-list-title">Aktuālie IaD ieteikumi (${activeRows.length})</p>
                       <div class="iad-list-head-actions">
+                        <button type="button" class=${`iad-list-icon-btn ${searchBoxOpen.current ? "is-active" : ""}`} title="Meklēt saturā" onClick=${() => toggleSectionSearchBox("current")}>🔎</button>
                         <button type="button" class=${`iad-list-pin-btn ${pinCurrent ? "is-pinned" : ""}`} onClick=${togglePinCurrent} title=${pinCurrent ? "Noņemt piespraudi" : "Piespraust sarakstu"}>📌</button>
                         <button type="button" class="btn btn-ghost btn-small" onClick=${toggleOpenCurrent}>
                           ${openCurrent ? "Paslēpt" : "Parādīt"}
                         </button>
                       </div>
                     </div>
-                    <div class="row" style=${{ marginBottom: "0.45rem" }}>
-                      <input
-                        class="input"
-                        style=${{ width: "100%" }}
-                        placeholder="🔎 Meklēt saturā (vārds, frāzes daļa, numurs, tēma...)"
-                        value=${sectionSearch.current || ""}
-                        onInput=${(e) => setSectionSearchValue("current", e.target.value)}
-                      />
-                    </div>
+                    ${searchBoxOpen.current
+                      ? html`
+                          <div class="iad-search-pop">
+                            <div class="row" style=${{ gap: "0.35rem" }}>
+                              <input
+                                class="input"
+                                style=${{ width: "100%" }}
+                                placeholder="Meklēt saturā (vārds, frāzes daļa, numurs, tēma...)"
+                                value=${sectionSearch.current || ""}
+                                onInput=${(e) => setSectionSearchValue("current", e.target.value)}
+                              />
+                              <button type="button" class="btn btn-ghost btn-small" onClick=${() => toggleSectionSearchBox("current")}>Aizvērt</button>
+                            </div>
+                          </div>
+                        `
+                      : null}
                     ${openCurrent
                       ? html`
                           <div style=${{ marginTop: "0.55rem" }}>
@@ -1806,21 +1930,29 @@
                     <div class="iad-list-head">
                       <p class="iad-list-title">Neaktuālie IaD ieteikumi (${inactiveRows.length})</p>
                       <div class="iad-list-head-actions">
+                        <button type="button" class=${`iad-list-icon-btn ${searchBoxOpen.done ? "is-active" : ""}`} title="Meklēt saturā" onClick=${() => toggleSectionSearchBox("done")}>🔎</button>
                         <button type="button" class=${`iad-list-pin-btn ${pinDone ? "is-pinned" : ""}`} onClick=${togglePinDone} title=${pinDone ? "Noņemt piespraudi" : "Piespraust sarakstu"}>📌</button>
                         <button type="button" class="btn btn-ghost btn-small" onClick=${toggleOpenDone}>
                           ${openDone ? "Paslēpt" : "Parādīt"}
                         </button>
                       </div>
                     </div>
-                    <div class="row" style=${{ marginBottom: "0.45rem" }}>
-                      <input
-                        class="input"
-                        style=${{ width: "100%" }}
-                        placeholder="🔎 Meklēt saturā (vārds, frāzes daļa, numurs, tēma...)"
-                        value=${sectionSearch.done || ""}
-                        onInput=${(e) => setSectionSearchValue("done", e.target.value)}
-                      />
-                    </div>
+                    ${searchBoxOpen.done
+                      ? html`
+                          <div class="iad-search-pop">
+                            <div class="row" style=${{ gap: "0.35rem" }}>
+                              <input
+                                class="input"
+                                style=${{ width: "100%" }}
+                                placeholder="Meklēt saturā (vārds, frāzes daļa, numurs, tēma...)"
+                                value=${sectionSearch.done || ""}
+                                onInput=${(e) => setSectionSearchValue("done", e.target.value)}
+                              />
+                              <button type="button" class="btn btn-ghost btn-small" onClick=${() => toggleSectionSearchBox("done")}>Aizvērt</button>
+                            </div>
+                          </div>
+                        `
+                      : null}
                     ${openDone
                       ? html`
                           <div style=${{ marginTop: "0.55rem" }}>
