@@ -176,6 +176,25 @@
     return `${d}.${m}.${y}`;
   }
 
+  function parseIsoDateToUtcMs(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || "").trim());
+    if (!m) return NaN;
+    return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+
+  function deadlineBadgeInfo(row) {
+    if (isInactiveStatus(row?.IAD_statuss)) return null;
+    const term = toDateInputValue(row?.IAD_termins);
+    if (!term) return null;
+    const termMs = parseIsoDateToUtcMs(term);
+    const todayMs = parseIsoDateToUtcMs(toDateInputValue(new Date()));
+    if (!Number.isFinite(termMs) || !Number.isFinite(todayMs)) return null;
+    const daysLeft = Math.floor((termMs - todayMs) / 86400000);
+    if (daysLeft < 0) return { tone: "late", text: "Kavēts" };
+    if (daysLeft <= 7) return { tone: "soon", text: "Tuvojas termiņa beigas" };
+    return null;
+  }
+
   function normalizeTextBlock(v) {
     return String(v ?? "").replace(/\r\n/g, "\n").trim();
   }
@@ -679,6 +698,25 @@
       }
       .iad-status { display:inline-block; border-radius:999px; padding:1px 8px; font-size:.75rem; border:1px solid #7dd3fc; background:#ecfeff; color:#0e7490; }
       .iad-status.done { border-color:#86efac; background:#f0fdf4; color:#166534; }
+      .iad-deadline-note {
+        display:inline-block;
+        margin-top:.24rem;
+        border-radius:999px;
+        padding:1px 8px;
+        font-size:.72rem;
+        border:1px solid transparent;
+        line-height:1.25;
+      }
+      .iad-deadline-note.late {
+        border-color:#fca5a5;
+        background:#fef2f2;
+        color:#b91c1c;
+      }
+      .iad-deadline-note.soon {
+        border-color:#fcd34d;
+        background:#fefce8;
+        color:#a16207;
+      }
       .iad-empty { color:#64748b; font-style:italic; padding:.55rem .6rem; }
       .iad-modal-bg { position:fixed; inset:0; background:rgba(2,6,23,.58); display:flex; align-items:center; justify-content:center; z-index:100; padding:1rem; }
       .iad-modal { width:min(980px,96vw); max-height:92vh; overflow:auto; border:1px solid #94a3b8; border-radius:12px; background:#fff; padding:.9rem; }
@@ -871,6 +909,12 @@
       const focusRetryRef = useRef({ sig: "", retries: 0 });
       const focusHandledRef = useRef(false);
       const [pendingFocusTask, setPendingFocusTask] = useState(null);
+      const hasFocusRequest = Boolean(pendingFocusTask || focusTask || globalThis.__PDD_IAD_OPEN_TARGET__);
+      const [listFilters, setListFilters] = useState({
+        current: { numurs: "", nosaukums: "", tema: "", termins: "", atbildigais: "", statuss: "" },
+        done: { numurs: "", nosaukums: "", tema: "", termins: "", atbildigais: "", statuss: "" },
+      });
+      const [sectionSearch, setSectionSearch] = useState({ current: "", done: "" });
 
       const activeRows = rows.filter((r) => !isInactiveStatus(r.IAD_statuss));
       const inactiveRows = rows.filter((r) => isInactiveStatus(r.IAD_statuss));
@@ -887,6 +931,55 @@
         const num = String(row?.IAD_numurs ?? "").trim();
         const title = String(row?.IAD_nosaukums ?? "").trim();
         return `iad:${num || title}`;
+      }
+
+      function rowHasSearchHit(row, needle) {
+        const q = normalizeLookupText(needle);
+        if (!q) return true;
+        const hay = normalizeLookupText(
+          [
+            row?.IAD_numurs,
+            row?.IAD_nosaukums,
+            row?.IAD_ieteikuma_tema,
+            displayDate(row?.IAD_termins),
+            row?.Atbildigais,
+            row?.Lidzatbildigais,
+            statusLabel(row?.IAD_statuss),
+            row?.IAD_PDD_komp_uzdevums,
+            row?.Planotas_aktivitates,
+            row?.Piezimes,
+          ]
+            .filter(Boolean)
+            .join(" | ")
+        );
+        return hay.includes(q);
+      }
+
+      function applyListFiltering(rowsList, sectionKey) {
+        const src = Array.isArray(rowsList) ? rowsList : [];
+        const f = listFilters?.[sectionKey] || {};
+        const sectionNeedle = sectionSearch?.[sectionKey] || "";
+        return src.filter((row) => {
+          if (f.numurs && !normalizeLookupText(row?.IAD_numurs).includes(normalizeLookupText(f.numurs))) return false;
+          if (f.nosaukums && !normalizeLookupText(row?.IAD_nosaukums).includes(normalizeLookupText(f.nosaukums))) return false;
+          if (f.tema && !normalizeLookupText(row?.IAD_ieteikuma_tema).includes(normalizeLookupText(f.tema))) return false;
+          if (f.termins && !normalizeLookupText(displayDate(row?.IAD_termins)).includes(normalizeLookupText(f.termins))) return false;
+          if (f.atbildigais && !normalizeLookupText(row?.Atbildigais).includes(normalizeLookupText(f.atbildigais))) return false;
+          if (f.statuss && normalizeLookupText(statusLabel(row?.IAD_statuss)) !== normalizeLookupText(f.statuss)) return false;
+          if (!rowHasSearchHit(row, sectionNeedle)) return false;
+          return true;
+        });
+      }
+
+      function setColumnFilter(sectionKey, colKey, value) {
+        setListFilters((prev) => ({
+          ...prev,
+          [sectionKey]: { ...(prev?.[sectionKey] || {}), [colKey]: String(value ?? "") },
+        }));
+      }
+
+      function setSectionSearchValue(sectionKey, value) {
+        setSectionSearch((prev) => ({ ...prev, [sectionKey]: String(value ?? "") }));
       }
 
       function findRowForTableFocus(ft, list) {
@@ -931,6 +1024,45 @@
           });
         }
         el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return true;
+      }
+
+      function highlightTaskRowInRenderedTable(ft) {
+        const targetTitle = normalizeLookupText(ft?.rowNosaukums ?? ft?.title ?? "");
+        const targetNum = normalizeLookupText(ft?.rowNumurs ?? ft?.subtitle ?? "");
+        const targetTema = normalizeLookupText(ft?.rowTema ?? ft?.topic ?? "");
+        if (!targetTitle && !targetNum && !targetTema) return false;
+        const rowsDom = Array.from(document.querySelectorAll(".iad-table tbody tr"));
+        let match = null;
+        for (const tr of rowsDom) {
+          const tds = Array.from(tr.querySelectorAll("td"));
+          if (!tds.length) continue;
+          const rowNum = normalizeLookupText(tds[0]?.textContent ?? "");
+          const rowTitle = normalizeLookupText(tds[1]?.textContent ?? "");
+          const rowTema = normalizeLookupText(tds[2]?.textContent ?? "");
+          const titleOk = !targetTitle || rowTitle === targetTitle;
+          const numOk = !targetNum || rowNum === targetNum;
+          const temaOk = !targetTema || rowTema === targetTema;
+          if (titleOk && numOk && temaOk) {
+            match = tr;
+            break;
+          }
+          if (!match && targetTitle && rowTitle === targetTitle && (!targetNum || rowNum === targetNum)) {
+            match = tr;
+          }
+        }
+        if (!match) return false;
+        for (const tr of rowsDom) tr.classList.remove("iad-row-focus");
+        match.classList.add("iad-row-focus");
+        const wrap = match.closest(".iad-table-wrap");
+        if (wrap) {
+          const rowTop = match.offsetTop;
+          wrap.scrollTo({
+            top: Math.max(0, rowTop - wrap.clientHeight / 2 + match.offsetHeight / 2),
+            behavior: "smooth",
+          });
+        }
+        match.scrollIntoView({ behavior: "smooth", block: "center" });
         return true;
       }
 
@@ -983,6 +1115,24 @@
       }, [pinnedListKeys?.current, pinnedListKeys?.done]);
 
       useEffect(() => {
+        const q = sectionSearch?.current || "";
+        if (!normalizeLookupText(q) || submod !== "iad") return;
+        const list = applyListFiltering(activeRows, "current");
+        if (!list.length) return;
+        setOpenCurrent(true);
+        setFocusedRowKey(rowFocusKey(list[0]));
+      }, [sectionSearch.current, listFilters.current, activeRows, submod]);
+
+      useEffect(() => {
+        const q = sectionSearch?.done || "";
+        if (!normalizeLookupText(q) || submod !== "iad") return;
+        const list = applyListFiltering(inactiveRows, "done");
+        if (!list.length) return;
+        setOpenDone(true);
+        setFocusedRowKey(rowFocusKey(list[0]));
+      }, [sectionSearch.done, listFilters.done, inactiveRows, submod]);
+
+      useEffect(() => {
         let cancelled = false;
         (async () => {
           const fromDb = await fetchTeamOptionsFromSupabase(supabase);
@@ -993,6 +1143,18 @@
           cancelled = true;
         };
       }, [submod, editMode, supabase]);
+
+      useEffect(() => {
+        if (pendingFocusTask) return;
+        const externalTarget = globalThis.__PDD_IAD_OPEN_TARGET__;
+        if (externalTarget && typeof externalTarget === "object") {
+          setPendingFocusTask(externalTarget);
+          setSubmod("iad");
+          setOpenCurrent(true);
+          setOpenDone(true);
+          if (useDb) void refresh();
+        }
+      }, [pendingFocusTask, useDb]);
 
       useEffect(() => {
         if (!focusTask) return;
@@ -1036,11 +1198,18 @@
           setCardOpen(null);
           setEditMode(false);
           setPendingFocusTask(null);
+          globalThis.__PDD_IAD_OPEN_TARGET__ = null;
           setTimeout(() => finishTableFocusHandled(true), 80);
           return;
         }
         const hit = findRowForTableFocus(pendingFocusTask, rows);
         if (!hit) {
+          if (highlightTaskRowInRenderedTable(pendingFocusTask)) {
+            setPendingFocusTask(null);
+            focusRetryRef.current = { sig: "", retries: 0 };
+            finishTableFocusHandled(true);
+            return;
+          }
           if (useDb && focusRetryRef.current.retries < 6) {
             focusRetryRef.current.retries += 1;
             void refresh();
@@ -1051,6 +1220,7 @@
           setOpenDone(true);
           setErr("Uzdevumu nevarēja automātiski atrast tabulā. Pārbaudi, vai DB ierakstam ir IaD numurs un nosaukums.");
           setPendingFocusTask(null);
+          globalThis.__PDD_IAD_OPEN_TARGET__ = null;
           finishTableFocusHandled(true);
           return;
         }
@@ -1060,7 +1230,9 @@
         setCardOpen(null);
         setEditMode(false);
         setFocusedRowKey(rowFocusKey(hit));
-        setPendingFocusTask(null);
+        setTimeout(() => {
+          highlightTaskRowInRenderedTable(pendingFocusTask);
+        }, 0);
         focusRetryRef.current = { sig: "", retries: 0 };
       }, [pendingFocusTask, rows, onFocusHandled]);
 
@@ -1072,12 +1244,18 @@
         const run = () => {
           if (cancelled) return;
           if (scrollIadRowIntoViewSafe(safeId)) {
+            setPendingFocusTask(null);
+            globalThis.__PDD_IAD_OPEN_TARGET__ = null;
             finishTableFocusHandled(true);
             return;
           }
           tries += 1;
           if (tries < 28) setTimeout(run, 100);
-          else finishTableFocusHandled(true);
+          else {
+            setPendingFocusTask(null);
+            globalThis.__PDD_IAD_OPEN_TARGET__ = null;
+            finishTableFocusHandled(true);
+          }
         };
         run();
         const t = setTimeout(() => setFocusedRowKey(""), 6000);
@@ -1470,7 +1648,9 @@
         }
       }
 
-      function renderList(rowsList, emptyText) {
+      function renderList(rowsList, emptyText, sectionKey) {
+        const filteredRows = applyListFiltering(rowsList, sectionKey);
+        const f = listFilters?.[sectionKey] || {};
         return html`
           <div class="iad-table-wrap">
             <table class="iad-table">
@@ -1484,12 +1664,29 @@
                   <th>IaD statuss</th>
                   <th>IaD kartiņa</th>
                 </tr>
+                <tr>
+                  <th><input class="input" placeholder="Filtrs..." value=${f.numurs || ""} onInput=${(e) => setColumnFilter(sectionKey, "numurs", e.target.value)} /></th>
+                  <th><input class="input" placeholder="Filtrs..." value=${f.nosaukums || ""} onInput=${(e) => setColumnFilter(sectionKey, "nosaukums", e.target.value)} /></th>
+                  <th><input class="input" placeholder="Filtrs..." value=${f.tema || ""} onInput=${(e) => setColumnFilter(sectionKey, "tema", e.target.value)} /></th>
+                  <th><input class="input" placeholder="Filtrs..." value=${f.termins || ""} onInput=${(e) => setColumnFilter(sectionKey, "termins", e.target.value)} /></th>
+                  <th><input class="input" placeholder="Filtrs..." value=${f.atbildigais || ""} onInput=${(e) => setColumnFilter(sectionKey, "atbildigais", e.target.value)} /></th>
+                  <th>
+                    <select class="select" value=${f.statuss || ""} onChange=${(e) => setColumnFilter(sectionKey, "statuss", e.target.value)}>
+                      <option value="">Visi</option>
+                      <option value="Aktīvs">Aktīvs</option>
+                      <option value="Pabeigts">Pabeigts</option>
+                      <option value="Atcelts">Atcelts</option>
+                    </select>
+                  </th>
+                  <th></th>
+                </tr>
               </thead>
               <tbody>
-                ${rowsList.length
-                  ? rowsList.map((r) => {
+                ${filteredRows.length
+                  ? filteredRows.map((r) => {
                       const st = statusLabel(r.IAD_statuss);
                       const done = isInactiveStatus(st);
+                      const deadlineBadge = deadlineBadgeInfo(r);
                       const focusKey = rowFocusKey(r);
                       const rowId = `iad-row-${focusKey.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
                       const isFocused = focusedRowKey && focusedRowKey === focusKey;
@@ -1498,7 +1695,12 @@
                           <td>${r.IAD_numurs || "—"}</td>
                           <td>${r.IAD_nosaukums || "—"}</td>
                           <td>${r.IAD_ieteikuma_tema || "—"}</td>
-                          <td>${displayDate(r.IAD_termins)}</td>
+                          <td>
+                            ${displayDate(r.IAD_termins)}
+                            ${deadlineBadge
+                              ? html`<div><span class=${`iad-deadline-note ${deadlineBadge.tone}`}>${deadlineBadge.text}</span></div>`
+                              : null}
+                          </td>
                           <td>${joinNameList(parseNameList(r.Atbildigais)) || "—"}</td>
                           <td>
                             <span class=${`iad-status ${done ? "done" : ""}`}>${st}</span>
@@ -1524,7 +1726,7 @@
         <section class="iad-wrap">
           <div class="iad-head">
             <h2>Darba uzdevumi</h2>
-            ${submod === "home"
+            ${submod === "home" && !hasFocusRequest
               ? html`
                   <div class="iad-module-grid">
                     <button type="button" class="iad-module-card" onClick=${openIadModule}>
@@ -1549,7 +1751,7 @@
                 `}
           </div>
 
-          ${submod === "iad"
+          ${submod === "iad" || hasFocusRequest
             ? html`
                 <section class="iad-panel stack" style=${{ gap: "0.75rem" }}>
                   <div class="row" style=${{ justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
@@ -1572,6 +1774,15 @@
                         </button>
                       </div>
                     </div>
+                    <div class="row" style=${{ marginBottom: "0.45rem" }}>
+                      <input
+                        class="input"
+                        style=${{ width: "100%" }}
+                        placeholder="🔎 Meklēt saturā (vārds, frāzes daļa, numurs, tēma...)"
+                        value=${sectionSearch.current || ""}
+                        onInput=${(e) => setSectionSearchValue("current", e.target.value)}
+                      />
+                    </div>
                     ${openCurrent
                       ? html`
                           <div style=${{ marginTop: "0.55rem" }}>
@@ -1585,7 +1796,7 @@
                                 Eksportēt šo sarakstu uz Excel
                               </button>
                             </div>
-                            ${renderList(activeRows, "Nav aktuālu IaD ieteikumu.")}
+                            ${renderList(activeRows, "Nav aktuālu IaD ieteikumu.", "current")}
                           </div>
                         `
                       : null}
@@ -1601,6 +1812,15 @@
                         </button>
                       </div>
                     </div>
+                    <div class="row" style=${{ marginBottom: "0.45rem" }}>
+                      <input
+                        class="input"
+                        style=${{ width: "100%" }}
+                        placeholder="🔎 Meklēt saturā (vārds, frāzes daļa, numurs, tēma...)"
+                        value=${sectionSearch.done || ""}
+                        onInput=${(e) => setSectionSearchValue("done", e.target.value)}
+                      />
+                    </div>
                     ${openDone
                       ? html`
                           <div style=${{ marginTop: "0.55rem" }}>
@@ -1614,7 +1834,7 @@
                                 Eksportēt šo sarakstu uz Excel
                               </button>
                             </div>
-                            ${renderList(inactiveRows, "Nav neaktuālu IaD ieteikumu.")}
+                            ${renderList(inactiveRows, "Nav neaktuālu IaD ieteikumu.", "done")}
                           </div>
                         `
                       : null}

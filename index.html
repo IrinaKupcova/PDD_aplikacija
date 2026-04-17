@@ -439,7 +439,7 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script src="./Komanda.js?v=20260413"></script>
-      <script src="./IAD.js?v=20260435"></script>
+      <script src="./IAD.js?v=20260439"></script>
       <script src="./supabase/migrations/izmainas.js?v=20260413"></script>
       <script src="./Sodien.js?v=20260420"></script>
       <script src="./Kalendars.js?v=20260410"></script>
@@ -6996,7 +6996,12 @@
                     ? html`<${IadPanel}
                         supabase=${supabase}
                         focusTask=${darbaUzdevumiFocus}
-                        onFocusHandled=${() => setDarbaUzdevumiFocus(null)}
+                        onFocusHandled=${() => {
+                          setTimeout(() => {
+                            if (globalThis.__PDD_IAD_OPEN_TARGET__) return;
+                            setDarbaUzdevumiFocus(null);
+                          }, 700);
+                        }}
                         pinnedListKeys=${iadPinnedListKeys}
                         onPinListChange=${handleIadListPinChange}
                       />`
@@ -7028,6 +7033,7 @@
                         subtitle: task?.subtitle ?? target?.subtitle ?? "",
                         dueDate: task?.dueDate ?? target?.dueDate ?? "",
                       };
+                      globalThis.__PDD_IAD_OPEN_TARGET__ = payload;
                       setDarbaUzdevumiFocus(payload);
                       setView("darbaUzdevumiIad");
                     }}
