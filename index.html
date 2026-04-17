@@ -5697,17 +5697,16 @@
                             const hi = highlightAbsenceId && String(highlightAbsenceId) === String(a.id);
                             const typeName = a.type?.name ?? a.type_id ?? "—";
                             const isCitsType = isCitsSaskanotsTypeName(typeName);
-                            const citsCommentRaw = String(a?.comment ?? "");
+                            const periodCommentRaw = String(a?.comment ?? "");
                             const timeMark =
-                              isCitsType &&
-                              !/^Visa diena\b/i.test(citsCommentRaw) &&
-                              (Boolean(a?.laiks_no || a?.laiks_lidz) || /^(Laika|Laikā)\s+no\s+/i.test(citsCommentRaw));
+                              !/^Visa diena\b/i.test(periodCommentRaw) &&
+                              (Boolean(a?.laiks_no || a?.laiks_lidz) || /^(Laika|Laikā)\s+no\s+/i.test(periodCommentRaw));
                             const timeLabel = (() => {
                               if (!timeMark) return "";
                               const from = String(a?.laiks_no ?? "").trim();
                               const to = String(a?.laiks_lidz ?? "").trim();
                               if (from && to) return `${from}–${to}`;
-                              const m = /^(Laika|Laikā)\s+no\s+(\d{1,2}:\d{2})\s+(līdz|lidz)\s+(\d{1,2}:\d{2})/i.exec(citsCommentRaw);
+                              const m = /^(Laika|Laikā)\s+no\s+(\d{1,2}:\d{2})\s+(līdz|lidz)\s+(\d{1,2}:\d{2})/i.exec(periodCommentRaw);
                               if (m) return `${m[2]}–${m[4]}`;
                               return "Laiks";
                             })();
