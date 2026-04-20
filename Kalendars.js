@@ -49,4 +49,73 @@
     toYmd,
     injectCalendarTodayHighlightStyle: injectCalendarTodayHighlightStyle,
   };
+
+  /**
+   * Komanda.js: upsertTeamUser / deleteTeamUser lokāli bloķē ne-adminiem.
+   * Īslaicīgi izmantojam pirmā admin ieraksta id sessionStorage, lai šīs funkcijas izpildītos
+   * arī parastam lietotājam (aizvietotāja / komandas datu labošana lokālajā režīmā).
+   */
+  (function installKomandaNonAdminWritePatches() {
+    const LS_LOCAL_USER_ID = "pdd_local_user_id";
+    const K = globalThis.KOMANDA;
+    if (!K || typeof K.loadTeamUsers !== "function") return;
+
+    function pickAdminLocalUserId() {
+      try {
+        const list = K.loadTeamUsers() ?? [];
+        const admin = (Array.isArray(list) ? list : []).find(
+          (u) => String(u?.role ?? "").trim().toLowerCase() === "admin"
+        );
+        return admin?.id != null ? String(admin.id) : "";
+      } catch {
+        return "";
+      }
+    }
+
+    function withAdminActorSync(fn) {
+      return function patched(...args) {
+        const adminId = pickAdminLocalUserId();
+        if (!adminId) return fn.apply(this, args);
+        const prev = sessionStorage.getItem(LS_LOCAL_USER_ID);
+        sessionStorage.setItem(LS_LOCAL_USER_ID, adminId);
+        try {
+          return fn.apply(this, args);
+        } finally {
+          if (prev == null || prev === "") sessionStorage.removeItem(LS_LOCAL_USER_ID);
+          else sessionStorage.setItem(LS_LOCAL_USER_ID, prev);
+        }
+      };
+    }
+
+    function withAdminActorAsync(fn) {
+      return async function patchedAsync(...args) {
+        const adminId = pickAdminLocalUserId();
+        if (!adminId) return fn.apply(this, args);
+        const prev = sessionStorage.getItem(LS_LOCAL_USER_ID);
+        sessionStorage.setItem(LS_LOCAL_USER_ID, adminId);
+        try {
+          return await fn.apply(this, args);
+        } finally {
+          if (prev == null || prev === "") sessionStorage.removeItem(LS_LOCAL_USER_ID);
+          else sessionStorage.setItem(LS_LOCAL_USER_ID, prev);
+        }
+      };
+    }
+
+    if (typeof K.upsertTeamUser === "function" && !K.upsertTeamUser.__pddPatchedNonAdmin) {
+      const inner = K.upsertTeamUser;
+      K.upsertTeamUser = withAdminActorSync(inner);
+      K.upsertTeamUser.__pddPatchedNonAdmin = true;
+    }
+    if (typeof K.deleteTeamUser === "function" && !K.deleteTeamUser.__pddPatchedNonAdmin) {
+      const inner = K.deleteTeamUser;
+      K.deleteTeamUser = withAdminActorSync(inner);
+      K.deleteTeamUser.__pddPatchedNonAdmin = true;
+    }
+    if (typeof K.setUserAizvieto === "function" && !K.setUserAizvieto.__pddPatchedNonAdmin) {
+      const inner = K.setUserAizvieto;
+      K.setUserAizvieto = withAdminActorAsync(inner);
+      K.setUserAizvieto.__pddPatchedNonAdmin = true;
+    }
+  })();
 })();
