@@ -169,8 +169,9 @@
     const id = String(u?.id ?? "").trim() || String(u?.user_id ?? "");
     const vard = u?.["Vārds uzvārds"] ?? u?.vardUzv ?? u?.full_name ?? "";
     const amats = u?.["Amats"] ?? u?.amats ?? "";
-    const iMail = u?.["i-mail"] ?? u?.imail ?? u?.email ?? u?.["e-pasts"] ?? "";
-    const email = u?.email ?? iMail ?? "";
+    const epastsHyphen = u?.["e-mail"] ?? u?.e_mail ?? "";
+    const iMail = u?.["i-mail"] ?? u?.imail ?? u?.email ?? u?.["e-pasts"] ?? epastsHyphen ?? "";
+    const email = u?.email ?? u?.["e-mail"] ?? iMail ?? "";
     const full = u?.full_name ?? vard;
     const aizvieto = normalizeAizvieto(pickAizvieto(u));
     return {
@@ -182,6 +183,7 @@
       "Vārds uzvārds": String(vard ?? ""),
       "Amats": String(amats ?? ""),
       "i-mail": String(iMail ?? ""),
+      "e-mail": String(epastsHyphen ?? "").trim(),
       Aizvieto: aizvieto,
     };
   }
@@ -207,36 +209,57 @@
       .filter((x) => x.name);
   }
 
+  function pickEmailForRpcFromUserRow(u) {
+    if (!u || typeof u !== "object") return "";
+    const a = String(u.email ?? "").trim();
+    const b = String(u["i-mail"] ?? "").trim();
+    const c = String(u["e-mail"] ?? "").trim();
+    return a || b || c || "";
+  }
+
   async function resolveActorEmail(supabase) {
     const fromGlobal = String(globalThis.__PDD_ACTOR_EMAIL__ ?? "").trim();
     if (fromGlobal) return fromGlobal;
     const fromSession = String(sessionStorage.getItem("pdd_local_email") ?? "").trim();
     if (fromSession) return fromSession;
 
-    const actorId = String(sessionStorage.getItem(LS_LOCAL_USER_ID) || "").trim();
-    if (actorId) {
-      const me = loadTeamUsers().find((u) => String(u?.id ?? "").trim() === actorId);
-      const em = String(me?.email ?? me?.["i-mail"] ?? "").trim();
-      if (em) return em;
-    }
-
+    let authEm = "";
     if (supabase?.auth?.getSession) {
       try {
         const s = await supabase.auth.getSession();
-        const em = String(s?.data?.session?.user?.email ?? "").trim();
-        if (em) return em;
+        authEm = String(s?.data?.session?.user?.email ?? "").trim().toLowerCase();
       } catch {
         // ignore
       }
     }
-    if (supabase?.auth?.getUser) {
+    if (!authEm && supabase?.auth?.getUser) {
       try {
         const u = await supabase.auth.getUser();
-        const em = String(u?.data?.user?.email ?? "").trim();
-        if (em) return em;
+        authEm = String(u?.data?.user?.email ?? "").trim().toLowerCase();
       } catch {
         // ignore
       }
+    }
+    if (authEm) {
+      const list = loadTeamUsers();
+      const me = list.find((u) => {
+        const a = String(u?.email ?? "").trim().toLowerCase();
+        const b = String(u?.["i-mail"] ?? "").trim().toLowerCase();
+        const c = String(u?.["e-mail"] ?? "").trim().toLowerCase();
+        return a === authEm || b === authEm || c === authEm;
+      });
+      if (me) {
+        const forRpc = pickEmailForRpcFromUserRow(me);
+        if (forRpc) return forRpc;
+      }
+      return authEm;
+    }
+
+    const actorId = String(sessionStorage.getItem(LS_LOCAL_USER_ID) || "").trim();
+    if (actorId) {
+      const me = loadTeamUsers().find((u) => String(u?.id ?? "").trim() === actorId);
+      const em = pickEmailForRpcFromUserRow(me);
+      if (em) return em;
     }
     return "";
   }
@@ -249,22 +272,9 @@
     const value = normalizeAizvieto(aizvietoValue) || null;
     const actorEmail = await resolveActorEmail(supabase);
     let lastError = null;
-    for (const col of AIZVIETO_KEYS) {
-      const payload = { [col]: value };
-      const { data, error } = await supabase.from("users").update(payload).eq("id", uid).select("id").limit(1);
-      if (!error) {
-        if (Array.isArray(data) && data.length > 0) return { ok: true, column: col };
-        break;
-      }
-      const msg = String(error?.message ?? "");
-      if (/column .* does not exist/i.test(msg) || /Could not find the .* column/i.test(msg)) {
-        lastError = error;
-        continue;
-      }
-      lastError = error;
-      break;
-    }
-    if (actorEmail) {
+
+    async function tryRpc() {
+      if (!actorEmail) return null;
       const { data: rpcData, error: rpcError } = await supabase.rpc("pdd_update_user_aizvieto_by_email", {
         p_actor_email: actorEmail,
         p_target_user_id: uid,
@@ -279,8 +289,34 @@
       });
       if (!rpcError2) return { ok: true, rpc: true, row: rpcData2 };
       lastError = rpcError2;
+      return null;
     }
-    return { error: lastError ?? new Error("Neizdevās atrast kolonu 'Aizvieto' tabulā users.") };
+
+    for (const col of AIZVIETO_KEYS) {
+      const payload = { [col]: value };
+      const { data, error } = await supabase.from("users").update(payload).eq("id", uid).select("id").limit(1);
+      if (!error) {
+        if (Array.isArray(data) && data.length > 0) return { ok: true, column: col };
+        const { error: eBare } = await supabase.from("users").update(payload).eq("id", uid);
+        if (!eBare) return { ok: true, column: col };
+        lastError = eBare;
+        const rpcOk = await tryRpc();
+        if (rpcOk) return rpcOk;
+        break;
+      }
+      const msg = String(error?.message ?? "");
+      if (/column .* does not exist/i.test(msg) || /Could not find the .* column/i.test(msg)) {
+        lastError = error;
+        continue;
+      }
+      lastError = error;
+      const rpcOk = await tryRpc();
+      if (rpcOk) return rpcOk;
+      break;
+    }
+    const rpcOk = await tryRpc();
+    if (rpcOk) return rpcOk;
+    return { error: lastError ?? new Error("Neizdevās saglabāt Aizvieto (users / RPC).") };
   }
 
   async function setUserAizvieto({ userId, replacementUserId = "", replacementName = "", syncDb = true }) {

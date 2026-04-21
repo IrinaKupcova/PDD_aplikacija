@@ -1,4 +1,4 @@
-  <!DOCTYPE html>
+    <!DOCTYPE html>
   <html lang="lv">
     <head>
       <meta charset="UTF-8" />
@@ -6386,6 +6386,12 @@
                 setPromSub("history");
                 setHistoryOpen(true);
                 setHighlightFromUrl(citsRow);
+                // Patērējam deep-link parametru vienu reizi, lai nākamās navigācijas
+                // (piem., uz Kalendāru) to vairs nepārslēgtu atpakaļ uz Vēsturi.
+                params.delete("citsRow");
+                const nextSearch = params.toString();
+                const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${window.location.hash || ""}`;
+                window.history.replaceState({}, "", nextUrl);
               }
             } catch {
               // ignore

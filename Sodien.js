@@ -189,6 +189,44 @@ function todayRows(absences) {
   return list.filter((a) => isTodayAway(a, today));
 }
 
+/**
+ * Atver Prombūtnes → „Prombūtnes vēsture” un izceļ konkrēto ierakstu.
+ * Izmanto to pašu `?citsRow=` mehānismu kā `PrombutnesSection` (index.html) ielādēšanās brīdī,
+ * tad simulē klikšķi uz navigācijas pogas (lietotājs parasti ir Sākumā, kur redzams Šodien.js bloks).
+ * @param {string} absenceId — `prombutnes_dati.id` (vai lokālais UUID)
+ */
+function navigateToPrombutnesVestureDetail(absenceId) {
+  const id = String(absenceId ?? "").trim();
+  if (!id) return;
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.set("citsRow", id);
+    window.history.replaceState({}, "", u.pathname + u.search + u.hash);
+  } catch (e) {
+    console.warn("[Sodien] navigateToPrombutnesVestureDetail URL", e);
+  }
+  const clickPrombutnesVestureNav = () => {
+    const navRoot = document.querySelector("aside.app-nav") || document.querySelector(".app-nav");
+    if (!navRoot) return false;
+    const buttons = navRoot.querySelectorAll("button.app-nav-sublink");
+    for (const b of buttons) {
+      const t = String(b.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (/^Prombūtnes vēsture/i.test(t)) {
+        b.click();
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!clickPrombutnesVestureNav()) {
+    queueMicrotask(() => {
+      if (!clickPrombutnesVestureNav()) requestAnimationFrame(() => void clickPrombutnesVestureNav());
+    });
+  }
+}
+
 function loadAktualitates() {
   try {
     const raw = localStorage.getItem(SODIEN_STORE_KEY);
@@ -1033,14 +1071,24 @@ function renderTodayInfo({
             <div class="stack" style=${{ gap: "0.5rem", marginBottom: "0.9rem" }}>
               ${awayRows.map(
                 (a, i) => html`
-                  <div
+                  <button
+                    type="button"
                     key=${`today-away-${a.id ?? i}`}
+                    title="Atvērt pilnu ierakstu sadaļā Vēsture → Prombūtnes vēsture"
                     style=${{
+                      display: "block",
+                      width: "100%",
+                      boxSizing: "border-box",
+                      textAlign: "left",
+                      font: "inherit",
+                      color: "inherit",
+                      cursor: "pointer",
                       border: "1px solid rgba(14,116,144,0.4)",
                       borderRadius: "10px",
                       padding: "0.55rem 0.65rem",
                       background: "rgba(255,255,255,0.72)",
                     }}
+                    onClick=${() => navigateToPrombutnesVestureDetail(a.id)}
                   >
                     <div style=${{ fontWeight: 600 }}>
                       ${displayName(a)} <span style=${{ color: "var(--muted)", fontWeight: 400 }}>(${typeName(a)})</span>
@@ -1054,7 +1102,7 @@ function renderTodayInfo({
                     ${timeInterval(a)
                       ? html`<div style=${{ fontSize: "0.88rem", color: "var(--muted)" }}>Laiks: ${timeInterval(a)}</div>`
                       : null}
-                  </div>
+                  </button>
                 `
               )}
             </div>
@@ -1062,7 +1110,7 @@ function renderTodayInfo({
         : html`<p style=${{ margin: "0 0 0.9rem", color: "var(--muted)" }}>Šodien nav neviena prombūtnes ieraksta.</p>`}
 
       <div style=${{ fontWeight: 700, borderBottom: "1px solid rgba(14,116,144,0.35)", paddingBottom: "0.35rem", marginBottom: "0.55rem" }}>
-        Kas šodien vēl aktuāls
+        Kas šobrīd vēl aktuāls
       </div>
       ${aktList === null
         ? html`<p style=${{ margin: "0 0 0.75rem", color: "var(--muted)" }}>Ielādē aktualitātes…</p>`
@@ -1257,4 +1305,5 @@ window.PDDSodien = {
   primeAktualitatesTable,
   ensureSodienAktStyleOnce,
   TABLE_AKTUALITATES,
+  navigateToPrombutnesVestureDetail,
 };

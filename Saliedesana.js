@@ -1,18 +1,38 @@
 (function () {
   const LS_EVENTS_KEY = "pdd_saliedesana_pasakumi_v2";
   const LS_AKTUALITATES_KEY = "pdd_sodien_aktualitates_v1";
+  /** Supabase: public."Saliedesana" — kolonnas kā Table Editor (arī saīsinātie nosaukumi). */
   const REMOTE_TABLE = "Saliedesana";
+  const SAL_META_MARKER = "\n\n---PDD-SYNC---\n";
+  /** No pirmā SELECT * — precīzi PostgREST lauku nosaukumi rakstīšanai. */
+  let saliedesanaColumnNames = null;
+
+  const SAL_COL_CANDIDATES = {
+    Datums: ["Datums", "datums"],
+    Sakuma_laiks: ["Sakuma_laiks", "sakuma_laiks", "Laiks", "laiks"],
+    Pasakuma_nosau: ["Pasakuma_nosau", "Pasakuma_nosaukums", "Pasākuma_nosaukums", "pasakuma_nosaukums"],
+    Pasakuma_veids: ["Pasakuma_veids", "pasakuma_veids"],
+    Beigu_laiks: ["Beigu_laiks", "beigu_laiks", "Lidz_cikiem", "lidz_cikiem"],
+    Online_pasakums: ["Online pasākums", "Online_pasakums", "online_pasakums"],
+    Norises_vieta: ["Norises_vieta", "norises_vieta", "Vieta", "vieta"],
+    Kategorija: ["Kategorija", "kategorija"],
+    Pasakuma_aprak: ["Pasākuma_aprak", "Pasakuma_aprak", "Pasakuma_apraksts", "Pasākuma_apraksts", "pasakuma_apraksts"],
+    Kapac_piedalītie: ["Kapac_piedalītie", "Kapac_piedalities", "Kapac_piedalitie", "kapac_piedalities"],
+    Ko_sagaidit: ["Ko_sagaidit", "ko_sagaidit"],
+    Dress_code: ["Dress_code", "dress_code"],
+    Ko_nemt_lidzi: ["Ko_nemt_lidzi", "ko_nemt_lidzi"],
+    Dalibas_maksa: ["Dalibas_maksa", "dalibas_maksa"],
+    Brivs_apraksts: ["Brivs_apraksts", "brivs_apraksts"],
+    Papildu_piezimes: ["Papildu_piezimes", "papildu_piezimes"],
+    Dati_json: ["Dati_json", "dati_json"],
+    Radit_aktualitates: ["Radit_aktualitates", "radit_aktualitates"],
+    Aktualitates_id: ["Aktualitates_id", "aktualitates_id"],
+  };
+
   const DB_SQL_SETUP = `
-create table if not exists public."Saliedesana" (
-  id bigserial primary key,
-  "Datums" date not null,
-  "Laiks" time,
-  "Pasakuma_nosaukums" text not null
-);
-alter table public."Saliedesana" add column if not exists "Lidz_cikiem" time;
-alter table public."Saliedesana" add column if not exists "Dati_json" jsonb not null default '{}'::jsonb;
-alter table public."Saliedesana" add column if not exists "Radit_aktualitates" boolean not null default false;
-alter table public."Saliedesana" add column if not exists "Aktualitates_id" bigint;
+-- public."Saliedesana" (pēc faktiskās shēmas): id, Datums, Sakuma_laiks, Pasakuma_nosau, Pasakuma_veids,
+-- Beigu_laiks, "Online pasākums", Norises_vieta, Kategorija, Pasākuma_aprak, Kapac_piedalītie, Ko_sagaidit,
+-- Dress_code, Ko_nemt_lidzi, Dalibas_maksa, Brivs_apraksts, Papildu_piezimes
 `;
 
   function ensureStyles() {
@@ -141,7 +161,62 @@ alter table public."Saliedesana" add column if not exists "Aktualitates_id" bigi
   function parseBool(value) {
     if (typeof value === "boolean") return value;
     const x = String(value ?? "").trim().toLowerCase();
-    return ["true", "1", "yes", "ja", "y"].includes(x);
+    return ["true", "1", "yes", "ja", "y", "jā"].includes(x);
+  }
+
+  function parseOnlinePasakumsCell(value) {
+    const s = String(value ?? "").trim().toLowerCase();
+    if (!s) return false;
+    if (["jā", "ja", "yes", "true", "1", "online", "ir"].includes(s)) return true;
+    if (["nē", "ne", "no", "false", "0", "nav"].includes(s)) return false;
+    return parseBool(value);
+  }
+
+  function splitPapilduPiezimes(raw) {
+    const s = String(raw ?? "");
+    const idx = s.indexOf(SAL_META_MARKER);
+    if (idx < 0) return { note: s.trim(), meta: null };
+    const note = s.slice(0, idx).trim();
+    try {
+      const meta = JSON.parse(s.slice(idx + SAL_META_MARKER.length));
+      return { note, meta: meta && typeof meta === "object" ? meta : null };
+    } catch {
+      return { note: s.trim(), meta: null };
+    }
+  }
+
+  function cacheSaliedesanaColumnsFromRows(rows) {
+    if (!Array.isArray(rows) || !rows.length) return;
+    const set = new Set();
+    rows.forEach((r) => {
+      if (r && typeof r === "object") Object.keys(r).forEach((k) => set.add(k));
+    });
+    if (set.size) saliedesanaColumnNames = set;
+  }
+
+  function resolveWriteKey(candidates) {
+    if (!Array.isArray(candidates) || !candidates.length) return null;
+    if (saliedesanaColumnNames && saliedesanaColumnNames.size) {
+      for (const c of candidates) {
+        if (saliedesanaColumnNames.has(c)) return c;
+      }
+    }
+    return candidates[0];
+  }
+
+  function pickFromRow(row, candidates, fallback = "") {
+    if (!row || typeof row !== "object") return fallback;
+    for (const key of candidates) {
+      if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+      const v = row[key];
+      if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+    }
+    const want = new Set(candidates.map((c) => normalizeKeyName(c)));
+    for (const [k, v] of Object.entries(row)) {
+      if (!want.has(normalizeKeyName(k))) continue;
+      if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+    }
+    return fallback;
   }
 
   function normalizeEvent(raw) {
@@ -152,41 +227,109 @@ alter table public."Saliedesana" add column if not exists "Aktualitates_id" bigi
     const poll = src.poll && typeof src.poll === "object" ? src.poll : emptyPoll();
     const participantsRaw = src.participants && typeof src.participants === "object" ? src.participants : {};
     const attachments = Array.isArray(src.attachments) ? src.attachments : [];
-    const rawId = pickByAliases(src, ["local_id", "localId", "id"], "");
-    const remoteIdValue = pickByAliases(src, ["remote_id", "remoteId", "id"], 0);
+    const explicitLocal = String(src.__sal_local_id ?? "").trim();
+    const aliasLocal = String(pickByAliases(src, ["local_id", "localId"], "")).trim();
+    let rawId = explicitLocal || aliasLocal;
+    if (!rawId) {
+      const cand = src.id;
+      if (cand !== undefined && cand !== null) {
+        const s = String(cand).trim();
+        if (!s) {
+          /* noop */
+        } else if (s.startsWith("remote-") || /[a-zA-Z-]/.test(s)) {
+          rawId = s;
+        } else {
+          const n = Number(s);
+          if (!Number.isFinite(n) || n > 1e15) rawId = s;
+        }
+      }
+    }
+    const explicitRemote = src.__sal_remote_id != null && src.__sal_remote_id !== "" ? Number(src.__sal_remote_id) : NaN;
+    let remoteIdValue = Number.isFinite(explicitRemote) && explicitRemote > 0 ? explicitRemote : 0;
+    if (!remoteIdValue) remoteIdValue = Number(pickByAliases(src, ["remote_id", "remoteId"], 0)) || 0;
     return {
-      id: String(rawId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
-      remoteId: Number(remoteIdValue || 0) || null,
-      date: String(pickByAliases(src, ["event_date", "date", "Datums", "datums"], "")).trim(),
+      id: String(
+        rawId ||
+          (remoteIdValue ? `remote-${remoteIdValue}` : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+      ),
+      remoteId: remoteIdValue > 0 ? remoteIdValue : null,
+      date: String(pickFromRow(src, SAL_COL_CANDIDATES.Datums.concat(["event_date", "date"]), "") || pickByAliases(src, ["event_date", "date"], "")).trim(),
       time: String(
-        pickByAliases(
+        pickFromRow(
           src,
-          ["event_time", "time", "Laiks", "laiks", "Sakuma_laiks", "sakuma_laiks", "no_cikiem"],
+          SAL_COL_CANDIDATES.Sakuma_laiks.concat(["event_time", "time", "no_cikiem"]),
           ""
-        )
+        ) || pickByAliases(src, ["event_time", "time"], "")
       ).trim(),
       category: String(pickByAliases(src, ["category"], "team")).trim().toLowerCase() === "holiday" ? "holiday" : "team",
-      eventType: String(pickByAliases(src, ["event_type", "eventType", "Pasakuma_veids", "pasakuma_veids"], "saliedesana")).trim() || "saliedesana",
-      title: String(pickByAliases(src, ["title", "Pasakuma_nosaukums", "pasakuma_nosaukums", "Pasākuma_nosaukums", "pasakums", "nosaukums"], "")).trim(),
-      location: String(pickByAliases(src, ["location", "Norises_vieta", "norises_vieta", "vieta"], "")).trim(),
-      online: parseBool(pickByAliases(src, ["is_online", "online", "Online pasākums", "Online_pasakums", "vai_online", "attalinati"], src.is_online ?? src.online)),
-      shortCategory: String(pickByAliases(src, ["short_category", "shortCategory", "Kategorija", "kategorija"], "")).trim(),
+      eventType: String(
+        pickFromRow(src, SAL_COL_CANDIDATES.Pasakuma_veids.concat(["event_type", "eventType"]), "") ||
+          pickByAliases(src, ["event_type", "eventType"], "saliedesana")
+      ).trim() || "saliedesana",
+      title: String(
+        pickFromRow(src, SAL_COL_CANDIDATES.Pasakuma_nosau.concat(["title", "pasakums", "nosaukums"]), "") ||
+          pickByAliases(src, ["title", "pasakums", "nosaukums"], "")
+      ).trim(),
+      location: String(
+        pickFromRow(src, SAL_COL_CANDIDATES.Norises_vieta.concat(["location"]), "") || pickByAliases(src, ["location"], "")
+      ).trim(),
+      online: parseOnlinePasakumsCell(
+        pickFromRow(src, SAL_COL_CANDIDATES.Online_pasakums, pickByAliases(src, ["is_online", "online", "vai_online", "attalinati"], src.is_online ?? src.online))
+      ),
+      shortCategory: String(
+        pickFromRow(src, SAL_COL_CANDIDATES.Kategorija.concat(["short_category", "shortCategory"]), "") ||
+          pickByAliases(src, ["short_category", "shortCategory"], "")
+      ).trim(),
       icon: String(pickByAliases(src, ["icon"], "")).trim(),
       color: String(pickByAliases(src, ["color", "krasa", "krasa"], "")).trim() || "#fb923c",
       descriptionHtml: String(
-        pickByAliases(src, ["description_html", "descriptionHtml", "Brivs_apraksts", "brivs_apraksts", "apraksts_html", "apraksts"], "")
+        pickFromRow(
+          src,
+          SAL_COL_CANDIDATES.Brivs_apraksts.concat(["description_html", "descriptionHtml", "apraksts_html", "apraksts"]),
+          pickByAliases(src, ["description_html", "descriptionHtml", "apraksts_html", "apraksts"], "")
+        )
       ).trim(),
-      note: String(pickByAliases(src, ["note", "Papildu_piezimes", "papildu_piezimes", "piezimes", "piezime"], "")).trim(),
+      note: String(
+        src.__sal_note_clean ??
+          pickByAliases(src, ["note", "Papildu_piezimes", "papildu_piezimes", "piezimes", "piezime"], "")
+      ).trim(),
       details: {
-        eventWhat: String(details.eventWhat ?? pickByAliases(src, ["Pasakuma_apraksts", "Pasākuma_apraksts", "pasakuma_apraksts"], "")).trim(),
-        whyJoin: String(details.whyJoin ?? pickByAliases(src, ["Kapac_piedalities", "Kapac_piedalitie", "kapec_piedalities"], "")).trim(),
-        whatExpect: String(details.whatExpect ?? pickByAliases(src, ["Ko_sagaidit", "ko_sagaidit"], "")).trim(),
-        dressCode: String(details.dressCode ?? pickByAliases(src, ["Dress_code", "dress_code"], "")).trim(),
-        bringAlong: String(details.bringAlong ?? pickByAliases(src, ["Ko_nemt_lidzi", "ko_nemt_lidzi"], "")).trim(),
-        fee: String(details.fee ?? pickByAliases(src, ["Dalibas_maksa", "dalibas_maksa"], "")).trim(),
+        eventWhat: String(
+          details.eventWhat ??
+            pickFromRow(
+              src,
+              SAL_COL_CANDIDATES.Pasakuma_aprak,
+              pickByAliases(src, ["Pasākuma_aprak", "Pasakuma_aprak", "Pasakuma_apraksts", "Pasākuma_apraksts", "pasakuma_apraksts"], "")
+            )
+        ).trim(),
+        whyJoin: String(
+          details.whyJoin ??
+            pickFromRow(
+              src,
+              SAL_COL_CANDIDATES.Kapac_piedalītie.concat(["kapec_piedalities"]),
+              pickByAliases(src, ["kapec_piedalities"], "")
+            )
+        ).trim(),
+        whatExpect: String(
+          details.whatExpect ?? pickFromRow(src, SAL_COL_CANDIDATES.Ko_sagaidit, pickByAliases(src, ["Ko_sagaidit", "ko_sagaidit"], ""))
+        ).trim(),
+        dressCode: String(
+          details.dressCode ?? pickFromRow(src, SAL_COL_CANDIDATES.Dress_code, pickByAliases(src, ["Dress_code", "dress_code"], ""))
+        ).trim(),
+        bringAlong: String(
+          details.bringAlong ??
+            pickFromRow(src, SAL_COL_CANDIDATES.Ko_nemt_lidzi, pickByAliases(src, ["Ko_nemt_lidzi", "ko_nemt_lidzi"], ""))
+        ).trim(),
+        fee: String(
+          details.fee ?? pickFromRow(src, SAL_COL_CANDIDATES.Dalibas_maksa, pickByAliases(src, ["Dalibas_maksa", "dalibas_maksa"], ""))
+        ).trim(),
         timeTo: String(
           details.timeTo ??
-            pickByAliases(src, ["Beigu_laiks", "beigu_laiks", "Lidz_cikiem", "lidz_cikiem", "time_to", "beigas_laiks", "lidz"], "")
+            pickFromRow(
+              src,
+              SAL_COL_CANDIDATES.Beigu_laiks.concat(["time_to", "beigas_laiks", "lidz"]),
+              pickByAliases(src, ["time_to", "beigas_laiks", "lidz"], "")
+            )
         ).trim(),
         showInAktualitates: Boolean(details.showInAktualitates ?? parseBool(pickByAliases(src, ["Radit_aktualitates", "radit_aktualitates", "vai_radit_aktualitates", "publicet_aktualitates"], false))),
         aktualitatesId: Number((details.aktualitatesId ?? pickByAliases(src, ["Aktualitates_id", "aktualitates_id"], 0)) || 0) || null,
@@ -231,78 +374,73 @@ alter table public."Saliedesana" add column if not exists "Aktualitates_id" bigi
     };
   }
 
-  function eventToRemoteRow(ev) {
+  function buildPapilduPiezimes(noteText, metaPack) {
+    const note = String(noteText ?? "").trim();
+    try {
+      const payload = metaPack && typeof metaPack === "object" ? metaPack : {};
+      return (note ? note : "") + SAL_META_MARKER + JSON.stringify(payload);
+    } catch {
+      return note || null;
+    }
+  }
+
+  function buildSaliedesanaDbPayload(ev) {
     const details = ev?.details && typeof ev.details === "object" ? ev.details : {};
-    const coreMeta = {
+    const metaPack = {
       local_id: ev.id,
+      remote_id: ev.remoteId || null,
       event_type: ev.eventType || "saliedesana",
       category: ev.category || "team",
       icon: ev.icon || "",
       color: ev.color || "",
-      location: ev.location || "",
-      is_online: Boolean(ev.online),
       short_category: ev.shortCategory || "",
-      description_html: ev.descriptionHtml || "",
-      note: ev.note || "",
-      details: details || {},
       poll: ev.poll || emptyPoll(),
       participants: ev.participants || {},
       attachments: Array.isArray(ev.attachments) ? ev.attachments : [],
+      details: {
+        ...(details || {}),
+        showInAktualitates: Boolean(details.showInAktualitates),
+        aktualitatesId: Number(details.aktualitatesId || 0) || null,
+      },
     };
-    return {
-      Datums: ev.date || null,
-      datums: ev.date || null,
-      Laiks: ev.time || null,
-      laiks: ev.time || null,
-      Sakuma_laiks: ev.time || null,
-      sakuma_laiks: ev.time || null,
-      Beigu_laiks: details.timeTo || null,
-      beigu_laiks: details.timeTo || null,
-      Lidz_cikiem: details.timeTo || null,
-      lidz_cikiem: details.timeTo || null,
-      Pasakuma_nosaukums: ev.title || "",
-      pasakuma_nosaukums: ev.title || "",
-      Pasakuma_veids: ev.eventType || "saliedesana",
-      pasakuma_veids: ev.eventType || "saliedesana",
-      "Online pasākums": ev.online ? "Jā" : "Nē",
-      Online_pasakums: ev.online ? "Jā" : "Nē",
-      Norises_vieta: ev.online ? "online" : ev.location || null,
-      norises_vieta: ev.online ? "online" : ev.location || null,
-      Kategorija: ev.shortCategory || ev.category || null,
-      kategorija: ev.shortCategory || ev.category || null,
-      Pasakuma_apraksts: details.eventWhat || null,
-      "Pasākuma_apraksts": details.eventWhat || null,
-      Kapac_piedalities: details.whyJoin || null,
-      Kapac_piedalitie: details.whyJoin || null,
-      Ko_sagaidit: details.whatExpect || null,
-      ko_sagaidit: details.whatExpect || null,
-      Dress_code: details.dressCode || null,
-      dress_code: details.dressCode || null,
-      Ko_nemt_lidzi: details.bringAlong || null,
-      ko_nemt_lidzi: details.bringAlong || null,
-      Dalibas_maksa: details.fee || null,
-      dalibas_maksa: details.fee || null,
-      Brivs_apraksts: ev.descriptionHtml || null,
-      brivs_apraksts: ev.descriptionHtml || null,
-      Papildu_piezimes: ev.note || null,
-      papildu_piezimes: ev.note || null,
-      Radit_aktualitates: Boolean(details.showInAktualitates),
-      radit_aktualitates: Boolean(details.showInAktualitates),
-      Aktualitates_id: Number(details.aktualitatesId || 0) || null,
-      aktualitates_id: Number(details.aktualitatesId || 0) || null,
-      Dati_json: coreMeta,
-      dati_json: coreMeta,
-      event_date: ev.date || null,
-      event_time: ev.time || null,
-      title: ev.title || "",
-      data_json: coreMeta,
+    const loc = String(ev.location || "").trim();
+    const vieta = ev.online ? (loc && loc.toLowerCase() !== "online" ? loc : "online") : loc || null;
+    const out = {};
+    const put = (candList, val) => {
+      const key = resolveWriteKey(candList);
+      if (!key) return;
+      out[key] = val;
     };
+    put(SAL_COL_CANDIDATES.Datums, ev.date || null);
+    put(SAL_COL_CANDIDATES.Sakuma_laiks, ev.time || null);
+    put(SAL_COL_CANDIDATES.Pasakuma_nosau, ev.title || "");
+    put(SAL_COL_CANDIDATES.Pasakuma_veids, ev.eventType || "saliedesana");
+    put(SAL_COL_CANDIDATES.Beigu_laiks, details.timeTo || null);
+    put(SAL_COL_CANDIDATES.Online_pasakums, ev.online ? "Jā" : "Nē");
+    put(SAL_COL_CANDIDATES.Norises_vieta, vieta);
+    put(SAL_COL_CANDIDATES.Kategorija, ev.shortCategory || ev.category || null);
+    put(SAL_COL_CANDIDATES.Pasakuma_aprak, details.eventWhat || null);
+    put(SAL_COL_CANDIDATES.Kapac_piedalītie, details.whyJoin || null);
+    put(SAL_COL_CANDIDATES.Ko_sagaidit, details.whatExpect || null);
+    put(SAL_COL_CANDIDATES.Dress_code, details.dressCode || null);
+    put(SAL_COL_CANDIDATES.Ko_nemt_lidzi, details.bringAlong || null);
+    put(SAL_COL_CANDIDATES.Dalibas_maksa, details.fee || null);
+    put(SAL_COL_CANDIDATES.Brivs_apraksts, ev.descriptionHtml || null);
+    put(SAL_COL_CANDIDATES.Papildu_piezimes, buildPapilduPiezimes(ev.note, metaPack));
+    return out;
+  }
+
+  /** Payload tikai public."Saliedesana" kolonnām (bez Dati_json u.c.). */
+  function eventToRemoteRow(ev) {
+    return buildSaliedesanaDbPayload(ev);
   }
 
   async function selectRemoteRowsSafe(supabase) {
     const q = await supabase.from(REMOTE_TABLE).select("*");
     if (q.error) throw q.error;
-    return Array.isArray(q.data) ? q.data : [];
+    const data = Array.isArray(q.data) ? q.data : [];
+    cacheSaliedesanaColumnsFromRows(data);
+    return data;
   }
 
   function prunePayloadByMissingColumn(payload, error) {
@@ -330,9 +468,7 @@ alter table public."Saliedesana" add column if not exists "Aktualitates_id" bigi
 
   async function saveRemoteAdaptive(supabase, idNum, payload) {
     let current = { ...payload };
-    if (!idNum && (current.id === undefined || current.id === null || current.id === "")) {
-      current.id = generateRemoteIntId();
-    }
+    if (!idNum) delete current.id;
     let lastErr = null;
     for (let i = 0; i < 80; i += 1) {
       if (!Object.keys(current).length) break;
@@ -342,7 +478,7 @@ alter table public."Saliedesana" add column if not exists "Aktualitates_id" bigi
       if (!q.error) return Number(q.data?.[0]?.id || idNum || 0) || null;
       lastErr = q.error;
       if (!idNum && /null value in column "?id"?/i.test(String(q.error?.message || ""))) {
-        current.id = generateRemoteIntId();
+        current = { ...current, id: generateRemoteIntId() };
         continue;
       }
       const trimmed = prunePayloadByMissingColumn(current, q.error);
@@ -351,13 +487,17 @@ alter table public."Saliedesana" add column if not exists "Aktualitates_id" bigi
     }
     // Pēdējais mēģinājums ar minimālo kolonnu komplektu (ja tabulai ir tikai bāzes ailes).
     if (!idNum) {
-      const fallback = {
-        id: Number(current.id || generateRemoteIntId()),
-        Datums: current.Datums || current.event_date || null,
-        Pasakuma_nosaukums: current.Pasakuma_nosaukums || current.title || "",
-      };
+      const kDat = resolveWriteKey(SAL_COL_CANDIDATES.Datums);
+      const kTit = resolveWriteKey(SAL_COL_CANDIDATES.Pasakuma_nosau);
+      const fallback = {};
+      if (kDat) fallback[kDat] = current[kDat] ?? null;
+      if (kTit) fallback[kTit] = String(current[kTit] ?? "").trim() || "";
+      if (!Object.keys(fallback).length) {
+        fallback.Datums = current.Datums ?? null;
+        fallback.Pasakuma_nosau = current.Pasakuma_nosau || current.Pasakuma_nosaukums || "";
+      }
       const ins = await supabase.from(REMOTE_TABLE).insert(fallback).select("id").limit(1);
-      if (!ins.error) return Number(ins.data?.[0]?.id || fallback.id) || null;
+      if (!ins.error) return Number(ins.data?.[0]?.id || 0) || null;
       lastErr = ins.error;
     }
     throw lastErr || new Error("Neizdevās saglabāt Saliedesana ierakstu.");
@@ -461,23 +601,49 @@ alter table public."Saliedesana" add column if not exists "Aktualitates_id" bigi
     return rows
       .map((r) => {
         const rawMeta = pickByAliases(r, ["Dati_json", "dati_json", "data_json", "meta_json"], null);
-        const metaObj = rawMeta && typeof rawMeta === "object" ? rawMeta : {};
+        const legacyMeta = rawMeta && typeof rawMeta === "object" ? rawMeta : {};
+        const pap = String(pickByAliases(r, ["Papildu_piezimes", "papildu_piezimes"], "") || "");
+        const split = splitPapilduPiezimes(pap);
+        const embedded = split.meta && typeof split.meta === "object" ? split.meta : {};
+        const papNote = split.meta ? split.note : pap.trim();
+        const localIdStr = String(embedded.local_id || legacyMeta.local_id || `remote-${String(r?.id ?? "")}`).trim();
         return normalizeEvent({
-          ...metaObj,
+          ...legacyMeta,
+          ...embedded,
           ...r,
-          details: {
-            ...(metaObj?.details && typeof metaObj.details === "object" ? metaObj.details : {}),
-            timeTo: String(pickByAliases(r, ["Beigu_laiks", "beigu_laiks", "Lidz_cikiem", "lidz_cikiem", "time_to"], metaObj?.details?.timeTo || "")),
-            showInAktualitates: Boolean(
-              pickByAliases(r, ["Radit_aktualitates", "radit_aktualitates", "vai_radit_aktualitates"], metaObj?.details?.showInAktualitates)
-            ),
-            aktualitatesId: Number(pickByAliases(r, ["Aktualitates_id", "aktualitates_id"], metaObj?.details?.aktualitatesId || 0) || 0) || null,
-          },
-          local_id: metaObj?.local_id || `remote-${String(r?.id ?? "")}`,
+          __sal_note_clean: papNote,
+          __sal_local_id: localIdStr,
+          __sal_remote_id: r?.id != null ? Number(r.id) : null,
+          local_id: localIdStr,
           remote_id: r?.id,
-          date: pickByAliases(r, ["Datums", "datums", "event_date", "date"], ""),
-          time: pickByAliases(r, ["Sakuma_laiks", "sakuma_laiks", "Laiks", "laiks", "event_time", "time"], ""),
-          title: pickByAliases(r, ["Pasakuma_nosaukums", "pasakuma_nosaukums", "title", "nosaukums"], ""),
+          poll: embedded.poll || legacyMeta.poll,
+          participants: embedded.participants || legacyMeta.participants || {},
+          attachments: Array.isArray(embedded.attachments)
+            ? embedded.attachments
+            : Array.isArray(legacyMeta.attachments)
+              ? legacyMeta.attachments
+              : [],
+          date: String(pickFromRow(r, SAL_COL_CANDIDATES.Datums.concat(["event_date", "date"]), "") || "").trim(),
+          time: String(pickFromRow(r, SAL_COL_CANDIDATES.Sakuma_laiks.concat(["event_time", "time"]), "") || "").trim(),
+          title: String(pickFromRow(r, SAL_COL_CANDIDATES.Pasakuma_nosau.concat(["title", "nosaukums"]), "") || "").trim(),
+          details: {
+            ...(legacyMeta.details && typeof legacyMeta.details === "object" ? legacyMeta.details : {}),
+            ...(embedded.details && typeof embedded.details === "object" ? embedded.details : {}),
+            timeTo: String(
+              pickByAliases(r, ["Beigu_laiks", "beigu_laiks", "Lidz_cikiem", "lidz_cikiem", "time_to"], "")
+            ),
+            showInAktualitates: Boolean(
+              embedded?.details?.showInAktualitates ??
+                legacyMeta?.details?.showInAktualitates ??
+                pickByAliases(r, ["Radit_aktualitates", "radit_aktualitates", "vai_radit_aktualitates"], false)
+            ),
+            aktualitatesId:
+              Number(
+                embedded?.details?.aktualitatesId ??
+                  legacyMeta?.details?.aktualitatesId ??
+                  (pickByAliases(r, ["Aktualitates_id", "aktualitates_id"], 0) || 0)
+              ) || null,
+          },
         });
       })
       .filter((x) => x.id && x.date && x.title)

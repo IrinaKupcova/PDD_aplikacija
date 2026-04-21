@@ -433,21 +433,6 @@
       };
     }
 
-    function withAdminActorAsync(fn) {
-      return async function patchedAsync(...args) {
-        const adminId = pickAdminLocalUserId();
-        if (!adminId) return fn.apply(this, args);
-        const prev = sessionStorage.getItem(LS_LOCAL_USER_ID);
-        sessionStorage.setItem(LS_LOCAL_USER_ID, adminId);
-        try {
-          return await fn.apply(this, args);
-        } finally {
-          if (prev == null || prev === "") sessionStorage.removeItem(LS_LOCAL_USER_ID);
-          else sessionStorage.setItem(LS_LOCAL_USER_ID, prev);
-        }
-      };
-    }
-
     if (typeof K.upsertTeamUser === "function" && !K.upsertTeamUser.__pddPatchedNonAdmin) {
       const inner = K.upsertTeamUser;
       K.upsertTeamUser = withAdminActorSync(inner);
@@ -458,10 +443,7 @@
       K.deleteTeamUser = withAdminActorSync(inner);
       K.deleteTeamUser.__pddPatchedNonAdmin = true;
     }
-    if (typeof K.setUserAizvieto === "function" && !K.setUserAizvieto.__pddPatchedNonAdmin) {
-      const inner = K.setUserAizvieto;
-      K.setUserAizvieto = withAdminActorAsync(inner);
-      K.setUserAizvieto.__pddPatchedNonAdmin = true;
-    }
+    // setUserAizvieto nedrīkst apiet ar admin sessionStorage — DB/RPC vajag īsto auth e-pastu
+    // (sk. Komanda.js resolveActorEmail + pdd_update_user_aizvieto_*).
   })();
 })();
