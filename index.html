@@ -264,6 +264,19 @@
           text-overflow: clip;
           font-size: 0.65rem;
         }
+        /* Saliedēšanas modulis pievieno `.sal-main-cal-badge-wrap` tai pašā kalendāra šūnā — bez šī tas var “norīt” klikšķus uz tukšu slāni virs `cal-chip`. */
+        .sal-main-cal-badge-wrap {
+          pointer-events: none !important;
+          width: fit-content !important;
+          max-width: 100% !important;
+        }
+        .sal-main-cal-badge-wrap .sal-main-cal-badge {
+          pointer-events: auto !important;
+        }
+        .cal-chip.cal-chip--pdd-saliedesana {
+          position: relative;
+          z-index: 2;
+        }
         .list-panel {
           background: var(--surface);
           border: 1px solid var(--border);
@@ -438,13 +451,13 @@
       <div id="root"></div>
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
-      <script src="./Komanda.js?v=20260422"></script>
+      <script src="./Komanda.js?v=2026051312"></script>
       <script src="./IAD.js?v=20260443"></script>
-      <script src="./Saliedesana.js?v=20260421"></script>
+      <script src="./Saliedesana.js?v=2026051320"></script>
       <script src="./supabase/migrations/izmainas.js?v=20260413"></script>
-      <script src="./Sodien.js?v=20260421b"></script>
-      <script src="./Kalendars.js?v=20260421"></script>
-      <script src="./Navigacija.js?v=20260422"></script>
+      <script src="./Sodien.js?v=20260422l"></script>
+      <script src="./Kalendars.js?v=20260422e"></script>
+      <script src="./Navigacija.js?v=2026051320"></script>
       <script src="./Filtr.js?v=20260407"></script>
       <script src="./Saskaņošana.js?v=20260407"></script>
       <script src="./Prombutnes_vesture.js?v=20260407"></script>
@@ -507,6 +520,8 @@
         const COL_USER_IMAIL = "i-mail";
         const COL_USER_AMATS = "Amats";
         const COL_USER_AIZVIETO = "Aizvieto";
+        /** `public.users.Kompetence` (text) — brīvais apraksts par kompetenci un pamata uzdevumiem. */
+        const COL_USER_KOMPETENCE = "Kompetence";
         const COL_USER_ROLE = "LOMA";
         const COL_USER_APPROVER_STATUS = "Apstiprinātāja statuss";
         const COL_USER_APPROVER_FROM = "Apstiprinājuma lomas periods no";
@@ -1020,6 +1035,9 @@
           const email = String(firstUserEmailField(u) ?? "").trim();
           const amats = String(u?.[COL_USER_AMATS] ?? u?.Amats ?? u?.amats ?? "").trim();
           const aizvieto = String(pickByAliases(u, USER_AIZVIETO_ALIASES, "") ?? "").trim();
+          const kompetence = String(
+            u?.[COL_USER_KOMPETENCE] ?? pickByAliases(u, [COL_USER_KOMPETENCE, "kompetence"], "") ?? ""
+          ).trim();
           const approverRaw = pickByAliases(u, USER_APPROVER_STATUS_ALIASES, u?.is_approver);
           const approverMode = normalizeApproverMode(approverRaw);
           const approverFrom = String(pickByAliases(u, USER_APPROVER_FROM_ALIASES, "") ?? "").trim();
@@ -1034,6 +1052,7 @@
             email: email || null,
             [COL_USER_AMATS]: amats || null,
             [COL_USER_AIZVIETO]: aizvieto || null,
+            [COL_USER_KOMPETENCE]: kompetence || null,
             [COL_USER_ROLE]: userRoleValue(u),
             role: userRoleValue(u),
             raw_role: u?.role ?? null,
@@ -2687,6 +2706,145 @@
         function dayKey(d) {
           return format(d, "yyyy-MM-dd");
         }
+        function normalizeLvFold(s) {
+          return String(s ?? "")
+            .replace(/\u00a0/g, " ")
+            .replace(/\u202f/g, " ")
+            .replace(/\u2007/g, " ")
+            .trim()
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "");
+        }
+        /** Ja teksta heuristika neatķer, mēģina sasaistīt ar lokālajiem Saliedēšanas pasākumiem (localStorage). */
+        function maybeBridgeSaliedesanaFromLocalStorage(row, dateYmd, hayMeetFolded) {
+          const loadFn = globalThis.SALIEDESANA?.loadLocalEvents;
+          if (typeof loadFn !== "function" || !dateYmd) return null;
+          let events = [];
+          try {
+            events = loadFn();
+          } catch {
+            return null;
+          }
+          if (!Array.isArray(events)) return null;
+          const dayEv = events.filter((e) => String(e?.date || "").trim() === String(dateYmd).trim());
+          if (!dayEv.length) return null;
+          const typeColor = String(row?.type?.color ?? "").trim().toLowerCase();
+          const salLikeOrange =
+            typeColor === "#fb923c" ||
+            typeColor === "#f97316" ||
+            typeColor === "#ea580c" ||
+            typeColor.includes("fb923c") ||
+            typeColor.includes("f97316");
+          const rowHay = String(hayMeetFolded || "").trim();
+          let best = null;
+          let bestScore = 0;
+          for (const ev of dayEv) {
+            const t = normalizeLvFold(String(ev?.title ?? "").replace(/\u00a0/g, " "));
+            if (!t) continue;
+            let sc = 0;
+            if (rowHay && t.includes(rowHay)) sc = Math.max(sc, 6);
+            if (rowHay && rowHay.includes(t)) sc = Math.max(sc, 6);
+            for (const piece of rowHay.split(/\s+/)) {
+              if (piece.length >= 5 && t.includes(piece)) sc += 2;
+            }
+            if (sc > bestScore) {
+              bestScore = sc;
+              best = ev;
+            }
+          }
+          if (best && bestScore >= 4) {
+            return {
+              eventId: String(best.id || "").trim(),
+              date: dateYmd,
+              title: String(best.title || "").trim(),
+            };
+          }
+          if (
+            dayEv.length === 1 &&
+            (salLikeOrange ||
+              rowHay.includes("sanaks") ||
+              (rowHay.includes("app") && rowHay.includes("darbin")))
+          ) {
+            const e0 = dayEv[0];
+            return {
+              eventId: String(e0.id || "").trim(),
+              date: dateYmd,
+              title: String(e0.title || "").trim(),
+            };
+          }
+          return null;
+        }
+        /** Prombūtnes kalendāra čipam: vai šis ieraksts ir Saliedēšanas komandas pasākuma “čips”, un kādu datumu/nosaukumu sūtīt uz Saliedēšanu. */
+        function buildPrombutnesSaliedesanaOpenDetail(row, clickedDay) {
+          const r = row && typeof row === "object" ? row : null;
+          if (!r) return null;
+          const clickedYmd = clickedDay instanceof Date && !Number.isNaN(clickedDay.getTime()) ? dayKey(clickedDay) : "";
+          const startFallback = String(
+            r?.start_date ?? r?.Sakuma_datums ?? r?.sakuma_datums ?? r?.Start_date ?? "",
+          ).trim();
+          const dateYmd = clickedYmd || startFallback;
+          const chipEmployeeLabel = String(userDisplayName(r?.employee) || "").trim();
+          const employeeName = String(
+            chipEmployeeLabel ||
+              (r?.employee?.[COL_USER_NAME] ??
+                r?.employee?.["Vārds uzvārds"] ??
+                r?.employee?.["Vards uzvards"] ??
+                r?.employee?.full_name ??
+                ""),
+          ).trim();
+          const comment = String(r?.comment ?? "").trim();
+          const extra = String(r?.Papildu_info ?? r?.papildu_info ?? "").trim();
+          const typeName = String(r?.type?.name ?? r?.type?.type ?? "").trim();
+          let markerSource = "";
+          try {
+            markerSource = JSON.stringify(r);
+          } catch {
+            markerSource = "";
+          }
+          markerSource = `${markerSource} ${comment} ${extra} ${typeName} ${employeeName}`;
+          const markerMatch =
+            /<!--\s*SALIEDESANA:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\s*-->/i.exec(markerSource) ||
+            /SALIEDESANA:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/i.exec(markerSource) ||
+            /SALIEDESANA:([A-Za-z0-9_-]+)/i.exec(markerSource);
+          const stripLeadingStars = (s) => {
+            let out = String(s ?? "").replace(/\u00a0/g, " ").trim();
+            while (out.length) {
+              const next = out
+                .replace(/^[\s\uFE0F\u200D]+/u, "")
+                .replace(
+                  /^[\u2B50\u2605\u2728\u2B51\u2730\u1F31F\u1F320\u272F\u26A1\u2B55]|[\uD83C\uDF1F]|[\uD83C\uDF20]/u,
+                  "",
+                );
+              if (next === out) break;
+              out = next.trim();
+            }
+            return out.trim();
+          };
+          const hasStarEventTitle = /^[\s\uFE0F\u200D]*(?:[\u2B50\u2605\u2728\u2B51\u2730\u1F31F\u1F320\u272F\u26A1\u2B55]|[\uD83C\uDF1F]|[\uD83C\uDF20])/u.test(employeeName);
+          const hayMeet = normalizeLvFold(`${employeeName} ${typeName} ${comment} ${extra}`);
+          const looksLikeAppTeamMeeting =
+            hayMeet.includes("app darbinieku") ||
+            hayMeet.includes("app darbiniku") ||
+            (hayMeet.includes("app") && hayMeet.includes("darbin")) ||
+            (hayMeet.includes("app") && hayMeet.includes("sanaks")) ||
+            (hayMeet.includes("sanaks") && hayMeet.includes("darbin")) ||
+            (hayMeet.includes("sanaks") && hayMeet.includes("lietotn"));
+          const hasMarker = Boolean(markerMatch);
+          if (!hasStarEventTitle && !hasMarker && !looksLikeAppTeamMeeting) {
+            const bridged = maybeBridgeSaliedesanaFromLocalStorage(r, dateYmd, hayMeet);
+            if (bridged) return bridged;
+            return null;
+          }
+          const eventId = String(markerMatch?.[1] ?? "").trim();
+          const titleFromEmployee = stripLeadingStars(employeeName);
+          const title =
+            hasStarEventTitle || looksLikeAppTeamMeeting
+              ? String(titleFromEmployee || typeName || employeeName).trim()
+              : String(employeeName || typeName).trim();
+          if (!dateYmd) return null;
+          return { eventId, date: dateYmd, title };
+        }
         function hexToRgb(hex) {
           const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(String(hex || "").trim());
           if (!m) return { r: 100, g: 116, b: 139 };
@@ -2817,6 +2975,7 @@
                         const isCitsType = Boolean(a?.type?.name) && isCitsSaskanotsTypeName(a.type.name);
                         const periodLabel = extractPeriodLabelLv(a);
                         const hasTimePeriod = Boolean(periodLabel);
+                        const salOpen = buildPrombutnesSaliedesanaOpenDetail(a, d);
                         const pendingMark = (() => {
                           const fn = globalThis.PDDPrombutnesVesture?.isPendingCitsAbsence;
                           const base = typeof fn === "function" ? Boolean(fn(a)) : false;
@@ -2833,7 +2992,7 @@
                             key=${a.id}
                             role="button"
                             tabindex="0"
-                            class="cal-chip"
+                            class=${`cal-chip${salOpen ? " cal-chip--pdd-saliedesana" : ""}`}
                             style=${chipStyle(a)}
                             title=${[
                               userDisplayName(a.employee) || "Darbinieks",
@@ -2842,18 +3001,22 @@
                               a.comment
                                 ? `Komentārs: ${String(a.comment).replace(/"/g, "'")}`
                                 : "",
-                              onPickAbsence ? "Spied, lai atvērtu vēsturē" : "",
+                              onPickAbsence
+                                ? salOpen
+                                  ? "Spied — atvērt Saliedēšanas pasākuma kartiņu"
+                                  : "Spied, lai atvērtu vēsturē"
+                                : "",
                             ]
                               .filter(Boolean)
                               .join(" — ")}
                             onClick=${(ev) => {
                               ev.stopPropagation();
-                              onPickAbsence?.(a);
+                              onPickAbsence?.(a, d);
                             }}
                             onKeyDown=${(ev) => {
                               if (ev.key === "Enter" || ev.key === " ") {
                                 ev.preventDefault();
-                                onPickAbsence?.(a);
+                                onPickAbsence?.(a, d);
                               }
                             }}
                           >
@@ -3871,6 +4034,7 @@
           { key: COL_USER_IMAIL, label: "e-pasts" },
           { key: COL_USER_AMATS, label: "Amats" },
           { key: COL_USER_AIZVIETO, label: "Aizvieto" },
+          { key: COL_USER_KOMPETENCE, label: "Kompetence un pamata uzdevumi" },
         ];
 
         function teamUsersTableColumns(_users) {
@@ -3925,6 +4089,8 @@
           const [authHint, setAuthHint] = useState("");
           const [aizvietoDraft, setAizvietoDraft] = useState({});
           const [aizvietoSaving, setAizvietoSaving] = useState({});
+          const [kompetenceDraft, setKompetenceDraft] = useState({});
+          const [kompetenceSaving, setKompetenceSaving] = useState({});
           const [teamImageOpen, setTeamImageOpen] = useState(false);
           const [teamImageFailed, setTeamImageFailed] = useState(false);
           const isLocalTeams = false;
@@ -3961,6 +4127,44 @@
             setAizvietoDraft(next);
           }, [users]);
 
+          useEffect(() => {
+            const next = {};
+            for (const u of users ?? []) {
+              const uid = String(u?.id ?? "").trim();
+              if (!uid) continue;
+              next[uid] = String(u?.[COL_USER_KOMPETENCE] ?? "").trim();
+            }
+            setKompetenceDraft(next);
+          }, [users]);
+
+          async function saveKompetenceRow(u) {
+            const uid = String(u?.id ?? "").trim();
+            if (!uid) return;
+            setKompetenceSaving((m) => ({ ...m, [uid]: true }));
+            setAuthHint("");
+            try {
+              const fn = window.KOMANDA?.setUserPapilduKompetenceInfo;
+              if (typeof fn !== "function") {
+                setAuthHint("Kompetences lauka saglabāšana nav pieejama.");
+                return;
+              }
+              const text = String(kompetenceDraft?.[uid] ?? "").trim();
+              const r = await fn({ userId: uid, text, syncDb: true });
+              if (r?.error) {
+                setAuthHint(String(r.error?.message ?? "Neizdevās saglabāt kompetences aprakstu."));
+                return;
+              }
+              if (r?.synced === false) {
+                setAuthHint("Teksts saglabāts lokālajā kešā; Supabase nav pieejams vai nav sinhronizēts.");
+              }
+              await onReload?.();
+            } catch (e) {
+              setAuthHint(String(e?.message ?? "Neizdevās saglabāt kompetences aprakstu."));
+            } finally {
+              setKompetenceSaving((m) => ({ ...m, [uid]: false }));
+            }
+          }
+
           async function saveAizvietoRow(u) {
             const uid = String(u?.id ?? "").trim();
             if (!uid) return;
@@ -3992,7 +4196,7 @@
             <div class="list-panel team-users-panel">
               <h2 style=${{ margin: "0 0 0.25rem", fontSize: "1rem" }}>Komanda</h2>
               <p style=${{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--muted)" }}>
-                Šī ir pamata lietotāju tabula. Šeit nosa lomas (piemēram, <code>admin</code> vai
+                Šī ir pamata lietotāju tabula. Šeit nosaka lomas (piemēram, <code>admin</code> vai
                 <code>user</code>) un piekļuves tiesības.
               </p>
               ${authHint
@@ -4011,9 +4215,50 @@
                       ? pagedUsers.map((u) => html`
                           <tr key=${u.id}>
                             ${cols.map((key) => {
+                              if (key === COL_USER_KOMPETENCE) {
+                                const uid = String(u?.id ?? "").trim();
+                                const mayFn = window.KOMANDA?.mayEditTeamUserRow;
+                                const canEditKompetence =
+                                  typeof mayFn === "function" ? Boolean(mayFn(uid)) : true;
+                                const draftK = String(kompetenceDraft?.[uid] ?? "").slice(0, 4000);
+                                const displayVal = u?.[COL_USER_KOMPETENCE] ?? "";
+                                return html`
+                                  <td key=${key} style=${{ minWidth: "200px", maxWidth: "min(420px, 36vw)", verticalAlign: "top" }}>
+                                    ${canEditKompetence
+                                      ? html`
+                                          <div style=${{ display: "grid", gap: "0.35rem" }}>
+                                            <textarea
+                                              class="textarea"
+                                              rows="3"
+                                              style=${{ width: "100%", minHeight: "4.2rem", fontSize: "0.78rem", resize: "vertical" }}
+                                              value=${draftK}
+                                              onInput=${(ev) => {
+                                                const v = String(ev.target.value ?? "").slice(0, 4000);
+                                                setKompetenceDraft((m) => ({ ...m, [uid]: v }));
+                                              }}
+                                            />
+                                            <button
+                                              type="button"
+                                              class="btn btn-ghost btn-small"
+                                              style=${{ justifySelf: "start" }}
+                                              disabled=${Boolean(kompetenceSaving?.[uid])}
+                                              onClick=${() => saveKompetenceRow(u)}
+                                            >
+                                              ${kompetenceSaving?.[uid] ? "Saglabā…" : "Saglabāt"}
+                                            </button>
+                                          </div>
+                                        `
+                                      : html`<div style=${{ fontSize: "0.78rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                          ${formatUserTableCell(key, displayVal)}
+                                        </div>`}
+                                  </td>
+                                `;
+                              }
                               if (key === COL_USER_AIZVIETO) {
                                 const uid = String(u?.id ?? "").trim();
-                                const canEditAizvieto = true;
+                                const mayFn = window.KOMANDA?.mayEditTeamUserRow;
+                                const canEditAizvieto =
+                                  typeof mayFn === "function" ? Boolean(mayFn(uid)) : true;
                                 const draftVal = String(aizvietoDraft?.[uid] ?? "").trim();
                                 const options = (users ?? [])
                                   .filter((x) => String(x?.id ?? "").trim() && String(x?.id ?? "").trim() !== uid)
@@ -6463,6 +6708,16 @@
                   : promSub === "deputy"
                     ? "Apstiprinātāja maiņa"
                     : "";
+          function tryOpenSaliedesanaFromCalendarChip(a, clickedDay) {
+            const detail = buildPrombutnesSaliedesanaOpenDetail(a, clickedDay);
+            if (!detail) return false;
+            try {
+              window.dispatchEvent(new CustomEvent("pdd:open-saliedesana-event", { detail }));
+              return true;
+            } catch {
+              return false;
+            }
+          }
           const headerSubLabel = promSub === "teamUsers" ? "" : promSubLabel;
           return html`
             <section class="stack" style=${{ gap: "1.25rem" }}>
@@ -6497,7 +6752,8 @@
                           setRequestPresetDate(ymd);
                           setPromSub("request");
                         }}
-                        onPickAbsence=${(a) => {
+                        onPickAbsence=${(a, clickedDay) => {
+                          if (tryOpenSaliedesanaFromCalendarChip(a, clickedDay)) return;
                           setPromSub("history");
                           setHistoryOpen(true);
                           setHighlightAbsenceId(a.id);
@@ -6763,6 +7019,40 @@
               if (globalThis.__PDD_OPEN_SALIEDESANA_VIEW__) delete globalThis.__PDD_OPEN_SALIEDESANA_VIEW__;
             };
           }, []);
+          const tryOpenPendingSaliedesanaEvent = (maxTries = 72, delayMs = 140) => {
+            const eventId = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ || "").trim();
+            const date = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ || "").trim();
+            const title = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ || "").trim();
+            if (!eventId && !date && !title) return;
+            if (globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__) {
+              clearInterval(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__);
+              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = null;
+            }
+            let tries = 0;
+            globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = setInterval(() => {
+              tries += 1;
+              try {
+                globalThis.__PDD_OPEN_SALIEDESANA_VIEW__?.();
+              } catch {
+                // ignore
+              }
+              const openNow = globalThis.__PDD_SALIEDESANA_OPEN_EVENT_CARD__;
+              if (typeof openNow === "function") {
+                let ok = openNow({ eventId, date, title });
+                // Hard fallback: ja eventId neatbilst (lokālais/remote mismatch), atver pēc datuma.
+                if (!ok && date) ok = openNow({ eventId: "", date, title: "" });
+                if (ok) {
+                  clearInterval(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__);
+                  globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = null;
+                  return;
+                }
+              }
+              if (tries >= maxTries) {
+                clearInterval(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__);
+                globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = null;
+              }
+            }, delayMs);
+          };
           useEffect(() => {
             const onOpenSalEvent = (ev) => {
               const detail = ev?.detail && typeof ev.detail === "object" ? ev.detail : {};
@@ -6773,23 +7063,44 @@
               globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ = date;
               globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ = title;
               setView("saliedesana");
-              let tries = 0;
-              const t = setInterval(() => {
-                tries += 1;
-                const openNow = globalThis.__PDD_SALIEDESANA_OPEN_EVENT_CARD__;
-                if (typeof openNow === "function") {
-                  const ok = openNow({ eventId, date, title });
-                  if (ok) {
-                    clearInterval(t);
-                    return;
-                  }
-                }
-                if (tries >= 24) clearInterval(t);
-              }, 140);
+              tryOpenPendingSaliedesanaEvent(72, 140);
             };
             window.addEventListener("pdd:open-saliedesana-event", onOpenSalEvent);
-            return () => window.removeEventListener("pdd:open-saliedesana-event", onOpenSalEvent);
+            return () => {
+              window.removeEventListener("pdd:open-saliedesana-event", onOpenSalEvent);
+              if (globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__) {
+                clearInterval(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__);
+                globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = null;
+              }
+            };
           }, []);
+          useEffect(() => {
+            const onCalendarBadgeClick = (ev) => {
+              const target = ev?.target instanceof Element ? ev.target.closest(".sal-main-cal-badge,[data-sal-event-date],[data-sal-event-id]") : null;
+              if (!target) return;
+              const eventId = String(target.getAttribute("data-sal-event-id") || "").trim();
+              const date = String(target.getAttribute("data-sal-event-date") || "").trim();
+              const title = String(target.getAttribute("data-sal-event-title") || "").trim();
+              if (!eventId && !date && !title) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ = eventId;
+              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ = date;
+              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ = title;
+              setView("saliedesana");
+              tryOpenPendingSaliedesanaEvent(180, 130);
+            };
+            document.addEventListener("click", onCalendarBadgeClick, true);
+            return () => document.removeEventListener("click", onCalendarBadgeClick, true);
+          }, []);
+          useEffect(() => {
+            if (view !== "saliedesana") return;
+            const eventId = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ || "").trim();
+            const date = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ || "").trim();
+            const title = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ || "").trim();
+            if (!eventId && !date && !title) return;
+            tryOpenPendingSaliedesanaEvent(90, 140);
+          }, [view]);
           const handleGoBack = useCallback(() => {
             setNavPast((p) => {
               if (p.length === 0) return p;
@@ -6965,10 +7276,12 @@
               globalThis.__PDD_ACTOR_DISPLAY_NAME__ = "";
               globalThis.__PDD_ACTOR_EMAIL__ = "";
               globalThis.__PDD_SESSION_USER_ID__ = "";
+              globalThis.__PDD_ACTOR_USER_ID__ = "";
               globalThis.__PDD_ACTOR_ROLE__ = "";
               return;
             }
             globalThis.__PDD_SESSION_USER_ID__ = String(session.user.id ?? "").trim();
+            globalThis.__PDD_ACTOR_USER_ID__ = String(getStickyAuthValue(LS_LOCAL_USER_ID) || session.user.id || "").trim();
             globalThis.__PDD_ACTOR_ROLE__ = String(profile?.role ?? "").trim().toLowerCase();
             const em = String(profile?.email ?? session.user.email ?? "").trim();
             globalThis.__PDD_ACTOR_EMAIL__ = em;

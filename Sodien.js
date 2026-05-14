@@ -14,6 +14,124 @@ const AKTUALITATES_NAME_CANDIDATES = [
 ];
 
 let resolvedAktualitatesTableName = null;
+let authorNameByEmailCache = new Map();
+let authorNameByAuditIdCache = new Map();
+
+/** Autora UUID no DB rindas (kolonnu nosaukumi atšķiras pēc tabulas / PostgREST). */
+function aktualitateAutorsIdFromRow(r) {
+  if (!r || typeof r !== "object") return "";
+  return pick(
+    r.Autors ??
+      r.autors ??
+      r.created_by ??
+      r.createdBy ??
+      r.user_id ??
+      r.userId ??
+      r.Ievietoja ??
+      r.ievietoja,
+  );
+}
+
+function normalizeEmailKey(v) {
+  return String(v ?? "").trim().toLowerCase();
+}
+
+function isUuidLike(v) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(v ?? "").trim());
+}
+
+function preferredActorUserId() {
+  const candidates = [
+    globalThis.__PDD_ACTOR_USER_ID__,
+    sessionStorage.getItem("pdd_local_user_id"),
+    localStorage.getItem("pdd_local_user_id"),
+    globalThis.__PDD_SESSION_USER_ID__,
+  ];
+  for (const one of candidates) {
+    const s = String(one ?? "").trim();
+    if (s && isUuidLike(s)) return s;
+  }
+  return "";
+}
+
+function preferredLocalUserId() {
+  const candidates = [
+    sessionStorage.getItem("pdd_local_user_id"),
+    localStorage.getItem("pdd_local_user_id"),
+    globalThis.__PDD_ACTOR_USER_ID__,
+  ];
+  for (const one of candidates) {
+    const s = String(one ?? "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function currentActorDisplayName() {
+  const fromGlobal = pick(globalThis.__PDD_ACTOR_DISPLAY_NAME__);
+  if (fromGlobal) return fromGlobal;
+  const localId = preferredLocalUserId();
+  if (!localId) return "";
+  const team = Array.isArray(globalThis.KOMANDA?.loadTeamUsers?.()) ? globalThis.KOMANDA.loadTeamUsers() : [];
+  const byId = team.find((u) => String(u?.id ?? "").trim() === localId);
+  return pick(byId?.["Vārds uzvārds"] ?? byId?.["Vards uzvards"] ?? byId?.full_name);
+}
+
+function buildAuthorMetaMarker(name, localUserId) {
+  const n = String(name ?? "").trim();
+  const uid = String(localUserId ?? "").trim();
+  if (!n && !uid) return "";
+  return `<!--PDD_AUTHOR:${encodeURIComponent(JSON.stringify({ n, uid }))}-->`;
+}
+
+function extractAuthorMetaNameFromHtml(html) {
+  const src = String(html ?? "");
+  const m = /<!--PDD_AUTHOR:([^>]+)-->/i.exec(src);
+  if (!m) return "";
+  try {
+    const obj = JSON.parse(decodeURIComponent(String(m[1] || "")));
+    return pick(obj?.n);
+  } catch {
+    return "";
+  }
+}
+
+function withAuthorMeta(html, name, localUserId) {
+  const src = String(html ?? "");
+  const marker = buildAuthorMetaMarker(name, localUserId);
+  if (!marker) return src;
+  if (/<!--PDD_AUTHOR:[^>]+-->/i.test(src)) return src.replace(/<!--PDD_AUTHOR:[^>]+-->/i, marker);
+  return `${src}${marker}`;
+}
+
+async function resolveActorUserIdForAutors(sb) {
+  // FK AKTUALITATES.Autors norāda uz auth.users(id), tāpēc insertam jālieto auth UID.
+  if (!sb) return "";
+  try {
+    const { data: sess } = await sb.auth.getSession();
+    const uid = String(sess?.session?.user?.id ?? "").trim();
+    if (isUuidLike(uid)) return uid;
+  } catch {
+    /* ignore */
+  }
+  const sid = String(globalThis.__PDD_SESSION_USER_ID__ ?? "").trim();
+  return isUuidLike(sid) ? sid : "";
+}
+
+/** Autora e-pasts no DB rindas (dažādi nosaukumi pēc migrācijām/RPC). */
+function aktualitateAutorsEmailFromRow(r) {
+  if (!r || typeof r !== "object") return "";
+  return pick(
+    r.created_by_email ??
+      r.autors_email ??
+      r.Autors_email ??
+      r.Ievietoja_epasts ??
+      r.ievietoja_epasts ??
+      r["i-mail"] ??
+      r["e-mail"] ??
+      r.email,
+  );
+}
 
 function normUserId(s) {
   return String(s ?? "").trim().toLowerCase();
@@ -36,34 +154,72 @@ function extractUserDisplayName(p) {
 
 /** Vārdi: RPC (users + auth meta), tad public.users atsevišķi trūkstošajiem. */
 async function fetchAuthorNameMap(sb, rawRows) {
-  const ids = [...new Set((rawRows || []).map((r) => pick(r?.Autors ?? r?.autors)).filter(Boolean))];
-  if (ids.length === 0 || !sb) return new Map();
+  const rows = Array.isArray(rawRows) ? rawRows : [];
+  const idTokens = [...new Set(rows.map((r) => aktualitateAutorsIdFromRow(r)).filter(Boolean))];
+  const ids = idTokens.filter((v) => isUuidLike(v));
+  authorNameByEmailCache = new Map();
+  authorNameByAuditIdCache = new Map();
+  if (!sb) return new Map();
   const m = new Map();
-  const { data: rpcRows, error: rpcErr } = await sb.rpc("pdd_display_name_for_user_ids", { p_ids: ids });
-  if (!rpcErr && Array.isArray(rpcRows)) {
-    for (const row of rpcRows) {
-      const uid = pick(row.user_id);
-      const label = pick(row.display_name);
-      if (uid && label) m.set(normUserId(uid), label);
+  const wantedEmails = new Set();
+  for (const r of rows) {
+    const e = normalizeEmailKey(aktualitateAutorsEmailFromRow(r));
+    if (e) wantedEmails.add(e);
+    const aid = normalizeEmailKey(aktualitateAutorsIdFromRow(r));
+    if (aid && aid.includes("@")) wantedEmails.add(aid);
+  }
+  if (ids.length === 0 && wantedEmails.size === 0) return m;
+  if (ids.length) {
+    const { data: rpcRows, error: rpcErr } = await sb.rpc("pdd_display_name_for_user_ids", { p_ids: ids });
+    if (!rpcErr && Array.isArray(rpcRows)) {
+      for (const row of rpcRows) {
+        const uid = pick(row.user_id);
+        const label = pick(row.display_name);
+        if (uid && label) m.set(normUserId(uid), label);
+      }
     }
   }
-  const userCols = 'id, email, "e-mail", full_name, "Vārds uzvārds", "i-mail"';
   // Primāri mēģinām vienā pieprasījumā visus autorus.
-  const { data: batchRows, error: batchErr } = await sb.from("users").select(userCols).in("id", ids);
+  const { data: batchRows, error: batchErr } = ids.length ? await sb.from("users").select("*").in("id", ids) : { data: [], error: null };
   if (!batchErr && Array.isArray(batchRows)) {
     for (const one of batchRows) {
       const uid = pick(one?.id);
       const label = extractUserDisplayName(one);
       if (uid && label) m.set(normUserId(uid), label);
+      const e1 = normalizeEmailKey(one?.email);
+      const e2 = normalizeEmailKey(one?.["e-mail"]);
+      const e3 = normalizeEmailKey(one?.["i-mail"]);
+      if (label && e1) authorNameByEmailCache.set(e1, label);
+      if (label && e2) authorNameByEmailCache.set(e2, label);
+      if (label && e3) authorNameByEmailCache.set(e3, label);
     }
   }
   // Rezerves ceļš: pa vienam autoram.
   for (const id of ids) {
     const nk = normUserId(id);
     if (m.has(nk)) continue;
-    const { data: one } = await sb.from("users").select(userCols).eq("id", id).maybeSingle();
+    const { data: one } = await sb.from("users").select("*").eq("id", id).maybeSingle();
     const label = extractUserDisplayName(one);
     if (label) m.set(nk, label);
+  }
+  // Pilns users saraksts (maza komanda): ja .in() kļūdaina vai RLS dīvainība.
+  if (m.size < ids.length || wantedEmails.size) {
+    const { data: allRows, error: allErr } = await sb.from("users").select("*").limit(2500);
+    if (!allErr && Array.isArray(allRows)) {
+      for (const one of allRows) {
+        const uid = pick(one?.id);
+        const nk = normUserId(uid);
+        if (!nk || m.has(nk)) continue;
+        const label = extractUserDisplayName(one);
+        if (label) m.set(nk, label);
+        const e1 = normalizeEmailKey(one?.email);
+        const e2 = normalizeEmailKey(one?.["e-mail"]);
+        const e3 = normalizeEmailKey(one?.["i-mail"]);
+        if (label && e1) authorNameByEmailCache.set(e1, label);
+        if (label && e2) authorNameByEmailCache.set(e2, label);
+        if (label && e3) authorNameByEmailCache.set(e3, label);
+      }
+    }
   }
   // Pēdējais fallback: lokāli ielādētā KOMANDA (ja DB users piekļuve ierobežota).
   if (m.size < ids.length) {
@@ -75,7 +231,36 @@ async function fetchAuthorNameMap(sb, rawRows) {
         const byId = team.find((u) => normUserId(u?.id) === nk);
         const label = extractUserDisplayName(byId);
         if (label) m.set(nk, label);
+        const e1 = normalizeEmailKey(byId?.email);
+        const e2 = normalizeEmailKey(byId?.["e-mail"]);
+        const e3 = normalizeEmailKey(byId?.["i-mail"]);
+        if (label && e1) authorNameByEmailCache.set(e1, label);
+        if (label && e2) authorNameByEmailCache.set(e2, label);
+        if (label && e3) authorNameByEmailCache.set(e3, label);
       }
+    }
+  }
+  // Rezerves fallback: Auditācijas vēsture (actor_id -> actor_name).
+  if (ids.length) {
+    const auditTables = ["Auditacijas_vesture", "Auditacijas_vēsture"];
+    for (const t of auditTables) {
+      let rows = null;
+      let err = null;
+      try {
+        const q = await sb.from(t).select("actor_id, actor_name").in("actor_id", ids).order("ts", { ascending: false }).limit(5000);
+        rows = q.data;
+        err = q.error;
+      } catch (e) {
+        err = e;
+      }
+      if (err || !Array.isArray(rows)) continue;
+      for (const one of rows) {
+        const aid = normUserId(one?.actor_id);
+        const nm = pick(one?.actor_name);
+        if (!aid || !nm) continue;
+        if (!authorNameByAuditIdCache.has(aid)) authorNameByAuditIdCache.set(aid, nm);
+      }
+      if (authorNameByAuditIdCache.size) break;
     }
   }
   return m;
@@ -89,6 +274,16 @@ async function resolveAktualitatesTableName(sb) {
   if (resolvedAktualitatesTableName) return resolvedAktualitatesTableName;
   if (!sb) throw new Error("Nav Supabase klienta");
   let lastErr = null;
+  // Vispirms tabula, kurā ir kolonna „Autors” (citādi `select *` var atrast vecāku AKTUALITĀTES bez autora).
+  for (const t of AKTUALITATES_NAME_CANDIDATES) {
+    const { error } = await sb.from(t).select("id, Autors").limit(1);
+    if (!error) {
+      resolvedAktualitatesTableName = t;
+      if (typeof globalThis !== "undefined") globalThis.__PDD_AKTUALITATES_TABLE__ = t;
+      return t;
+    }
+    lastErr = error;
+  }
   for (const t of AKTUALITATES_NAME_CANDIDATES) {
     const { error } = await sb.from(t).select("*").limit(1);
     if (!error) {
@@ -296,7 +491,15 @@ function stableSyntheticRowId(html, start, end, autorsOrTag) {
 }
 
 function authorLabelFromDbRow(r, nameMap) {
-  const aid = pick(r?.Autors ?? r?.autors);
+  const aid = aktualitateAutorsIdFromRow(r);
+  const authorEmail = aktualitateAutorsEmailFromRow(r);
+  const emailKey = normalizeEmailKey(authorEmail);
+  const htmlAuthorName = extractAuthorMetaNameFromHtml(r?.Kas_sodien_vel_aktuals ?? r?.kas_sodien_vel_aktuals);
+  if (htmlAuthorName) return htmlAuthorName;
+  // Tikai skaidri autora lauki — neņemam sakritības no rindas saknes `email`/`full_name`,
+  // jo tie var būt no citas kolonnas / vecās denormalizācijas un rādīt nepareizu personu.
+  const usersText = typeof r?.users === "string" ? pick(r.users) : "";
+  if (usersText) return usersText;
   const directLabel = pick(
     r?.authorLabel ??
       r?.author_label ??
@@ -304,18 +507,26 @@ function authorLabelFromDbRow(r, nameMap) {
       r?.autors_vards ??
       r?.created_by_name ??
       r?.created_by_email ??
-      r?.["Vārds uzvārds"] ??
-      r?.full_name ??
-      r?.email,
+      r?.Autors_display ??
+      r?.autors_display
   );
   if (directLabel) return directLabel;
   const aidN = normUserId(aid);
   if (nameMap && aidN && nameMap.has(aidN)) return nameMap.get(aidN);
-  const sid = normUserId(globalThis.__PDD_SESSION_USER_ID__);
-  const selfName = pick(globalThis.__PDD_ACTOR_DISPLAY_NAME__);
+  if (aidN && authorNameByAuditIdCache.has(aidN)) return authorNameByAuditIdCache.get(aidN);
+  if (emailKey && authorNameByEmailCache.has(emailKey)) return authorNameByEmailCache.get(emailKey);
+  if (aid && !isUuidLike(aid)) {
+    const aidEmail = normalizeEmailKey(aid);
+    if (aidEmail.includes("@") && authorNameByEmailCache.has(aidEmail)) return authorNameByEmailCache.get(aidEmail);
+    // Veciem ierakstiem autors var būt jau saglabāts kā teksts ("Vārds uzvārds").
+    if (!aid.includes("@") && /[A-Za-zĀ-ž]/.test(aid) && aid.length <= 120) return aid;
+  }
+  const sid = normUserId(preferredActorUserId());
+  const sidAuth = normUserId(globalThis.__PDD_SESSION_USER_ID__);
+  const selfName = pick(currentActorDisplayName());
   const selfEmail = pick(globalThis.__PDD_ACTOR_EMAIL__);
   // Tikai savam ierakstam drīkst rādīt sesijas vārdu/e-pastu kā rezervi — nevis visiem.
-  if (aidN && sid && aidN === sid) {
+  if (aidN && ((sid && aidN === sid) || (sidAuth && aidN === sidAuth))) {
     if (selfName) return selfName;
     if (selfEmail) return selfEmail;
   }
@@ -328,15 +539,23 @@ function authorLabelFromDbRow(r, nameMap) {
     const n = extractUserDisplayName(emb[0]);
     if (n) return n;
   }
-  if (aid) {
+  if (aid || emailKey) {
     const team = Array.isArray(globalThis.KOMANDA?.loadTeamUsers?.()) ? globalThis.KOMANDA.loadTeamUsers() : [];
     const byId = team.find((u) => normUserId(u?.id) === aidN);
     const teamName = pick(byId?.["Vārds uzvārds"] ?? byId?.full_name);
     if (teamName) return teamName;
+    if (emailKey) {
+      const byEmail = team.find((u) => {
+        const a = normalizeEmailKey(u?.email);
+        const b = normalizeEmailKey(u?.["e-mail"]);
+        const c = normalizeEmailKey(u?.["i-mail"]);
+        return emailKey && (a === emailKey || b === emailKey || c === emailKey);
+      });
+      const teamNameByEmail = pick(byEmail?.["Vārds uzvārds"] ?? byEmail?.full_name);
+      if (teamNameByEmail) return teamNameByEmail;
+    }
   }
-  const actorName = pick(globalThis.__PDD_ACTOR_DISPLAY_NAME__ ?? sessionStorage.getItem("pdd_local_name") ?? "");
-  if (actorName) return actorName;
-  return "—";
+  return "Nezināms autors";
 }
 
 function rowFromDb(r, nameMap) {
@@ -346,7 +565,7 @@ function rowFromDb(r, nameMap) {
   const start = toDateInput(r.Sakums ?? r.sakums);
   const end = toDateInput(r.Beigas ?? r.beigas);
   const created_at = pick(r.created_at);
-  const autors_id = pick(r.Autors ?? r.autors);
+  const autors_id = aktualitateAutorsIdFromRow(r);
   if (!html || !start || !end) return null;
   const dbRowId = pick(r.id);
   const use_period = start !== end;
@@ -374,9 +593,11 @@ function canCurrentActorManageAktualitate(item) {
   if (!item || typeof item !== "object") return false;
   if (isCurrentActorAdmin()) return true;
   if (!sodienUiOpts.useSupabase) return true;
-  const myId = normUserId(globalThis.__PDD_SESSION_USER_ID__);
+  const myId = normUserId(preferredActorUserId());
+  const myAuthId = normUserId(globalThis.__PDD_SESSION_USER_ID__);
   const authorId = normUserId(item?.autors_id);
-  return Boolean(myId && authorId && myId === authorId);
+  if (!authorId) return false;
+  return Boolean((myId && myId === authorId) || (myAuthId && myAuthId === authorId));
 }
 
 function applyLegacyMatchFilter(q, item) {
@@ -751,8 +972,11 @@ async function addAktualitate() {
   const useRemote = Boolean(sodienUiOpts.useSupabase && sb);
 
   if (useRemote) {
+    const actorNameForInsert = currentActorDisplayName();
+    const actorLocalIdForInsert = preferredLocalUserId();
+    const contentWithMeta = withAuthorMeta(content, actorNameForInsert, actorLocalIdForInsert);
     const payload = {
-      Kas_sodien_vel_aktuals: content,
+      Kas_sodien_vel_aktuals: contentWithMeta,
       Sakums: start || today,
       Beigas: end || start || today,
     };
@@ -793,14 +1017,17 @@ async function addAktualitate() {
           }
         }
       } else {
-        const { data: sess } = await sb.auth.getSession();
-        const uid = sess?.session?.user?.id;
+        const uid = await resolveActorUserIdForAutors(sb);
         if (!uid) {
-          alert("Nav pieslēgta lietotāja sesijas — nevar saglabāt (vajag auth.uid() RLS politikai).");
+          alert("Neizdevās noteikt autorizētu sesijas lietotāju.");
           return;
         }
-        if (!pick(globalThis.__PDD_SESSION_USER_ID__)) globalThis.__PDD_SESSION_USER_ID__ = uid;
-        const { error } = await sb.from(t).insert({ ...payload, Autors: uid });
+        if (!pick(globalThis.__PDD_ACTOR_USER_ID__)) globalThis.__PDD_ACTOR_USER_ID__ = uid;
+        const { error } = await sb.from(t).insert({
+          ...payload,
+          Autors: uid,
+          users: actorNameForInsert || null,
+        });
         if (error) throw error;
       }
     } catch (e) {

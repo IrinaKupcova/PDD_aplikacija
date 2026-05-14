@@ -15,9 +15,27 @@
     "replaced_by",
   ];
 
+  /** Atbilst Supabase `public.users.Kompetence` (text); citi nosaukumi — tikai lasīšanas/sinhronizācijas rezervei. */
+  const COL_KOMPETENCE_PAPILDU = "Kompetence";
+  const PAPILDU_KOMP_KEYS = [
+    "Kompetence",
+    "Kompetence_papildu",
+    "Kompetence_un_uzdevumi",
+    "Kompetences_un_pamata_uzdevumi",
+    "Kompetence_un_pamata_uzdevumi",
+    "Papildu_info_kompetence",
+    "Papildu_info",
+    "papildu_info",
+    "Kompetences_apraksts",
+    "Pamata_uzdevumi",
+    "pamata_uzdevumi",
+    "competence_notes",
+    "main_tasks_note",
+  ];
+
   // Lokāls seed (varēsi labot/dzēst/papildināt UI).
   // Shape atbilst Supabase public.users kolonnām (tā, lai UI šeit un migrācijās nesajūk):
-  // id, full_name, email, role, created_at, Amats, Vārds uzvārds, i-mail
+  // id, full_name, email, role, created_at, Amats, Vārds uzvārds, i-mail, Kompetence, …
   const seedUsers = [
     {
       id: "local-user-1",
@@ -124,6 +142,52 @@
     return String(v ?? "").trim().slice(0, 300);
   }
 
+  function pickPapilduKompetence(src) {
+    if (!src || typeof src !== "object") return "";
+    for (const k of PAPILDU_KOMP_KEYS) {
+      const v = src[k];
+      if (v == null) continue;
+      const s = String(v).trim();
+      if (s) return s;
+    }
+    return "";
+  }
+
+  function normalizePapilduKompetence(v) {
+    return String(v ?? "").trim().slice(0, 4000);
+  }
+
+  function resolveActorTeamIds() {
+    const ids = new Set();
+    const actor = getCurrentLocalActor();
+    if (actor?.id) ids.add(String(actor.id).trim());
+    const g = String(globalThis.__PDD_ACTOR_USER_ID__ ?? "").trim();
+    if (g) ids.add(g);
+    return ids;
+  }
+
+  /** Administrators var labot jebkuru; parastais lietotājs — tikai savu ierakstu. */
+  function assertMayEditTeamUserRow(targetUserId) {
+    const tid = String(targetUserId ?? "").trim();
+    if (!tid) return { ok: false, error: new Error("Trūkst userId.") };
+    const actor = getCurrentLocalActor();
+    if (actor.role === "admin") return { ok: true };
+    const ids = resolveActorTeamIds();
+    if (ids.has(tid)) return { ok: true };
+    return {
+      ok: false,
+      error: new Error("Tikai administrators vai pats lietotājs var mainīt šo informāciju."),
+    };
+  }
+
+  function notifyTeamUsersChanged() {
+    try {
+      window.dispatchEvent(new CustomEvent("pdd:komanda-team-users-changed"));
+    } catch {
+      // ignore
+    }
+  }
+
   function loadTeamUsers() {
     const raw = localStorage.getItem(LS_TEAM_USERS);
     const hasDb = Boolean(globalThis.__PDD_SUPABASE__);
@@ -146,6 +210,7 @@
 
   function saveTeamUsers(users) {
     localStorage.setItem(LS_TEAM_USERS, JSON.stringify((users ?? []).map(normalizeUser)));
+    notifyTeamUsersChanged();
   }
 
   function upsertTeamUser(user) {
@@ -174,6 +239,7 @@
     const email = u?.email ?? u?.["e-mail"] ?? iMail ?? "";
     const full = u?.full_name ?? vard;
     const aizvieto = normalizeAizvieto(pickAizvieto(u));
+    const kompPap = normalizePapilduKompetence(pickPapilduKompetence(u) || u?.[COL_KOMPETENCE_PAPILDU] || "");
     return {
       id,
       role,
@@ -185,6 +251,7 @@
       "i-mail": String(iMail ?? ""),
       "e-mail": String(epastsHyphen ?? "").trim(),
       Aizvieto: aizvieto,
+      [COL_KOMPETENCE_PAPILDU]: kompPap,
     };
   }
 
@@ -319,9 +386,103 @@
     return { error: lastError ?? new Error("Neizdevās saglabāt Aizvieto (users / RPC).") };
   }
 
+  async function savePapilduKompetenceToSupabase(userId, textValue) {
+    const supabase = globalThis.__PDD_SUPABASE__;
+    if (!supabase) return { skipped: true, reason: "no_supabase" };
+    const uid = String(userId ?? "").trim();
+    if (!uid) return { error: new Error("Trūkst userId.") };
+    const value = normalizePapilduKompetence(textValue) || null;
+    const actorEmail = await resolveActorEmail(supabase);
+    let lastError = null;
+
+    async function tryRpc() {
+      if (!actorEmail) return null;
+      const { data: rpcData, error: rpcError } = await supabase.rpc("pdd_update_user_kompetence_by_email", {
+        p_actor_email: actorEmail,
+        p_target_user_id: uid,
+        p_kompetence: value,
+      });
+      if (!rpcError) return { ok: true, rpc: true, row: rpcData };
+      lastError = rpcError;
+      const { data: rpcData2, error: rpcError2 } = await supabase.rpc("pdd_update_user_kompetence_open_by_email", {
+        p_actor_email: actorEmail,
+        p_target_user_id: uid,
+        p_kompetence: value,
+      });
+      if (!rpcError2) return { ok: true, rpc: true, row: rpcData2 };
+      lastError = rpcError2;
+      return null;
+    }
+
+    const rpcHit = await tryRpc();
+    if (rpcHit) return rpcHit;
+
+    for (const col of PAPILDU_KOMP_KEYS) {
+      const payload = { [col]: value };
+      const { data, error } = await supabase.from("users").update(payload).eq("id", uid).select("id").limit(1);
+      if (!error) {
+        if (Array.isArray(data) && data.length > 0) return { ok: true, column: col };
+        if (Array.isArray(data) && data.length === 0) return { ok: true, column: col };
+        const { error: eBare } = await supabase.from("users").update(payload).eq("id", uid);
+        if (!eBare) return { ok: true, column: col };
+        lastError = eBare;
+        break;
+      }
+      const msg = String(error?.message ?? "");
+      if (/column .* does not exist/i.test(msg) || /Could not find the .* column/i.test(msg)) {
+        lastError = error;
+        continue;
+      }
+      lastError = error;
+      break;
+    }
+    return { error: lastError ?? new Error("Neizdevās saglabāt papildu informāciju par kompetenci (users / RPC).") };
+  }
+
+  async function setUserPapilduKompetenceInfo({ userId, text = "", syncDb = true }) {
+    const uid = String(userId ?? "").trim();
+    if (!uid) return { error: new Error("Trūkst userId.") };
+
+    const perm = assertMayEditTeamUserRow(uid);
+    if (!perm.ok) return { error: perm.error };
+
+    const users = loadTeamUsers();
+    const i = users.findIndex((u) => String(u.id) === uid);
+    if (i < 0) {
+      users.push(
+        normalizeUser({
+          id: uid,
+          role: "user",
+          "Vārds uzvārds": "",
+          full_name: "",
+          email: "",
+          "i-mail": "",
+          Amats: "",
+          Aizvieto: "",
+          [COL_KOMPETENCE_PAPILDU]: "",
+        })
+      );
+    }
+    const targetIndex = i >= 0 ? i : users.findIndex((u) => String(u.id) === uid);
+    if (targetIndex < 0) return { error: new Error("Lietotājs nav atrasts.") };
+
+    const nextText = normalizePapilduKompetence(text);
+    users[targetIndex] = normalizeUser({ ...users[targetIndex], [COL_KOMPETENCE_PAPILDU]: nextText });
+    saveTeamUsers(users);
+
+    if (!syncDb) return { ok: true, user: users[targetIndex], synced: false };
+    const db = await savePapilduKompetenceToSupabase(uid, nextText);
+    if (db?.error) return { ok: false, user: users[targetIndex], synced: false, error: db.error };
+    if (db?.skipped) return { ok: true, user: users[targetIndex], synced: false };
+    return { ok: true, user: users[targetIndex], synced: true };
+  }
+
   async function setUserAizvieto({ userId, replacementUserId = "", replacementName = "", syncDb = true }) {
     const uid = String(userId ?? "").trim();
     if (!uid) return { error: new Error("Trūkst userId.") };
+
+    const perm = assertMayEditTeamUserRow(uid);
+    if (!perm.ok) return { error: perm.error };
 
     const users = loadTeamUsers();
     const i = users.findIndex((u) => String(u.id) === uid);
@@ -377,7 +538,11 @@
     deleteTeamUser,
     getReplacementOptions,
     setUserAizvieto,
+    setUserPapilduKompetenceInfo,
     saveAizvietoToSupabase,
+    savePapilduKompetenceToSupabase,
+    COL_KOMPETENCE_PAPILDU,
+    mayEditTeamUserRow: (targetUserId) => assertMayEditTeamUserRow(targetUserId).ok,
     TEAM_SECTION_IMAGE_SRC,
   };
 })();

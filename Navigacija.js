@@ -137,6 +137,49 @@
         font-weight: 700;
         letter-spacing: 0.02em;
       }
+      .pdd-nav-poll-alert {
+        margin-top: 0.75rem;
+        border: 1px solid #fb923c;
+        background: linear-gradient(180deg, #fff7ed, #ffedd5);
+        border-radius: 12px;
+        padding: 0.6rem 0.65rem;
+        display: grid;
+        gap: 0.45rem;
+      }
+      .pdd-nav-poll-alert-title {
+        margin: 0;
+        font-size: 0.82rem;
+        color: #9a3412;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+      }
+      .pdd-nav-poll-alert-sub {
+        margin: 0;
+        font-size: 0.74rem;
+        color: #7c2d12;
+        line-height: 1.35;
+      }
+      .pdd-nav-poll-alert-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+      }
+      .pdd-nav-poll-alert-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.25rem;
+        height: 1.25rem;
+        padding: 0 0.35rem;
+        border-radius: 999px;
+        background: #f97316;
+        color: #fff;
+        font-weight: 700;
+        font-size: 0.72rem;
+      }
       .pdd-pinned-bar {
         position: sticky;
         bottom: 0;
@@ -209,6 +252,140 @@
     requestAnimationFrame(() => run(0));
   }
 
+  function pddTodayYmd() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  function pddSafeParseJson(raw, fallback) {
+    try {
+      const v = JSON.parse(String(raw || ""));
+      return v === undefined ? fallback : v;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function pddIsUuidLike(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? "").trim());
+  }
+
+  function pddActorKeyForPollVotes() {
+    const candidates = [
+      globalThis.__PDD_ACTOR_USER_ID__,
+      sessionStorage.getItem("pdd_local_user_id"),
+      localStorage.getItem("pdd_local_user_id"),
+      globalThis.__PDD_SESSION_USER_ID__,
+    ];
+    for (const c of candidates) {
+      const id = String(c ?? "").trim();
+      if (id && pddIsUuidLike(id)) return id;
+    }
+    const em = String(globalThis.__PDD_ACTOR_EMAIL__ ?? sessionStorage.getItem("pdd_local_email") ?? "").trim().toLowerCase();
+    if (em) return em;
+    return "anonymous";
+  }
+
+  function pddExtractPollItemsFromEvent(ev) {
+    const poll = ev && typeof ev === "object" ? ev.poll : null;
+    if (poll && typeof poll === "object") {
+      if (Array.isArray(poll.items) && poll.items.length) return poll.items;
+      if (
+        poll.question ||
+        (Array.isArray(poll.options) && poll.options.length) ||
+        (poll.votes && typeof poll.votes === "object")
+      ) {
+        return [
+          {
+            id: "poll-legacy",
+            type: poll.type || "choice",
+            pollTitle: "",
+            pollDate: "",
+            question: poll.question || "",
+            options: poll.options || [],
+            votes: poll.votes || {},
+          },
+        ];
+      }
+    }
+    return [];
+  }
+
+  function pddFormatPollDateLv(ymd) {
+    const s = String(ymd || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "";
+    const d = new Date(`${s}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return s;
+    return d.toLocaleDateString("lv-LV", { day: "2-digit", month: "2-digit", year: "numeric" });
+  }
+
+  function pddFindPendingSaliedesanaPoll() {
+    const list = pddSafeParseJson(localStorage.getItem("pdd_saliedesana_pasakumi_v2") || "[]", []);
+    if (!Array.isArray(list) || !list.length) return null;
+    const actor = pddActorKeyForPollVotes();
+    const actorEmail = String(globalThis.__PDD_ACTOR_EMAIL__ ?? sessionStorage.getItem("pdd_local_email") ?? "").trim().toLowerCase();
+    const today = pddTodayYmd();
+    const norm = (x) => String(x || "").trim();
+    const isDeclined = (v) => norm(v) === "__DECLINED__";
+    const isAnswered = (p) => {
+      const votes = p && typeof p.votes === "object" ? p.votes : {};
+      const mineA = votes ? votes[actor] : "";
+      const mineB = actorEmail ? votes[actorEmail] : "";
+      if (isDeclined(mineA) || isDeclined(mineB)) return true;
+      return Boolean(norm(mineA) || norm(mineB));
+    };
+    const hasUsableQuestion = (p) => Boolean(norm(p?.question));
+    const optionsFor = (p) => (Array.isArray(p?.options) ? p.options : []).map((x) => norm(x)).filter(Boolean);
+
+    const upcoming = list
+      .filter((ev) => ev && typeof ev === "object")
+      .filter((ev) => {
+        const d = norm(ev.date || ev.event_date || ev.Datums);
+        return d && d >= today;
+      })
+      .sort((a, b) => `${norm(a.date)} ${norm(a.time)}`.localeCompare(`${norm(b.date)} ${norm(b.time)}`));
+
+    const found = [];
+    for (const ev of upcoming) {
+      const eventId = norm(ev.id) || norm(ev.local_id) || (ev.remoteId ? `remote-${ev.remoteId}` : "");
+      const date = norm(ev.date);
+      const title = norm(ev.title) || "Pasākums";
+      const items = pddExtractPollItemsFromEvent(ev);
+      for (const p of items) {
+        const pid = norm(p?.id) || "poll";
+        const type = String(p?.type || "choice") === "text" ? "text" : "choice";
+        const opts = type === "choice" ? optionsFor(p) : [];
+        const sentAt = norm(p?.sentAt ?? p?.sent_at);
+        if (!sentAt) continue; // rādam navigācijā tikai nosūtītās aptaujas
+        const audience = String(p?.audience || "all") === "selected" ? "selected" : "all";
+        const targets = Array.isArray(p?.targets) ? p.targets.map((x) => norm(x)).filter(Boolean) : [];
+        if (audience === "selected") {
+          // actor var būt UUID vai e-pasts; atbalstām abus.
+          const ok = targets.includes(actor) || (actorEmail && targets.includes(actorEmail));
+          if (!ok) continue;
+        }
+        if (!hasUsableQuestion(p)) continue;
+        if (type === "choice" && opts.length < 2) continue;
+        if (isAnswered(p)) continue;
+        found.push({
+          eventId,
+          date,
+          title,
+          pollId: pid,
+          pollTitle: norm(p?.pollTitle ?? p?.poll_title ?? ""),
+          pollDate: norm(p?.pollDate ?? p?.poll_date ?? ""),
+          question: norm(p?.question),
+          type,
+        });
+      }
+    }
+    if (!found.length) return null;
+    return { count: found.length, first: found[0], preview: found.slice(0, 2) };
+  }
+
   function createAppShellWithNav(html) {
     function backArrowSvg() {
       return html`
@@ -247,6 +424,8 @@
       children,
     }) {
       ensureNavigacijaExtraStyles();
+      const pendingPoll = pddFindPendingSaliedesanaPoll();
+
       const darbaUzdevumiNavOpen = view === "darbaUzdevumiIad";
       const vestureAccordionOpen =
         Boolean(showPddAppChangesBadge) ||
@@ -411,6 +590,81 @@
                   </button>
                 </div>
               </details>
+              ${pendingPoll
+                ? html`
+                    <section class="pdd-nav-poll-alert" aria-label="Neaizpildīta aptauja">
+                      <p class="pdd-nav-poll-alert-title">
+                        <span>📊 Neaizpildīta aptauja</span>
+                        <span class="pdd-nav-poll-alert-badge" title="Neaizpildīto aptauju skaits">${Number(pendingPoll.count || 0) || 1}</span>
+                      </p>
+                      <p class="pdd-nav-poll-alert-sub">
+                        ${Array.isArray(pendingPoll.preview) && pendingPoll.preview.length
+                          ? pendingPoll.preview.map(
+                              (x) => html`<span key=${`${x.eventId}-${x.pollId}`}>
+                                <strong>${x.title}</strong>
+                                <br />
+                                <span>${x.pollTitle || x.question || "Aptauja"}</span>${x.pollDate ? html` · ${pddFormatPollDateLv(x.pollDate)}` : null}
+                                <br />
+                                ${x.pollTitle && x.question ? html`<span style=${{ color: "var(--muted)", fontSize: "0.92em" }}>${x.question}</span><br />` : null}
+                                <span style=${{ color: "var(--muted)" }}>${x.date || ""}</span>
+                                <br />
+                              </span>`
+                            )
+                          : html`<span>
+                              <strong>${pendingPoll.first?.title || "Pasākums"}</strong>
+                              <br />
+                              <span>${pendingPoll.first?.pollTitle || pendingPoll.first?.question || "Aptauja"}</span>${pendingPoll.first?.pollDate
+                                ? html` · ${pddFormatPollDateLv(pendingPoll.first.pollDate)}`
+                                : null}
+                              <br />
+                              ${pendingPoll.first?.pollTitle && pendingPoll.first?.question
+                                ? html`<span style=${{ color: "var(--muted)", fontSize: "0.92em" }}>${pendingPoll.first.question}</span><br />`
+                                : null}
+                              <span style=${{ color: "var(--muted)" }}>${pendingPoll.first?.date || ""}</span>
+                            </span>`}
+                      </p>
+                      <div class="pdd-nav-poll-alert-actions">
+                        <button
+                          type="button"
+                          class="btn btn-primary btn-small"
+                          onClick=${() => {
+                            try {
+                              const f = pendingPoll.first || pendingPoll;
+                              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ = String(f.eventId || "");
+                              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ = String(f.date || "");
+                              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ = String(f.title || "");
+                              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_OPEN_POLL_FILL__ = "1";
+                            } catch {
+                              // ignore
+                            }
+                            onChangeView("saliedesana");
+                          }}
+                        >
+                          Aizpildīt
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-ghost btn-small"
+                          onClick=${() => {
+                            try {
+                              const f = pendingPoll.first || pendingPoll;
+                              globalThis.__PDD_SALIEDESANA_PENDING_POLL_ACTION__ = {
+                                action: "decline",
+                                eventId: String(f.eventId || ""),
+                                pollId: String(f.pollId || ""),
+                              };
+                            } catch {
+                              // ignore
+                            }
+                            onChangeView("saliedesana");
+                          }}
+                        >
+                          Atteikties
+                        </button>
+                      </div>
+                    </section>
+                  `
+                : null}
             </div>
           </aside>
           <div class="app-main">

@@ -4,8 +4,87 @@
   /** Supabase: public."Saliedesana" — kolonnas kā Table Editor (arī saīsinātie nosaukumi). */
   const REMOTE_TABLE = "Saliedesana";
   const SAL_META_MARKER = "\n\n---PDD-SYNC---\n";
+  const SALIEDESANA_FILES_BUCKET = "pdd-saliedesana-files";
   /** No pirmā SELECT * — precīzi PostgREST lauku nosaukumi rakstīšanai. */
   let saliedesanaColumnNames = null;
+
+  /** Kalendāra čipu krāsas pēc `eventType` (svētku dienas — kā līdz šim `is-holiday`). */
+  const SAL_CAL_EVENT_PALETTE = {
+    saliedesana: { bg: "#ffedd5", border: "#fb923c", fg: "#7c2d12" },
+    dzimsanas: { bg: "#fce7f3", border: "#ec4899", fg: "#831843" },
+    varda_diena: { bg: "#e0e7ff", border: "#6366f1", fg: "#312e81" },
+    cits: { bg: "#ecfccb", border: "#84cc16", fg: "#365314" },
+  };
+
+  function salCalPaletteForEvent(ev) {
+    if (ev?.category === "holiday") return null;
+    const t = String(ev?.eventType || "saliedesana").trim();
+    return SAL_CAL_EVENT_PALETTE[t] || SAL_CAL_EVENT_PALETTE.saliedesana;
+  }
+
+  function salCalPillClassNames(ev) {
+    if (ev?.category === "holiday") return "sal-cal-pill is-holiday";
+    const t = String(ev?.eventType || "saliedesana").trim();
+    const slug = ["saliedesana", "dzimsanas", "varda_diena", "cits"].includes(t) ? t : "saliedesana";
+    return `sal-cal-pill is-event sal-cal-pill--${slug}`;
+  }
+
+  /** Dzimšanas dienas kartiņas plāna veidi (multi-select chips). */
+  const CELEBRATION_KIND_CHIPS_BD = [
+    { id: "cake", icon: "🎂", label: "Kūka birojā" },
+    { id: "coffee", icon: "☕", label: "Kafijas pauze" },
+    { id: "lunch", icon: "🍕", label: "Kopīgas pusdienas" },
+    { id: "afterwork", icon: "🍹", label: "Afterwork" },
+    { id: "online", icon: "💻", label: "Online apsveikums" },
+    { id: "gifts", icon: "🎁", label: "Dāvanas pasniegšana" },
+  ];
+
+  function summarizeCelebrationKinds(keys) {
+    const arr = Array.isArray(keys) ? keys : [];
+    return arr
+      .map((k) => CELEBRATION_KIND_CHIPS_BD.find((c) => c.id === k)?.label)
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  function salNormalizeAttachmentList(arr) {
+    return (Array.isArray(arr) ? arr : [])
+      .map((a) => ({
+        label: String(a?.label ?? "").trim(),
+        url: String(a?.url ?? "").trim(),
+        kind: String(a?.kind ?? "").trim() || "link",
+        storagePath: String(a?.storagePath ?? a?.storage_path ?? "").trim(),
+      }))
+      .filter((a) => a.label && a.url);
+  }
+
+  function salSanitizeUploadFileName(name) {
+    return String(name || "pielikums")
+      .replace(/[^\w.\-()]/g, "_")
+      .replace(/_+/g, "_")
+      .slice(-120);
+  }
+
+  async function uploadSaliedesanaFileToStorage(supabase, file, folderKey) {
+    if (!supabase || !file) throw new Error("Nav augšupielādes avota.");
+    const { data: sess } = await supabase.auth.getSession();
+    const uid = String(sess?.session?.user?.id ?? "").trim();
+    if (!uid) throw new Error("Pielikumu augšupielādei jāpieslēdzas (sesija).");
+    const safe = salSanitizeUploadFileName(file.name);
+    const suffix = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : String(Date.now());
+    const fk = String(folderKey || "draft").replace(/[^\w\-]/g, "_").slice(0, 80);
+    const objectPath = `${uid}/sal-pasakumi/${fk}/${Date.now()}-${suffix}-${safe}`;
+    const { error: upErr } = await supabase.storage.from(SALIEDESANA_FILES_BUCKET).upload(objectPath, file, {
+      cacheControl: "3600",
+      upsert: false,
+      contentType: file.type || "application/octet-stream",
+    });
+    if (upErr) throw upErr;
+    const pub = supabase.storage.from(SALIEDESANA_FILES_BUCKET).getPublicUrl(objectPath);
+    const publicUrl = String(pub?.data?.publicUrl ?? "").trim();
+    if (!publicUrl) throw new Error("Neizdevās iegūt publisko URL pielikumam.");
+    return { publicUrl, storagePath: objectPath };
+  }
 
   const SAL_COL_CANDIDATES = {
     Datums: ["Datums", "datums"],
@@ -24,6 +103,7 @@
     Dalibas_maksa: ["Dalibas_maksa", "dalibas_maksa"],
     Brivs_apraksts: ["Brivs_apraksts", "brivs_apraksts"],
     Papildu_piezimes: ["Papildu_piezimes", "papildu_piezimes"],
+    Pielikumi: ["Pielikumi", "pielikumi"],
     Dati_json: ["Dati_json", "dati_json"],
     Radit_aktualitates: ["Radit_aktualitates", "radit_aktualitates"],
     Aktualitates_id: ["Aktualitates_id", "aktualitates_id"],
@@ -32,7 +112,7 @@
   const DB_SQL_SETUP = `
 -- public."Saliedesana" (pēc faktiskās shēmas): id, Datums, Sakuma_laiks, Pasakuma_nosau, Pasakuma_veids,
 -- Beigu_laiks, "Online pasākums", Norises_vieta, Kategorija, Pasākuma_aprak, Kapac_piedalītie, Ko_sagaidit,
--- Dress_code, Ko_nemt_lidzi, Dalibas_maksa, Brivs_apraksts, Papildu_piezimes
+-- Dress_code, Ko_nemt_lidzi, Dalibas_maksa, Brivs_apraksts, Papildu_piezimes, Pielikumi (jsonb)
 `;
 
   function ensureStyles() {
@@ -64,7 +144,11 @@
       .sal-cal-list { display:grid; gap:.2rem; }
       .sal-cal-pill { border:1px solid #fdba74; background:#ffedd5; color:#7c2d12; border-radius:999px; padding:1px 7px; font-size:.67rem; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
       .sal-cal-pill.is-holiday { border-color:#fca5a5; background:#fef2f2; color:#991b1b; }
-      .sal-cal-pill.is-event { box-shadow: 0 0 0 1px rgba(234,88,12,.25); }
+      .sal-cal-pill.is-event { box-shadow: 0 0 0 1px rgba(234,88,12,.12); }
+      .sal-cal-pill--saliedesana { border-color:#fb923c; background:#ffedd5; color:#7c2d12; box-shadow: 0 0 0 1px rgba(234,88,12,.22); }
+      .sal-cal-pill--dzimsanas { border-color:#ec4899; background:#fce7f3; color:#831843; box-shadow: 0 0 0 1px rgba(236,72,153,.2); }
+      .sal-cal-pill--varda_diena { border-color:#6366f1; background:#e0e7ff; color:#312e81; box-shadow: 0 0 0 1px rgba(99,102,241,.22); }
+      .sal-cal-pill--cits { border-color:#84cc16; background:#ecfccb; color:#365314; box-shadow: 0 0 0 1px rgba(101,163,13,.22); }
       .sal-cal-add { margin-top:auto; text-align:left; border:1px dashed #f97316; background:#fff7ed; color:#9a3412; border-radius:8px; padding:.2rem .35rem; font-size:.7rem; cursor:pointer; }
       .sal-history { border:1px solid #fed7aa; border-radius:12px; background:#fff; padding:.7rem; display:grid; gap:.5rem; }
       .sal-history-list { display:grid; gap:.35rem; }
@@ -86,6 +170,24 @@
       .sal-attachments { display:grid; gap:.35rem; }
       .sal-att-item { border:1px solid #e2e8f0; border-radius:8px; padding:.35rem .45rem; display:flex; justify-content:space-between; gap:.5rem; align-items:center; }
       .sal-poll-box { border:1px solid #fdba74; background:#fff7ed; border-radius:10px; padding:.55rem; display:grid; gap:.45rem; }
+      .sal-poll-panels { display:grid; gap:.55rem; }
+      .sal-poll-panel { border:1px solid #fed7aa; border-radius:10px; background:#fff; padding:.5rem .55rem; display:grid; gap:.35rem; }
+      .sal-poll-panel-head { display:flex; align-items:center; justify-content:space-between; gap:.5rem; flex-wrap:wrap; }
+      .sal-poll-panel-head--urgent { border:2px solid #fecaca; background:#fef2f2; border-radius:8px; padding:.4rem .5rem; }
+      .sal-poll-panel-hint { font-size:.72rem; color:#64748b; }
+      .sal-poll-panel-toggle { text-align:left; border:1px dashed #fdba74; background:#fff7ed; color:#9a3412; border-radius:8px; padding:.4rem .55rem; font-weight:700; font-size:.82rem; cursor:pointer; }
+      .sal-poll-panel-body { display:grid; gap:.45rem; }
+      .sal-poll-sent-list { margin:0; padding-left:1rem; display:grid; gap:.35rem; font-size:.78rem; color:#7c2d12; }
+      .sal-poll-sent-item { list-style:disc; }
+      .sal-poll-sent-title { font-weight:700; }
+      .sal-poll-sent-meta { font-size:.72rem; color:#64748b; margin-top:.12rem; }
+      .sal-poll-empty { margin:0; font-size:.76rem; color:#9a3412; }
+      .sal-poll-fill-card { border-color:#fecaca; background:#fffafa; }
+      .sal-poll-results-card { border-color:#e2e8f0; background:#f8fafc; }
+      .sal-poll-text-answers { display:grid; gap:.35rem; }
+      .sal-poll-text-answer { border:1px solid #e2e8f0; border-radius:8px; padding:.35rem .45rem; background:#fff; font-size:.78rem; }
+      .sal-poll-text-author { font-size:.7rem; color:#64748b; margin-bottom:.15rem; }
+      .sal-poll-results-bars { display:grid; gap:.35rem; }
       .sal-vote-row { display:grid; gap:.3rem; }
       .sal-vote-option { display:flex; align-items:center; justify-content:space-between; border:1px solid #fed7aa; border-radius:8px; padding:.3rem .45rem; background:#fff; }
       .sal-poll-bars { display:grid; gap:.3rem; }
@@ -93,6 +195,16 @@
       .sal-poll-bar-label { font-size:.74rem; color:#7c2d12; display:flex; justify-content:space-between; }
       .sal-poll-bar-track { height:8px; border-radius:999px; background:#ffedd5; overflow:hidden; }
       .sal-poll-bar-fill { height:100%; border-radius:999px; background:#f97316; }
+      .sal-poll-studio-trigger { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem; margin:.15rem 0 .35rem; }
+      .sal-poll-chip { display:inline-flex; align-items:center; justify-content:center; min-width:1.35rem; height:1.35rem; padding:0 .32rem; font-size:.72rem; font-weight:700; background:#fb923c; color:#fff; border-radius:999px; }
+      .sal-poll-studio { border:2px solid #fdba74; background:#fff; border-radius:12px; padding:.65rem .75rem; display:grid; gap:.55rem; }
+      .sal-poll-studio-help { margin:0; font-size:.78rem; color:#64748b; line-height:1.45; }
+      .sal-poll-opt-list { display:grid; gap:.4rem; }
+      .sal-poll-opt-row { display:grid; grid-template-columns:1.35rem 1fr auto; align-items:center; gap:.4rem; }
+      .sal-poll-opt-idx { font-size:.78rem; font-weight:700; color:#9a3412; text-align:right; }
+      .sal-poll-quick { display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; padding-top:.25rem; border-top:1px dashed #fed7aa; margin-top:.15rem; }
+      .sal-poll-quick-h { font-size:.72rem; color:#64748b; margin-right:.15rem; }
+      .sal-poll-sec-title { margin:0; font-size:.82rem; color:#9a3412; font-weight:700; }
       .sal-rsvp-row { display:flex; gap:.35rem; flex-wrap:wrap; }
       .sal-rsvp-stat { font-size:.75rem; color:#9a3412; border:1px solid #fdba74; border-radius:999px; padding:1px 8px; background:#fff; }
       .sal-rsvp-bars { display:grid; gap:.3rem; }
@@ -105,6 +217,41 @@
       .sal-rsvp-summary-head { display:flex; justify-content:space-between; align-items:center; font-size:.78rem; font-weight:700; color:#7c2d12; }
       .sal-rsvp-summary-list { margin:0; padding-left:1rem; display:grid; gap:.2rem; font-size:.76rem; color:#7c2d12; }
       .sal-rsvp-summary-empty { font-size:.74rem; color:#9a3412; }
+      .sal-cel-wrap { border-radius:14px; background:linear-gradient(145deg,#ffffff 0%,#fafafa 55%,#f8f5ff 100%); border:1px solid #e8e5ef; box-shadow:0 4px 24px rgba(15,23,42,.06),0 1px 3px rgba(15,23,42,.04); padding:.75rem .85rem; display:grid; gap:.65rem; transition:box-shadow .2s ease,border-color .2s ease; }
+      .sal-cel-wrap:hover { box-shadow:0 6px 28px rgba(15,23,42,.08),0 2px 6px rgba(15,23,42,.05); }
+      .sal-cel-confetti { font-size:.85rem; opacity:.85; letter-spacing:.08em; }
+      .sal-cel-head { display:flex; align-items:flex-start; gap:.55rem; padding-bottom:.45rem; border-bottom:1px solid #eceef2; }
+      .sal-cel-head-icon { font-size:1.65rem; line-height:1; filter:drop-shadow(0 1px 2px rgba(0,0,0,.08)); }
+      .sal-cel-head-text { flex:1; min-width:0; }
+      .sal-cel-title { margin:0; font-size:1.05rem; font-weight:700; color:#0f172a; letter-spacing:-.02em; }
+      .sal-cel-sub { margin:.15rem 0 0; font-size:.74rem; color:#64748b; line-height:1.35; }
+      .sal-cel-sec { display:grid; gap:.4rem; padding:.45rem 0; border-bottom:1px dashed #e8e5ef; }
+      .sal-cel-sec:last-of-type { border-bottom:none; }
+      .sal-cel-sec-title { margin:0 0 .1rem; font-size:.72rem; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.06em; }
+      .sal-cel-field { display:grid; gap:.2rem; }
+      .sal-cel-field label { font-size:.74rem; font-weight:600; color:#334155; }
+      .sal-cel-field .input, .sal-cel-field .textarea { min-height:auto; font-size:.85rem; padding:.38rem .5rem; border-radius:8px; border:1px solid #e2e8f0; transition:border-color .15s ease, box-shadow .15s ease; }
+      .sal-cel-field .input:focus, .sal-cel-field .textarea:focus { outline:none; border-color:#a78bfa; box-shadow:0 0 0 3px rgba(167,139,250,.2); }
+      .sal-cel-row2 { display:grid; gap:.45rem; grid-template-columns:1fr 1fr; }
+      @media (max-width:520px) { .sal-cel-row2 { grid-template-columns:1fr; } }
+      .sal-cel-check { display:flex; align-items:center; gap:.45rem; font-size:.82rem; color:#334155; cursor:pointer; user-select:none; }
+      .sal-cel-check input { width:1rem; height:1rem; accent-color:#8b5cf6; cursor:pointer; }
+      .sal-cel-chips { display:flex; flex-wrap:wrap; gap:.35rem; }
+      .sal-cel-chip { appearance:none; border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:999px; padding:.32rem .55rem .32rem .45rem; font-size:.78rem; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:.28rem; transition:transform .12s ease,background .15s ease,border-color .15s ease,box-shadow .15s ease; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+      .sal-cel-chip:hover { border-color:#c4b5fd; background:#faf5ff; transform:translateY(-1px); box-shadow:0 2px 8px rgba(99,102,241,.12); }
+      .sal-cel-chip.is-on { border-color:#8b5cf6; background:linear-gradient(180deg,#f5f3ff,#ede9fe); color:#4c1d95; box-shadow:0 0 0 1px rgba(139,92,246,.25),0 2px 8px rgba(139,92,246,.15); }
+      .sal-cel-chip:focus-visible { outline:2px solid #8b5cf6; outline-offset:2px; }
+      .sal-cel-gift { border-radius:10px; background:#fffbeb; border:1px solid #fde68a; padding:.45rem .5rem; animation:sal-cel-in .25s ease; }
+      .sal-cel-meet { animation:sal-cel-in .25s ease; }
+      @keyframes sal-cel-in { from { opacity:0; transform:translateY(-4px);} to { opacity:1; transform:none;} }
+      .sal-cel-rsvp { display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; }
+      .sal-cel-rsvp .btn { font-size:.76rem; }
+      .sal-cel-foot { display:flex; flex-wrap:wrap; gap:.4rem; align-items:center; padding-top:.35rem; border-top:1px solid #eceef2; }
+      .sal-cel-foot .btn-primary { background:linear-gradient(180deg,#7c3aed,#6d28d9); border-color:#5b21b6; }
+      .sal-cel-foot .btn-ghost { border-color:#e2e8f0; }
+      .sal-modal--cel { border-color:#ddd6fe; background:linear-gradient(180deg,#fff,#fafbff); }
+      .sal-cel-sec .sal-rich-editor { border-color:#ddd6fe; border-radius:10px; }
+      .sal-cel-sec .sal-toolbar { background:linear-gradient(180deg,#faf5ff,#f5f3ff); border-bottom-color:#e9d5ff; }
       .sal-reason-block { border:1px solid #fed7aa; border-radius:8px; background:#fff; padding:.45rem; display:grid; gap:.35rem; }
     `;
     document.head.appendChild(s);
@@ -134,8 +281,39 @@
     return list;
   }
 
+  function isUuidLike(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? "").trim());
+  }
+
+  function preferredActorUserId() {
+    const candidates = [
+      globalThis.__PDD_ACTOR_USER_ID__,
+      sessionStorage.getItem("pdd_local_user_id"),
+      localStorage.getItem("pdd_local_user_id"),
+      globalThis.__PDD_SESSION_USER_ID__,
+    ];
+    for (const c of candidates) {
+      const id = String(c ?? "").trim();
+      if (id && isUuidLike(id)) return id;
+    }
+    return "";
+  }
+
+  async function resolveActorUserIdForAutors(supabase) {
+    if (!supabase) return "";
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const uid = String(sess?.session?.user?.id ?? "").trim();
+      if (isUuidLike(uid)) return uid;
+    } catch {
+      /* ignore */
+    }
+    const sid = String(globalThis.__PDD_SESSION_USER_ID__ ?? "").trim();
+    return isUuidLike(sid) ? sid : "";
+  }
+
   function actorKey() {
-    const id = String(globalThis.__PDD_SESSION_USER_ID__ ?? "").trim();
+    const id = preferredActorUserId();
     if (id) return id;
     const em = String(globalThis.__PDD_ACTOR_EMAIL__ ?? sessionStorage.getItem("pdd_local_email") ?? "").trim().toLowerCase();
     if (em) return em;
@@ -144,6 +322,53 @@
 
   function emptyPoll() {
     return { question: "", options: [], votes: {} };
+  }
+
+  /** Apvieno lokālo un servera aptauzu sarakstu pēc `id`, lai pēc sinhronizācijas nepazustu jaunas kartiņas vai balsis. */
+  function mergePollContainers(prevPoll, remotePoll) {
+    const p0 = prevPoll && typeof prevPoll === "object" ? prevPoll : emptyPoll();
+    const r0 = remotePoll && typeof remotePoll === "object" ? remotePoll : emptyPoll();
+    const pItems = Array.isArray(p0.items) ? p0.items : [];
+    const rItems = Array.isArray(r0.items) ? r0.items : [];
+    if (!pItems.length && !rItems.length) {
+      return {
+        question: String(r0.question || p0.question || "").trim(),
+        options: Array.isArray(r0.options) && r0.options.length ? r0.options : Array.isArray(p0.options) ? p0.options : [],
+        votes: { ...(typeof r0.votes === "object" ? r0.votes : {}), ...(typeof p0.votes === "object" ? p0.votes : {}) },
+        items: [],
+      };
+    }
+    const keyFor = (it, idx) => {
+      const id = String(it?.id ?? "").trim();
+      return id || `poll-${idx + 1}`;
+    };
+    const byId = new Map();
+    const order = [];
+    rItems.forEach((it, idx) => {
+      const kid = keyFor(it, idx);
+      if (!byId.has(kid)) order.push(kid);
+      byId.set(kid, { ...it, id: String(it?.id ?? "").trim() || kid });
+    });
+    pItems.forEach((it, idx) => {
+      const kid = keyFor(it, idx);
+      const clean = { ...it, id: String(it?.id ?? "").trim() || kid };
+      if (!byId.has(kid)) {
+        order.push(kid);
+        byId.set(kid, clean);
+        return;
+      }
+      const ex = byId.get(kid);
+      const vR = ex?.votes && typeof ex.votes === "object" ? ex.votes : {};
+      const vP = clean?.votes && typeof clean.votes === "object" ? clean.votes : {};
+      byId.set(kid, { ...ex, ...clean, votes: { ...vR, ...vP } });
+    });
+    const items = order.map((kid) => byId.get(kid)).filter(Boolean);
+    return {
+      question: String(r0.question || p0.question || "").trim(),
+      options: Array.isArray(r0.options) && r0.options.length ? r0.options : Array.isArray(p0.options) ? p0.options : [],
+      votes: { ...(typeof r0.votes === "object" ? r0.votes : {}), ...(typeof p0.votes === "object" ? p0.votes : {}) },
+      items,
+    };
   }
 
   function normalizeKeyName(value) {
@@ -239,7 +464,12 @@
     const details = src.details && typeof src.details === "object" ? src.details : (metaObj.details && typeof metaObj.details === "object" ? metaObj.details : {});
     const poll = src.poll && typeof src.poll === "object" ? src.poll : emptyPoll();
     const participantsRaw = src.participants && typeof src.participants === "object" ? src.participants : {};
-    const attachments = Array.isArray(src.attachments) ? src.attachments : [];
+    const colAttachments = src.Pielikumi !== undefined && src.Pielikumi !== null ? src.Pielikumi : src.pielikumi;
+    const attachments = Array.isArray(colAttachments)
+      ? colAttachments
+      : Array.isArray(src.attachments)
+        ? src.attachments
+        : [];
     const explicitLocal = String(src.__sal_local_id ?? "").trim();
     const aliasLocal = String(pickByAliases(src, ["local_id", "localId"], "")).trim();
     let rawId = explicitLocal || aliasLocal;
@@ -346,17 +576,38 @@
         ).trim()),
         showInAktualitates: Boolean(details.showInAktualitates ?? parseBool(pickByAliases(src, ["Radit_aktualitates", "radit_aktualitates", "vai_radit_aktualitates", "publicet_aktualitates"], false))),
         aktualitatesId: Number((details.aktualitatesId ?? pickByAliases(src, ["Aktualitates_id", "aktualitates_id"], 0)) || 0) || null,
+        organizerKey: String(
+          details.organizerKey ?? pickByAliases(src, ["organizerKey", "organizer_key", "Organizer_key"], "")
+        ).trim(),
+        celebrationJubilar: String(details.celebrationJubilar ?? "").trim(),
+        celebrationPlanKinds: Array.isArray(details.celebrationPlanKinds)
+          ? details.celebrationPlanKinds.map((x) => String(x ?? "").trim()).filter(Boolean)
+          : [],
+        celebrationMeetingLink: String(details.celebrationMeetingLink ?? "").trim(),
+        celebrationGiftNote: String(details.celebrationGiftNote ?? "").trim(),
+        celebrationMessage: String(details.celebrationMessage ?? "").trim(),
+        celebrationQuizResponsibleKey: String(details.celebrationQuizResponsibleKey ?? "").trim(),
+        celebrationProgramHtml: String(details.celebrationProgramHtml ?? "").trim(),
+        celebrationProgramAttachments: salNormalizeAttachmentList(details.celebrationProgramAttachments),
       },
       poll: {
         question: String(poll.question ?? "").trim(),
         options: Array.isArray(poll.options) ? poll.options.map((x) => String(x ?? "").trim()).filter(Boolean) : [],
         votes: poll.votes && typeof poll.votes === "object" ? poll.votes : {},
         items: Array.isArray(poll.items)
-          ? poll.items.map((p) => ({
-              id: String(p?.id ?? ""),
+          ? poll.items.map((p, idx) => ({
+              id: String(p?.id ?? `poll-${idx + 1}`).trim() || `poll-${idx + 1}`,
+              type: String(p?.type ?? "choice") === "text" ? "text" : "choice",
+              pollTitle: String(p?.pollTitle ?? p?.poll_title ?? "").trim(),
+              pollDate: String(p?.pollDate ?? p?.poll_date ?? "").trim(),
               question: String(p?.question ?? "").trim(),
               options: Array.isArray(p?.options) ? p.options.map((x) => String(x ?? "").trim()).filter(Boolean) : [],
               votes: p?.votes && typeof p.votes === "object" ? p.votes : {},
+              textAnswer: String(p?.textAnswer ?? p?.text_answer ?? "").trim(),
+              audience: String(p?.audience ?? "all") === "selected" ? "selected" : "all",
+              targets: Array.isArray(p?.targets) ? p.targets.map((x) => String(x ?? "").trim()).filter(Boolean) : [],
+              sentAt: String(p?.sentAt ?? p?.sent_at ?? "").trim(),
+              sentBy: String(p?.sentBy ?? p?.sent_by ?? "").trim(),
             }))
           : [],
       },
@@ -380,6 +631,7 @@
           label: String(a?.label ?? "").trim(),
           url: String(a?.url ?? "").trim(),
           kind: String(a?.kind ?? "").trim() || "link",
+          storagePath: String(a?.storagePath ?? a?.storage_path ?? "").trim(),
         }))
         .filter((a) => a.label && a.url),
       createdAt: String(src.created_at ?? src.createdAt ?? ""),
@@ -409,7 +661,6 @@
       short_category: ev.shortCategory || "",
       poll: ev.poll || emptyPoll(),
       participants: ev.participants || {},
-      attachments: Array.isArray(ev.attachments) ? ev.attachments : [],
       details: {
         ...(details || {}),
         showInAktualitates: Boolean(details.showInAktualitates),
@@ -440,6 +691,15 @@
     put(SAL_COL_CANDIDATES.Dalibas_maksa, details.fee || null);
     put(SAL_COL_CANDIDATES.Brivs_apraksts, ev.descriptionHtml || null);
     put(SAL_COL_CANDIDATES.Papildu_piezimes, buildPapilduPiezimes(ev.note, metaPack));
+    const pielikumiPayload = (Array.isArray(ev.attachments) ? ev.attachments : [])
+      .map((a) => ({
+        label: String(a?.label ?? "").trim(),
+        url: String(a?.url ?? "").trim(),
+        kind: String(a?.kind ?? "").trim() || "link",
+        storagePath: String(a?.storagePath ?? a?.storage_path ?? "").trim(),
+      }))
+      .filter((a) => a.label && a.url);
+    put(SAL_COL_CANDIDATES.Pielikumi, pielikumiPayload);
     return out;
   }
 
@@ -631,11 +891,13 @@
           remote_id: r?.id,
           poll: embedded.poll || legacyMeta.poll,
           participants: embedded.participants || legacyMeta.participants || {},
-          attachments: Array.isArray(embedded.attachments)
-            ? embedded.attachments
-            : Array.isArray(legacyMeta.attachments)
-              ? legacyMeta.attachments
-              : [],
+          attachments: (() => {
+            const col = r?.Pielikumi ?? r?.pielikumi;
+            if (Array.isArray(col)) return col;
+            if (Array.isArray(embedded.attachments)) return embedded.attachments;
+            if (Array.isArray(legacyMeta.attachments)) return legacyMeta.attachments;
+            return [];
+          })(),
           date: String(pickFromRow(r, SAL_COL_CANDIDATES.Datums.concat(["event_date", "date"]), "") || "").trim(),
           time: String(pickFromRow(r, SAL_COL_CANDIDATES.Sakuma_laiks.concat(["event_time", "time"]), "") || "").trim(),
           title: String(pickFromRow(r, SAL_COL_CANDIDATES.Pasakuma_nosau.concat(["title", "nosaukums"]), "") || "").trim(),
@@ -711,26 +973,32 @@
       if (!dayEvents.length) return;
       const wrap = document.createElement("div");
       wrap.className = "sal-main-cal-badge-wrap";
-      wrap.style.cssText = "display:grid;gap:3px;margin-top:4px;";
+      // Nebloķē prombūtnes `cal-chip` klikšķus: wrap pēc noklusējuma var pārklāt apakšējos čipus tajā pašā šūnā.
+      wrap.style.cssText =
+        "display:grid;gap:3px;margin-top:4px;pointer-events:none;width:fit-content;max-width:100%;align-content:start;position:relative;z-index:40;";
       dayEvents.slice(0, 2).forEach((ev) => {
-        const badge = document.createElement("span");
+        const badge = document.createElement("button");
+        badge.type = "button";
         badge.className = "sal-main-cal-badge";
         const icon = String(ev?.icon || "").trim() || "✨";
         const txt = String(ev?.title || "").trim();
         const eventId = String(ev?.id || "").trim();
         badge.textContent = `${icon} ${txt}`;
         badge.title = txt;
+        badge.setAttribute("aria-label", txt ? `Atvērt pasākumu: ${txt}` : "Atvērt pasākumu");
+        const pal = salCalPaletteForEvent(ev);
+        const isHol = ev?.category === "holiday";
+        const bg = isHol ? "#fecaca" : pal ? pal.bg : "#ffedd5";
+        const fg = isHol ? "#7f1d1d" : pal ? pal.fg : "#7c2d12";
+        const brd = isHol ? "#f87171" : pal ? pal.border : "#fb923c";
         badge.style.cssText =
-          "display:inline-flex;max-width:100%;padding:1px 6px;border-radius:999px;background:#f97316;color:#fff;font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;pointer-events:auto;position:relative;z-index:2;";
+          `display:inline-flex;max-width:100%;padding:1px 6px;border-radius:999px;background:${bg};color:${fg};border:1px solid ${brd};font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;pointer-events:auto;position:relative;z-index:50;line-height:1.2;touch-action:manipulation;`;
         if (eventId) badge.dataset.salEventId = eventId;
         badge.dataset.salEventDate = dKey;
         badge.dataset.salEventTitle = txt;
-        badge.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const eventTitle = String(badge.dataset.salEventTitle || "").trim();
-          requestOpenSaliedesanaEvent({ eventId, date: dKey, title: eventTitle });
-        });
+        badge.setAttribute("data-sal-event-date", dKey);
+        badge.setAttribute("data-sal-event-title", txt);
+        if (eventId) badge.setAttribute("data-sal-event-id", eventId);
         wrap.appendChild(badge);
       });
       if (dayEvents.length > 2) {
@@ -738,7 +1006,7 @@
         more.className = "sal-main-cal-badge";
         more.textContent = `+${dayEvents.length - 2} vēl`;
         more.style.cssText =
-          "display:inline-flex;padding:1px 6px;border-radius:999px;background:#fdba74;color:#7c2d12;font-size:10px;font-weight:700;";
+          "display:inline-flex;padding:1px 6px;border-radius:999px;background:#fdba74;color:#7c2d12;font-size:10px;font-weight:700;pointer-events:auto;position:relative;z-index:5;";
         wrap.appendChild(more);
       }
       cell.appendChild(wrap);
@@ -781,20 +1049,33 @@
     observer.observe(document.body, { childList: true, subtree: true });
     if (!globalThis.__PDD_SALIEDESANA_BADGE_CLICK_DELEGATE__) {
       globalThis.__PDD_SALIEDESANA_BADGE_CLICK_DELEGATE__ = true;
-      document.addEventListener(
-        "click",
-        (evt) => {
-          const t = evt.target instanceof Element ? evt.target.closest(".sal-main-cal-badge") : null;
-          if (!t) return;
+      // window capture iet PIRMS document capture (index.html), lai index.html stopPropagation neapstādinātu ceļu līdz čipam.
+      let lastSalMainCalBadgeOpenAt = 0;
+      const handleSalMainCalBadgeUi = (evt) => {
+        const t =
+          evt.target instanceof Element ? evt.target.closest(".sal-main-cal-badge[data-sal-event-date]") : null;
+        if (!t) return;
+        if (evt.type === "pointerdown") {
+          if (!evt.isPrimary) return;
+          if (evt.pointerType === "mouse" && evt.button !== 0) return;
+        }
+        const eventDate = String(t.getAttribute("data-sal-event-date") || t.dataset.salEventDate || "").trim();
+        if (!eventDate) return;
+        const now = Date.now();
+        if (evt.type === "click" && now - lastSalMainCalBadgeOpenAt < 650) {
           evt.preventDefault();
           evt.stopPropagation();
-          const eventId = String(t.dataset.salEventId || "").trim();
-          const eventDate = String(t.dataset.salEventDate || "").trim();
-          const eventTitle = String(t.dataset.salEventTitle || "").trim();
-          requestOpenSaliedesanaEvent({ eventId, date: eventDate, title: eventTitle });
-        },
-        true
-      );
+          return;
+        }
+        lastSalMainCalBadgeOpenAt = now;
+        evt.preventDefault();
+        evt.stopPropagation();
+        const eventId = String(t.getAttribute("data-sal-event-id") || t.dataset.salEventId || "").trim();
+        const eventTitle = String(t.getAttribute("data-sal-event-title") || t.dataset.salEventTitle || "").trim();
+        requestOpenSaliedesanaEvent({ eventId, date: eventDate, title: eventTitle });
+      };
+      window.addEventListener("pointerdown", handleSalMainCalBadgeUi, true);
+      window.addEventListener("click", handleSalMainCalBadgeUi, true);
     }
   }
 
@@ -888,7 +1169,14 @@
 
     async function resolveAktualitatesTableName(supabase) {
       const hinted = String(globalThis.__PDD_AKTUALITATES_TABLE__ || "").trim();
-      const candidates = [hinted, "AKTUALITATES", "aktualitates", "Aktualitates"].filter(Boolean);
+      const candidates = [hinted, "AKTUALITATES", "aktualitates", "Aktualitates", "AKTUALITĀTES"].filter(Boolean);
+      for (const table of [...new Set(candidates)]) {
+        const q = await supabase.from(table).select("id, Autors").limit(1);
+        if (!q.error) {
+          globalThis.__PDD_AKTUALITATES_TABLE__ = table;
+          return table;
+        }
+      }
       for (const table of [...new Set(candidates)]) {
         const q = await supabase.from(table).select("id").limit(1);
         if (!q.error) {
@@ -916,6 +1204,7 @@
       const location = eventRow?.online ? "online" : String(eventRow?.location || "").trim();
       const marker = `<!--SALIEDESANA:${String(eventRow?.id || "").trim()}-->`;
       const text = `${icon ? `${icon} ` : ""}${title}${tFrom ? ` (${tFrom}${tTo ? `-${tTo}` : ""})` : ""}${location ? ` · ${location}` : ""}${marker}`;
+      const actorName = String(globalThis.__PDD_ACTOR_DISPLAY_NAME__ ?? "").trim() || null;
       const payload = {
         Kas_sodien_vel_aktuals: text,
         Sakums: startDate,
@@ -943,8 +1232,12 @@
           return Number(q.data?.[0]?.id || found.id) || null;
         }
       }
-      const uid = Number(globalThis.__PDD_SESSION_USER_ID__ || 0) || null;
-      const q = await supabase.from(table).insert(uid ? { ...payload, Autors: uid } : payload).select("id").limit(1);
+      const actorUid = await resolveActorUserIdForAutors(supabase);
+      const q = await supabase
+        .from(table)
+        .insert(actorUid ? { ...payload, Autors: actorUid, users: actorName } : { ...payload, users: actorName })
+        .select("id")
+        .limit(1);
       if (q.error) throw q.error;
       return Number(q.data?.[0]?.id || 0) || null;
     }
@@ -977,6 +1270,9 @@
     return function SaliedesanaPanel() {
       ensureStyles();
       const editorRef = useRef(null);
+      const celProgramEditorRef = useRef(null);
+      /** Vienmēr norāda uz jaunāko `openEventCardByRef`, lai globālais tiltiņš ne „pazustu” starp `events` atjauninājumiem. */
+      const openEventCardByRefRef = useRef(null);
       const supabase = globalThis.__PDD_SUPABASE__ ?? null;
       const [dbMessage, setDbMessage] = useState("");
       const [events, setEvents] = useState([]);
@@ -988,7 +1284,7 @@
       const [cardCategory, setCardCategory] = useState("team");
       const [cardEventType, setCardEventType] = useState("saliedesana");
       const [cardTitle, setCardTitle] = useState("");
-      const [cardTime, setCardTime] = useState("18:00");
+      const [cardTime, setCardTime] = useState("08:00");
       const [cardTimeTo, setCardTimeTo] = useState("");
       const [cardLocation, setCardLocation] = useState("");
       const [cardOnline, setCardOnline] = useState(false);
@@ -1007,11 +1303,37 @@
       const [attUrl, setAttUrl] = useState("");
       const [attachments, setAttachments] = useState([]);
       const [polls, setPolls] = useState([
-        { id: "poll-1", type: "choice", question: "", optionsText: "", votes: {}, textAnswer: "" },
+        {
+          id: "poll-1",
+          type: "choice",
+          pollTitle: "",
+          pollDate: "",
+          question: "",
+          optionsText: "",
+          votes: {},
+          textAnswer: "",
+          audience: "all",
+          targets: [],
+          sentAt: "",
+          sentBy: "",
+        },
       ]);
       const [participants, setParticipants] = useState({});
       const [noReasonType, setNoReasonType] = useState("");
       const [noReasonText, setNoReasonText] = useState("");
+      const [pollCreationOpen, setPollCreationOpen] = useState(false);
+      const [pollResultsOpen, setPollResultsOpen] = useState(false);
+      const [draftCardKey, setDraftCardKey] = useState("");
+      const [celJubilar, setCelJubilar] = useState("");
+      const [celMeetingLink, setCelMeetingLink] = useState("");
+      const [celGiftNote, setCelGiftNote] = useState("");
+      const [celMessage, setCelMessage] = useState("");
+      const [celKinds, setCelKinds] = useState([]);
+      const [celQuizResponsibleKey, setCelQuizResponsibleKey] = useState("");
+      const [celProgramHtml, setCelProgramHtml] = useState("");
+      const [celProgramAttachments, setCelProgramAttachments] = useState([]);
+      const [celProgAttLabel, setCelProgAttLabel] = useState("");
+      const [celProgAttUrl, setCelProgAttUrl] = useState("");
 
       const monthGrid = useMemo(() => buildMonthGrid(calendarMonth), [calendarMonth]);
 
@@ -1048,9 +1370,9 @@
                   ...prev,
                   ...r,
                   details: { ...(prev.details || {}), ...(r.details || {}) },
-                  poll: r.poll?.items?.length ? r.poll : prev.poll,
+                  poll: mergePollContainers(prev.poll, r.poll),
                   participants: Object.keys(r.participants || {}).length ? r.participants : prev.participants,
-                  attachments: Array.isArray(r.attachments) && r.attachments.length ? r.attachments : prev.attachments,
+                  attachments: Array.isArray(r.attachments) ? r.attachments : prev.attachments,
                 });
               });
               // Saglabājam arī lokālos ierakstus, kas vēl nav nonākuši DB.
@@ -1096,7 +1418,7 @@
         setCardCategory("team");
         setCardEventType("saliedesana");
         setCardTitle("");
-        setCardTime("18:00");
+        setCardTime("08:00");
         setCardTimeTo("");
         setCardLocation("");
         setCardOnline(false);
@@ -1114,10 +1436,38 @@
         setAttLabel("");
         setAttUrl("");
         setAttachments([]);
-        setPolls([{ id: "poll-1", type: "choice", question: "", optionsText: "", votes: {}, textAnswer: "" }]);
+        setPolls([
+          {
+            id: "poll-1",
+            type: "choice",
+            pollTitle: "",
+            pollDate: "",
+            question: "",
+            optionsText: "",
+            votes: {},
+            textAnswer: "",
+            audience: "all",
+            targets: [],
+            sentAt: "",
+            sentBy: "",
+          },
+        ]);
         setParticipants({});
         setNoReasonType("");
         setNoReasonText("");
+        setPollCreationOpen(false);
+        setPollResultsOpen(false);
+        setDraftCardKey(`sal-${Date.now()}`);
+        setCelJubilar("");
+        setCelMeetingLink("");
+        setCelGiftNote("");
+        setCelMessage("");
+        setCelKinds([]);
+        setCelQuizResponsibleKey("");
+        setCelProgramHtml("");
+        setCelProgramAttachments([]);
+        setCelProgAttLabel("");
+        setCelProgAttUrl("");
         setCardOpen(true);
       }
 
@@ -1148,18 +1498,34 @@
           ? ev.poll.items.map((p, idx) => ({
               id: String(p?.id ?? `poll-${idx + 1}`),
               type: String(p?.type ?? "choice") === "text" ? "text" : "choice",
+              pollTitle: String(p?.pollTitle ?? p?.poll_title ?? "").trim(),
+              pollDate: String(p?.pollDate ?? p?.poll_date ?? "").trim(),
               question: String(p?.question ?? ""),
               optionsText: (Array.isArray(p?.options) ? p.options : []).join("\n"),
               votes: p?.votes && typeof p.votes === "object" ? p.votes : {},
-              textAnswer: String((p?.votes && typeof p.votes === "object" ? p.votes[actorKey()] : "") || ""),
+              textAnswer: String(
+                (p?.textAnswer ?? p?.text_answer ?? "") ||
+                  (p?.votes && typeof p.votes === "object" ? p.votes[actorKey()] : "") ||
+                  ""
+              ),
+              audience: String(p?.audience ?? "all") === "selected" ? "selected" : "all",
+              targets: Array.isArray(p?.targets) ? p.targets.map((x) => String(x ?? "").trim()).filter(Boolean) : [],
+              sentAt: String(p?.sentAt ?? p?.sent_at ?? "").trim(),
+              sentBy: String(p?.sentBy ?? p?.sent_by ?? "").trim(),
             }))
           : [{
               id: "poll-1",
               type: String(ev.poll?.type ?? "choice") === "text" ? "text" : "choice",
+              pollTitle: "",
+              pollDate: "",
               question: String(ev.poll?.question || ""),
               optionsText: (Array.isArray(ev.poll?.options) ? ev.poll.options : []).join("\n"),
               votes: ev.poll?.votes && typeof ev.poll.votes === "object" ? ev.poll.votes : {},
               textAnswer: String((ev.poll?.votes && typeof ev.poll.votes === "object" ? ev.poll.votes[actorKey()] : "") || ""),
+              audience: "all",
+              targets: [],
+              sentAt: "",
+              sentBy: "",
             }];
         setPolls(eventPolls);
         setParticipants(ev.participants && typeof ev.participants === "object" ? ev.participants : {});
@@ -1167,27 +1533,117 @@
         const mine = ev.participants?.[me];
         setNoReasonType(String(mine?.reasonType ?? ""));
         setNoReasonText(String(mine?.reasonText ?? ""));
+        setPollCreationOpen(false);
+        setPollResultsOpen(false);
+        setDraftCardKey("");
+        const et = String(ev.eventType || "saliedesana").trim();
+        const d = ev.details && typeof ev.details === "object" ? ev.details : {};
+        if (et === "dzimsanas" || et === "varda_diena") {
+          setCelJubilar(String(d.celebrationJubilar || "").trim());
+          setCelMeetingLink(String(d.celebrationMeetingLink || "").trim());
+          setCelGiftNote(String(d.celebrationGiftNote || "").trim());
+          setCelMessage(String(d.celebrationMessage || "").trim());
+          setCelKinds(Array.isArray(d.celebrationPlanKinds) ? d.celebrationPlanKinds.map((x) => String(x ?? "").trim()).filter(Boolean) : []);
+          if (et === "dzimsanas") {
+            setCelQuizResponsibleKey(String(d.celebrationQuizResponsibleKey || "").trim());
+            const progHtml = String(d.celebrationProgramHtml || "").trim();
+            setCelProgramHtml(progHtml || String(ev.descriptionHtml || "").trim());
+            const pa = Array.isArray(d.celebrationProgramAttachments) ? d.celebrationProgramAttachments : [];
+            const attCol = Array.isArray(ev.attachments) ? ev.attachments : [];
+            setCelProgramAttachments(salNormalizeAttachmentList(pa.length ? pa : attCol));
+          } else {
+            setCelQuizResponsibleKey("");
+            setCelProgramHtml("");
+            setCelProgramAttachments([]);
+          }
+        } else {
+          setCelJubilar("");
+          setCelMeetingLink("");
+          setCelGiftNote("");
+          setCelMessage("");
+          setCelKinds([]);
+          setCelQuizResponsibleKey("");
+          setCelProgramHtml("");
+          setCelProgramAttachments([]);
+          setCelProgAttLabel("");
+          setCelProgAttUrl("");
+        }
         setCardOpen(true);
       }
 
       function openEventCardByRef(ref) {
+        const normalizeSalTitleHint = (raw) => {
+          let s = String(raw ?? "")
+            .replace(/\u00a0/g, " ")
+            .trim();
+          while (s.length) {
+            const next = s
+              .replace(/^[\s\uFE0F\u200D]+/u, "")
+              .replace(
+                /^[\u2B50\u2605\u2728\u2B51\u2730\u1F31F\u1F320\u272F\u26A1\u2B55]|[\uD83C\uDF1F]|[\uD83C\uDF20]/u,
+                "",
+              );
+            if (next === s) break;
+            s = next.trim();
+          }
+          return s.replace(/\s+/g, " ").trim().toLowerCase();
+        };
+        const titleMatchScore = (hintRaw, titleRaw) => {
+          const a = normalizeSalTitleHint(hintRaw);
+          const b = normalizeSalTitleHint(titleRaw);
+          if (!a || !b) return 0;
+          if (a === b) return 3;
+          if (a.includes(b) || b.includes(a)) return 2;
+          const aw = a.split(" ").filter(Boolean);
+          const bw = b.split(" ").filter(Boolean);
+          if (aw.length >= 3 && bw.length >= 3) {
+            const as = new Set(aw);
+            const bs = new Set(bw);
+            let inter = 0;
+            for (const w of as) if (bs.has(w)) inter += 1;
+            const denom = Math.min(as.size, bs.size);
+            if (denom && inter / denom >= 0.66) return 1;
+          }
+          return 0;
+        };
+        const pickBestEventByDateTitle = (list, dateHint, titleHint) => {
+          const dh = String(dateHint || "").trim();
+          const th = String(titleHint || "").trim();
+          if (!dh || !th) return null;
+          const cands = (Array.isArray(list) ? list : []).filter((x) => String(x?.date || "").trim() === dh);
+          if (!cands.length) return null;
+          let best = null;
+          let bestScore = 0;
+          for (const x of cands) {
+            const titleOnly = String(x?.title || "");
+            const chipLike = `${String(x?.icon || "").trim()} ${titleOnly}`.trim();
+            const sc = Math.max(titleMatchScore(th, titleOnly), titleMatchScore(th, chipLike));
+            if (sc > bestScore) {
+              bestScore = sc;
+              best = x;
+            }
+          }
+          return bestScore >= 2 ? best : null;
+        };
+
         const id = String(ref?.eventId || "").trim();
         const dateHint = String(ref?.date || "").trim();
         const titleHint = String(ref?.title || "").trim();
         const liveEvents = Array.isArray(events) ? events : [];
         let ev = id ? liveEvents.find((x) => String(x?.id || "").trim() === id) : null;
         if (!ev && dateHint && titleHint) {
-          ev = liveEvents.find(
-            (x) => String(x?.date || "").trim() === dateHint && String(x?.title || "").trim() === titleHint
-          );
+          ev = pickBestEventByDateTitle(liveEvents, dateHint, titleHint);
+        }
+        if (!ev && dateHint) {
+          ev = liveEvents
+            .filter((x) => String(x?.date || "").trim() === dateHint)
+            .sort((a, b) => String(a?.time || "").localeCompare(String(b?.time || "")))[0];
         }
         if (!ev) {
           const local = loadLocalEvents();
           ev = id ? local.find((x) => String(x?.id || "").trim() === id) : null;
           if (!ev && dateHint && titleHint) {
-            ev = local.find(
-              (x) => String(x?.date || "").trim() === dateHint && String(x?.title || "").trim() === titleHint
-            );
+            ev = pickBestEventByDateTitle(local, dateHint, titleHint);
           }
           if (!ev && dateHint) {
             ev = local
@@ -1204,28 +1660,184 @@
         const monthDate = new Date(String(ev.date || ""));
         if (!Number.isNaN(monthDate.getTime())) setCalendarMonth(monthDate);
         openCardEdit(ev);
+        const organizerKeyRef = String(ev?.details?.organizerKey || "").trim();
+        const actorKRef = String(actorKey() || "").trim();
+        const actorEmailRef = String(globalThis.__PDD_ACTOR_EMAIL__ || sessionStorage.getItem("pdd_local_email") || "")
+          .trim()
+          .toLowerCase();
+        const actorIdRef = String(preferredActorUserId() || "").trim();
+        const mayOpenPollStudio =
+          !organizerKeyRef ||
+          organizerKeyRef === actorKRef ||
+          (!!actorEmailRef && organizerKeyRef.toLowerCase() === actorEmailRef) ||
+          (!!actorIdRef && organizerKeyRef === actorIdRef);
+        if (ref && typeof ref === "object" && (String(ref.openPollFill || "") === "true" || ref.openPollFill === true)) {
+          setPollCreationOpen(false);
+          setTimeout(() => {
+            try {
+              document.getElementById("sal-poll-fill-anchor")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            } catch {
+              /* ignore */
+            }
+          }, 120);
+        } else if (
+          ref &&
+          typeof ref === "object" &&
+          (String(ref.openPollStudio || "") === "true" || ref.openPollStudio === true) &&
+          mayOpenPollStudio
+        ) {
+          setPollCreationOpen(true);
+        }
         return true;
       }
 
+      openEventCardByRefRef.current = openEventCardByRef;
+
       useEffect(() => {
-        globalThis.__PDD_SALIEDESANA_OPEN_EVENT_CARD__ = openEventCardByRef;
-        const pendingId = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ || "").trim();
-        const pendingDate = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ || "").trim();
-        const pendingTitle = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ || "").trim();
-        if (pendingId || pendingDate || pendingTitle) {
-          const opened = openEventCardByRef({ eventId: pendingId, date: pendingDate, title: pendingTitle });
-          if (opened) {
-            globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ = "";
-            globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ = "";
-            globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ = "";
+        const stableOpen = (ref) => {
+          try {
+            const fn = openEventCardByRefRef.current;
+            return typeof fn === "function" ? Boolean(fn(ref)) : false;
+          } catch {
+            return false;
           }
-        }
+        };
+        globalThis.__PDD_SALIEDESANA_OPEN_EVENT_CARD__ = stableOpen;
         return () => {
-          if (globalThis.__PDD_SALIEDESANA_OPEN_EVENT_CARD__ === openEventCardByRef) {
+          if (globalThis.__PDD_SALIEDESANA_OPEN_EVENT_CARD__ === stableOpen) {
             delete globalThis.__PDD_SALIEDESANA_OPEN_EVENT_CARD__;
           }
         };
+      }, []);
+
+      useEffect(() => {
+        const pendingId = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ || "").trim();
+        const pendingDate = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ || "").trim();
+        const pendingTitle = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ || "").trim();
+        const pendingOpenPollFill = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_OPEN_POLL_FILL__ || "").trim();
+        const pendingOpenPollStudio = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_OPEN_POLL_STUDIO__ || "").trim();
+        if (!pendingId && !pendingDate && !pendingTitle) return;
+        const fn = openEventCardByRefRef.current;
+        if (typeof fn !== "function") return;
+        const opened = fn({
+          eventId: pendingId,
+          date: pendingDate,
+          title: pendingTitle,
+          openPollFill: pendingOpenPollFill === "1" || pendingOpenPollFill === "true",
+          openPollStudio: pendingOpenPollStudio === "1" || pendingOpenPollStudio === "true",
+        });
+        if (opened) {
+          globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ = "";
+          globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ = "";
+          globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ = "";
+          globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_OPEN_POLL_FILL__ = "";
+          globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_OPEN_POLL_STUDIO__ = "";
+        }
       }, [events]);
+
+      useEffect(() => {
+        const pending = globalThis.__PDD_SALIEDESANA_PENDING_POLL_ACTION__;
+        if (!pending || typeof pending !== "object") return;
+        const action = String(pending.action || "").trim();
+        const eventId = String(pending.eventId || "").trim();
+        const pollId = String(pending.pollId || "").trim();
+        if (!action || !eventId || !pollId) return;
+        if (action !== "decline") return;
+
+        globalThis.__PDD_SALIEDESANA_PENDING_POLL_ACTION__ = null;
+
+        const uid = actorKey();
+        const nextEvents = (Array.isArray(events) ? events : []).map((ev) => {
+          if (String(ev?.id || "").trim() !== eventId) return ev;
+          const poll = ev?.poll && typeof ev.poll === "object" ? ev.poll : { items: [] };
+          const items = Array.isArray(poll.items) ? poll.items : [];
+          const nextItems = items.map((p) => {
+            if (String(p?.id || "").trim() !== pollId) return p;
+            const votes = p?.votes && typeof p.votes === "object" ? p.votes : {};
+            return { ...p, votes: { ...votes, [uid]: "__DECLINED__" } };
+          });
+          return { ...ev, poll: { ...poll, items: nextItems } };
+        });
+
+        const changedRow = nextEvents.find((x) => String(x?.id || "").trim() === eventId);
+        if (!changedRow) return;
+        persistEvents(nextEvents, changedRow).catch(() => {});
+      }, [events]);
+
+      function attachmentUploadFolder() {
+        return String(editingId || "").trim() || String(draftCardKey || "").trim() || "draft";
+      }
+
+      function loadTeamUsersForPollTargeting() {
+        try {
+          const raw = localStorage.getItem("pdd_team_users_v1") || "[]";
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return [];
+          return parsed
+            .map((u) => ({
+              id: String(u?.id ?? "").trim(),
+              name: String(u?.["Vārds uzvārds"] ?? u?.full_name ?? u?.name ?? "").trim(),
+              email: String(u?.email ?? u?.["i-mail"] ?? u?.["e-mail"] ?? "").trim().toLowerCase(),
+            }))
+            .filter((u) => u.id || u.email)
+            .map((u) => ({ ...u, name: u.name || u.email || u.id }))
+            .sort((a, b) => String(a.name).localeCompare(String(b.name), "lv"));
+        } catch {
+          return [];
+        }
+      }
+
+      function pollTargetKeyForUser(u) {
+        const id = String(u?.id ?? "").trim();
+        if (id) return id;
+        const em = String(u?.email ?? "").trim().toLowerCase();
+        return em;
+      }
+
+      function togglePollTarget(pollId, userKey) {
+        const key = String(userKey || "").trim();
+        if (!key) return;
+        setPolls((prev) =>
+          (Array.isArray(prev) ? prev : []).map((p) => {
+            if (String(p?.id) !== String(pollId)) return p;
+            const cur = Array.isArray(p.targets) ? p.targets : [];
+            const next = cur.includes(key) ? cur.filter((x) => x !== key) : [...cur, key];
+            return { ...p, audience: "selected", targets: next };
+          })
+        );
+      }
+
+      function setPollAudienceAll(pollId) {
+        setPolls((prev) =>
+          (Array.isArray(prev) ? prev : []).map((p) => {
+            if (String(p?.id) !== String(pollId)) return p;
+            return { ...p, audience: "all", targets: [] };
+          })
+        );
+      }
+
+      async function sendPollInvite(pollId, mode) {
+        const now = new Date().toISOString();
+        const by = String(globalThis.__PDD_ACTOR_DISPLAY_NAME__ || globalThis.__PDD_ACTOR_EMAIL__ || actorKey() || "").trim();
+        const nextPolls = (Array.isArray(polls) ? polls : []).map((p) => {
+          if (String(p?.id) !== String(pollId)) return p;
+          const audience = mode === "selected" ? "selected" : "all";
+          const targets = audience === "selected" ? (Array.isArray(p.targets) ? p.targets : []) : [];
+          return { ...p, audience, targets, sentAt: now, sentBy: by };
+        });
+        setPolls(nextPolls);
+        if (!editingId) {
+          setDbMessage("Uzaicinājums saglabāts kartiņas melnrakstā. Lai tas parādītos citiem, saglabā pasākumu.");
+          return;
+        }
+        const updated = (Array.isArray(events) ? events : []).find((x) => x.id === editingId);
+        if (!updated) return;
+        const row = normalizeEvent({ ...updated, poll: { items: pollItemsFromList(nextPolls) } });
+        const nextEvents = events.map((x) => (x.id === editingId ? row : x));
+        void persistEvents(nextEvents, row).catch((e) => {
+          setDbMessage(`Aptaujas saglabāšana neizdevās: ${String(e?.message || e)}`);
+        });
+      }
 
       function addAttachment(kind = "link") {
         const url = String(attUrl || "").trim();
@@ -1243,7 +1855,7 @@
             label = kind === "image" ? "Attēls" : "Saite";
           }
         }
-        setAttachments((prev) => [...prev, { label, url, kind }]);
+        setAttachments((prev) => [...prev, { label, url, kind, storagePath: "" }]);
         if (kind === "image") {
           const safeUrl = /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? url : `https://${url}`;
           const safeLabel = escapeHtmlAttr(label || "Attēls");
@@ -1256,17 +1868,163 @@
 
       function addImageFromFile(file) {
         if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = String(reader.result || "");
-          if (!dataUrl) return;
-          const fallback = file.name ? file.name.replace(/\.[^.]+$/, "") : "Attēls";
-          setAttachments((prev) => [...prev, { label: fallback, url: dataUrl, kind: "image" }]);
-          const safeLabel = escapeHtmlAttr(fallback);
-          const safeSrc = escapeHtmlAttr(dataUrl);
-          setDescHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
+        const fallback = file.name ? file.name.replace(/\.[^.]+$/, "") : "Attēls";
+        const pushDataUrl = () => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = String(reader.result || "");
+            if (!dataUrl) return;
+            setAttachments((prev) => [...prev, { label: fallback, url: dataUrl, kind: "image", storagePath: "" }]);
+            const safeLabel = escapeHtmlAttr(fallback);
+            const safeSrc = escapeHtmlAttr(dataUrl);
+            setDescHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
+          };
+          reader.readAsDataURL(file);
         };
-        reader.readAsDataURL(file);
+        if (supabase) {
+          uploadSaliedesanaFileToStorage(supabase, file, attachmentUploadFolder())
+            .then(({ publicUrl, storagePath }) => {
+              setAttachments((prev) => [...prev, { label: fallback, url: publicUrl, kind: "image", storagePath }]);
+              const safeLabel = escapeHtmlAttr(fallback);
+              const safeSrc = escapeHtmlAttr(publicUrl);
+              setDescHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
+            })
+            .catch((e) => {
+              setDbMessage(`Attēla augšupielāde neizdevās (${String(e?.message || e)}); saglabāts lokāli kā datu URL.`);
+              pushDataUrl();
+            });
+        } else {
+          pushDataUrl();
+        }
+      }
+
+      async function addBinaryFileAttachment(file) {
+        if (!file) return;
+        const label = String(file.name || "Fails").trim() || "Fails";
+        if (!supabase) {
+          setDbMessage("Failu augšupielādei vajag Supabase sesiju. Izmanto saiti (URL) lauku.");
+          return;
+        }
+        try {
+          const { publicUrl, storagePath } = await uploadSaliedesanaFileToStorage(supabase, file, attachmentUploadFolder());
+          setAttachments((prev) => [...prev, { label, url: publicUrl, kind: "file", storagePath }]);
+        } catch (e) {
+          setDbMessage(`Faila augšupielāde neizdevās: ${String(e?.message || e)}`);
+        }
+      }
+
+      async function removeAttachmentAt(idx) {
+        const list = Array.isArray(attachments) ? attachments : [];
+        const item = list[idx];
+        const path = item ? String(item.storagePath || "").trim() : "";
+        setAttachments((prev) => prev.filter((_, i) => i !== idx));
+        if (path && supabase) {
+          try {
+            await supabase.storage.from(SALIEDESANA_FILES_BUCKET).remove([path]);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
+      function applyCelProgramEditorCommand(cmd, value = null) {
+        try {
+          const el = celProgramEditorRef.current;
+          if (el && typeof el.focus === "function") el.focus();
+          if (typeof document !== "undefined" && document.execCommand) {
+            document.execCommand(cmd, false, value);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      function addCelProgramAttachment(kind = "link") {
+        const url = String(celProgAttUrl || "").trim();
+        if (!url) return;
+        let label = String(celProgAttLabel || "").trim();
+        if (!label) {
+          try {
+            const withProto = /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? url : `https://${url}`;
+            const u = /^data:image\//i.test(withProto) ? null : new URL(withProto);
+            const host = String(u?.hostname || "").replace(/^www\./i, "");
+            const pathName = String(u?.pathname || "").replace(/\/+$/, "");
+            const tail = pathName.split("/").filter(Boolean).pop() || "";
+            label = tail ? decodeURIComponent(tail) : host || "Saite";
+          } catch {
+            label = kind === "image" ? "Attēls" : "Saite";
+          }
+        }
+        setCelProgramAttachments((prev) => [...prev, { label, url, kind, storagePath: "" }]);
+        if (kind === "image") {
+          const safeUrl = /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? url : `https://${url}`;
+          const safeLabel = escapeHtmlAttr(label || "Attēls");
+          const safeSrc = escapeHtmlAttr(safeUrl);
+          setCelProgramHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
+        }
+        setCelProgAttLabel("");
+        setCelProgAttUrl("");
+      }
+
+      function addCelProgramImageFromFile(file) {
+        if (!file) return;
+        const fallback = file.name ? file.name.replace(/\.[^.]+$/, "") : "Attēls";
+        const pushDataUrl = () => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = String(reader.result || "");
+            if (!dataUrl) return;
+            setCelProgramAttachments((prev) => [...prev, { label: fallback, url: dataUrl, kind: "image", storagePath: "" }]);
+            const safeLabel = escapeHtmlAttr(fallback);
+            const safeSrc = escapeHtmlAttr(dataUrl);
+            setCelProgramHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
+          };
+          reader.readAsDataURL(file);
+        };
+        if (supabase) {
+          uploadSaliedesanaFileToStorage(supabase, file, attachmentUploadFolder())
+            .then(({ publicUrl, storagePath }) => {
+              setCelProgramAttachments((prev) => [...prev, { label: fallback, url: publicUrl, kind: "image", storagePath }]);
+              const safeLabel = escapeHtmlAttr(fallback);
+              const safeSrc = escapeHtmlAttr(publicUrl);
+              setCelProgramHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
+            })
+            .catch((e) => {
+              setDbMessage(`Attēla augšupielāde neizdevās (${String(e?.message || e)}); saglabāts lokāli kā datu URL.`);
+              pushDataUrl();
+            });
+        } else {
+          pushDataUrl();
+        }
+      }
+
+      async function addCelProgramBinaryFile(file) {
+        if (!file) return;
+        const label = String(file.name || "Fails").trim() || "Fails";
+        if (!supabase) {
+          setDbMessage("Failu augšupielādei vajag Supabase sesiju. Izmanto saiti (URL) lauku.");
+          return;
+        }
+        try {
+          const { publicUrl, storagePath } = await uploadSaliedesanaFileToStorage(supabase, file, attachmentUploadFolder());
+          setCelProgramAttachments((prev) => [...prev, { label, url: publicUrl, kind: "file", storagePath }]);
+        } catch (e) {
+          setDbMessage(`Faila augšupielāde neizdevās: ${String(e?.message || e)}`);
+        }
+      }
+
+      async function removeCelProgramAttachmentAt(idx) {
+        const list = Array.isArray(celProgramAttachments) ? celProgramAttachments : [];
+        const item = list[idx];
+        const path = item ? String(item.storagePath || "").trim() : "";
+        setCelProgramAttachments((prev) => prev.filter((_, i) => i !== idx));
+        if (path && supabase) {
+          try {
+            await supabase.storage.from(SALIEDESANA_FILES_BUCKET).remove([path]);
+          } catch {
+            /* ignore */
+          }
+        }
       }
 
       function pollOptionsArray(textValue) {
@@ -1276,17 +2034,72 @@
           .filter(Boolean);
       }
 
+      /** Saglabājot DB, neizmet aptaujas tikai tāpēc, ka īslaicīgi nav jautājuma/variantu — sargā nosūtīšanu un balsis. */
+      function keepPollItemInPayload(p) {
+        const title = String(p?.pollTitle ?? "").trim();
+        const q = String(p?.question ?? "").trim();
+        const opts = Array.isArray(p?.options) ? p.options.map((x) => String(x ?? "").trim()).filter(Boolean) : [];
+        const sent = String(p?.sentAt ?? p?.sent_at ?? "").trim();
+        const pdate = String(p?.pollDate ?? p?.poll_date ?? "").trim();
+        const votes = p?.votes && typeof p.votes === "object" ? p.votes : {};
+        const hasVotes = Object.values(votes).some((v) => {
+          const s = String(v ?? "").trim();
+          return Boolean(s) && s !== "__DECLINED__";
+        });
+        return Boolean(title || q || opts.length || sent || pdate || hasVotes);
+      }
+
+      /** UI kartiņa ar `optionsText` — tās pašas kā DB saglabāšanas kritērijus. */
+      function keepPollItemInUiState(p) {
+        const title = String(p?.pollTitle ?? "").trim();
+        const q = String(p?.question ?? "").trim();
+        const opts = pollOptionsArray(p?.optionsText);
+        const sent = String(p?.sentAt ?? p?.sent_at ?? "").trim();
+        const pdate = String(p?.pollDate ?? p?.poll_date ?? "").trim();
+        const votes = p?.votes && typeof p.votes === "object" ? p.votes : {};
+        const hasVotes = Object.values(votes).some((v) => {
+          const s = String(v ?? "").trim();
+          return Boolean(s) && s !== "__DECLINED__";
+        });
+        return Boolean(title || q || opts.length || sent || pdate || hasVotes);
+      }
+
       function pollItemsFromState() {
         return (Array.isArray(polls) ? polls : [])
           .map((p, idx) => ({
             id: String(p?.id ?? `poll-${idx + 1}`),
             type: String(p?.type ?? "choice") === "text" ? "text" : "choice",
+            pollTitle: String(p?.pollTitle ?? "").trim(),
+            pollDate: String(p?.pollDate ?? "").trim(),
             question: String(p?.question ?? "").trim(),
             options: pollOptionsArray(p?.optionsText),
             votes: p?.votes && typeof p.votes === "object" ? p.votes : {},
             textAnswer: String(p?.textAnswer ?? "").trim(),
+            audience: String(p?.audience ?? "all") === "selected" ? "selected" : "all",
+            targets: Array.isArray(p?.targets) ? p.targets.map((x) => String(x ?? "").trim()).filter(Boolean) : [],
+            sentAt: String(p?.sentAt ?? p?.sent_at ?? "").trim(),
+            sentBy: String(p?.sentBy ?? p?.sent_by ?? "").trim(),
           }))
-          .filter((p) => p.question || p.options.length);
+          .filter(keepPollItemInPayload);
+      }
+
+      function pollItemsFromList(list) {
+        return (Array.isArray(list) ? list : [])
+          .map((p, idx) => ({
+            id: String(p?.id ?? `poll-${idx + 1}`),
+            type: String(p?.type ?? "choice") === "text" ? "text" : "choice",
+            pollTitle: String(p?.pollTitle ?? "").trim(),
+            pollDate: String(p?.pollDate ?? "").trim(),
+            question: String(p?.question ?? "").trim(),
+            options: pollOptionsArray(p?.optionsText),
+            votes: p?.votes && typeof p.votes === "object" ? p.votes : {},
+            textAnswer: String(p?.textAnswer ?? "").trim(),
+            audience: String(p?.audience ?? "all") === "selected" ? "selected" : "all",
+            targets: Array.isArray(p?.targets) ? p.targets.map((x) => String(x ?? "").trim()).filter(Boolean) : [],
+            sentAt: String(p?.sentAt ?? p?.sent_at ?? "").trim(),
+            sentBy: String(p?.sentBy ?? p?.sent_by ?? "").trim(),
+          }))
+          .filter(keepPollItemInPayload);
       }
 
       function rsvpCounts(src) {
@@ -1341,6 +2154,173 @@
         }
       }
 
+      async function persistCelebrationToStorage(nextEvents, baseRow, publish, prevAktIdToClear) {
+        setEvents(nextEvents);
+        saveLocalEvents(nextEvents);
+        if (!supabase) {
+          if (publish) upsertLocalAktualitateFromEvent(baseRow);
+          else deleteLocalAktualitateByEventId(baseRow?.id);
+          setDbMessage(
+            publish
+              ? "Publicēts lokāli. Pieslēdzies Supabase, lai sinhronizētu ar serveri."
+              : "Saglabāts melnrakstā (lokāli)."
+          );
+          setCardOpen(false);
+          try {
+            globalThis.__PDD_REFRESH_SODIEN_AKTUALITATES__?.();
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+        try {
+          let r = baseRow;
+          const remoteId = await upsertRemoteEvent(supabase, r);
+          if (remoteId && Number(r?.remoteId || 0) !== remoteId) {
+            r = normalizeEvent({ ...r, remote_id: remoteId });
+          }
+          const staleAkt = Number(prevAktIdToClear || r?.details?.aktualitatesId || 0) || null;
+          if (publish) {
+            const newAkt = await upsertAktualitateFromEvent(supabase, r);
+            const aktId = newAkt || staleAkt;
+            r = normalizeEvent({
+              ...r,
+              details: { ...(r.details || {}), showInAktualitates: true, aktualitatesId: aktId || null },
+            });
+          } else {
+            if (staleAkt) {
+              try {
+                await deleteAktualitateById(supabase, staleAkt);
+              } catch {
+                /* ignore */
+              }
+            }
+            await deleteAktualitateByMarker(supabase, r?.id);
+            deleteLocalAktualitateByEventId(r?.id);
+            r = normalizeEvent({
+              ...r,
+              details: { ...(r.details || {}), showInAktualitates: false, aktualitatesId: null },
+            });
+          }
+          await upsertRemoteEvent(supabase, r);
+          const committed = nextEvents.map((x) => (String(x.id) === String(r.id) ? r : x));
+          setEvents(committed);
+          saveLocalEvents(committed);
+          setDbMessage(publish ? "Publicēts komandai un aktualitātēs." : "Saglabāts melnrakstā.");
+          setCardOpen(false);
+          try {
+            globalThis.__PDD_REFRESH_SODIEN_AKTUALITATES__?.();
+          } catch {
+            /* ignore */
+          }
+        } catch (e) {
+          setDbMessage(`Saglabāšana neizdevās: ${String(e?.message || e)}`);
+        }
+      }
+
+      async function saveCelebrationCard(publish) {
+        const jub = String(celJubilar || "").trim();
+        if (!jub) {
+          setDbMessage("Norādi jubilāru / vārda dienas svinēto personu.");
+          return;
+        }
+        if (!String(cardDate || "").trim()) {
+          setDbMessage("Norādi datumu.");
+          return;
+        }
+        if (!String(cardTime || "").trim()) {
+          setDbMessage("Norādi laiku.");
+          return;
+        }
+        const id = editingId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const prev = events.find((x) => x.id === id);
+        const eventEt = String(cardEventType || "dzimsanas").trim();
+        const label = eventEt === "varda_diena" ? "Vārda diena" : "Dzimšanas diena";
+        const title = String(cardTitle || "").trim() || `${jub} — ${label}`;
+        const kinds = eventEt === "varda_diena" ? [] : Array.from(new Set((celKinds || []).filter(Boolean)));
+        const pal =
+          eventEt === "varda_diena" ? SAL_CAL_EVENT_PALETTE.varda_diena : SAL_CAL_EVENT_PALETTE.dzimsanas;
+        const link = String(celMeetingLink || "").trim();
+        const loc = cardOnline ? (link || "online") : String(cardLocation || "").trim();
+        const planSummary = summarizeCelebrationKinds(kinds);
+        const organizerKey = (() => {
+          const existing = String(prev?.details?.organizerKey || "").trim();
+          if (existing) return existing;
+          return (
+            String(preferredActorUserId() || "").trim() ||
+            String(globalThis.__PDD_ACTOR_EMAIL__ || sessionStorage.getItem("pdd_local_email") || "")
+              .trim()
+              .toLowerCase() ||
+            String(actorKey() || "").trim()
+          );
+        })();
+        const teamPick = loadTeamUsersForPollTargeting();
+        const responsibleName =
+          eventEt === "dzimsanas" && String(celQuizResponsibleKey || "").trim()
+            ? String(teamPick.find((u) => pollTargetKeyForUser(u) === String(celQuizResponsibleKey || "").trim())?.name || "").trim()
+            : "";
+        const progPack =
+          eventEt === "dzimsanas"
+            ? {
+                celebrationQuizResponsibleKey: String(celQuizResponsibleKey || "").trim(),
+                celebrationProgramHtml: String(celProgramHtml || "").trim(),
+                celebrationProgramAttachments: salNormalizeAttachmentList(celProgramAttachments),
+              }
+            : {
+                celebrationQuizResponsibleKey: "",
+                celebrationProgramHtml: "",
+                celebrationProgramAttachments: [],
+              };
+        const progAttSaved = salNormalizeAttachmentList(celProgramAttachments);
+        const descForRow = eventEt === "dzimsanas" ? String(celProgramHtml || "").trim() : "";
+        const eventWhatLine = [planSummary, responsibleName ? `Programma: ${responsibleName}` : "", String(celMessage || "").trim()]
+          .filter(Boolean)
+          .join(" · ")
+          .slice(0, 480);
+        const row = normalizeEvent({
+          id,
+          remote_id: prev?.remoteId || null,
+          event_date: cardDate,
+          event_time: String(cardTime || "").trim(),
+          category: cardCategory,
+          event_type: eventEt,
+          title,
+          location: loc,
+          is_online: Boolean(cardOnline),
+          short_category: cardShortCategory || "komanda",
+          icon: "🎂",
+          color: pal?.border || cardColor || "#ec4899",
+          description_html: descForRow,
+          note: cardNote,
+          details: {
+            ...(prev?.details && typeof prev.details === "object" ? prev.details : {}),
+            eventWhat: eventWhatLine || planSummary || String(celMessage || "").trim().slice(0, 240),
+            whyJoin: detailWhyJoin,
+            whatExpect: detailWhatExpect,
+            dressCode: detailDressCode,
+            bringAlong: detailBringAlong,
+            fee: detailFee,
+            timeTo: String(cardTimeTo || "").trim(),
+            organizerKey,
+            celebrationJubilar: jub,
+            celebrationPlanKinds: kinds,
+            celebrationMeetingLink: link,
+            celebrationGiftNote: String(celGiftNote || "").trim(),
+            celebrationMessage: String(celMessage || "").trim(),
+            ...progPack,
+            showInAktualitates: Boolean(publish),
+            aktualitatesId: publish ? Number(prev?.details?.aktualitatesId || 0) || null : null,
+          },
+          poll: { items: [] },
+          participants,
+          attachments: eventEt === "dzimsanas" ? progAttSaved : [],
+          updated_at: new Date().toISOString(),
+        });
+        const nextEvents = editingId ? events.map((x) => (x.id === id ? row : x)) : [row, ...events];
+        const prevAkt = Number(prev?.details?.aktualitatesId || 0) || null;
+        await persistCelebrationToStorage(nextEvents, row, publish, prevAkt);
+      }
+
       async function saveCard(ev) {
         ev?.preventDefault?.();
         const title = String(cardTitle ?? "").trim();
@@ -1374,6 +2354,18 @@
             timeTo: String(cardTimeTo || "").trim(),
             showInAktualitates: false,
             aktualitatesId: Number(events.find((x) => x.id === id)?.details?.aktualitatesId || 0) || null,
+            organizerKey: (() => {
+              const prev = events.find((x) => x.id === id);
+              const existing = String(prev?.details?.organizerKey || "").trim();
+              if (existing) return existing;
+              return (
+                String(preferredActorUserId() || "").trim() ||
+                String(globalThis.__PDD_ACTOR_EMAIL__ || sessionStorage.getItem("pdd_local_email") || "")
+                  .trim()
+                  .toLowerCase() ||
+                String(actorKey() || "").trim()
+              );
+            })(),
           },
           poll: { items: pollItemsFromState() },
           participants,
@@ -1436,18 +2428,13 @@
         const row = {
           ...updated,
           poll: {
-            items: nextPolls.map((p, idx) => ({
-              id: String(p?.id ?? `poll-${idx + 1}`),
-              type: String(p?.type ?? "choice") === "text" ? "text" : "choice",
-              question: String(p?.question ?? "").trim(),
-              options: pollOptionsArray(p?.optionsText),
-              votes: p?.votes && typeof p.votes === "object" ? p.votes : {},
-              textAnswer: String(p?.textAnswer ?? "").trim(),
-            })),
+            items: pollItemsFromList(nextPolls),
           },
         };
         const nextEvents = events.map((x) => (x.id === editingId ? row : x));
-        await persistEvents(nextEvents, row);
+        void persistEvents(nextEvents, row).catch((e) => {
+          setDbMessage(`Aptaujas saglabāšana neizdevās: ${String(e?.message || e)}`);
+        });
       }
 
       async function savePollTextAnswer(pollId, answer) {
@@ -1470,25 +2457,20 @@
         const row = {
           ...updated,
           poll: {
-            items: nextPolls.map((p, idx) => ({
-              id: String(p?.id ?? `poll-${idx + 1}`),
-              type: String(p?.type ?? "choice") === "text" ? "text" : "choice",
-              question: String(p?.question ?? "").trim(),
-              options: pollOptionsArray(p?.optionsText),
-              votes: p?.votes && typeof p.votes === "object" ? p.votes : {},
-              textAnswer: String(p?.textAnswer ?? "").trim(),
-            })),
+            items: pollItemsFromList(nextPolls),
           },
         };
         const nextEvents = events.map((x) => (x.id === editingId ? row : x));
-        await persistEvents(nextEvents, row);
+        void persistEvents(nextEvents, row).catch((e) => {
+          setDbMessage(`Aptaujas saglabāšana neizdevās: ${String(e?.message || e)}`);
+        });
       }
 
       async function cancelPollById(pollId) {
         if (!pollId) return;
         const nextPolls = (Array.isArray(polls) ? polls : []).map((p) => {
           if (String(p?.id) !== String(pollId)) return p;
-          return { ...p, question: "", optionsText: "", votes: {}, textAnswer: "" };
+          return { ...p, question: "", optionsText: "", votes: {}, textAnswer: "", pollTitle: "", pollDate: "" };
         });
         setPolls(nextPolls);
         if (!editingId) return;
@@ -1497,18 +2479,13 @@
         const row = {
           ...updated,
           poll: {
-            items: nextPolls.map((p, idx) => ({
-              id: String(p?.id ?? `poll-${idx + 1}`),
-              type: String(p?.type ?? "choice") === "text" ? "text" : "choice",
-              question: String(p?.question ?? "").trim(),
-              options: pollOptionsArray(p?.optionsText),
-              votes: p?.votes && typeof p.votes === "object" ? p.votes : {},
-              textAnswer: String(p?.textAnswer ?? "").trim(),
-            })),
+            items: pollItemsFromList(nextPolls),
           },
         };
         const nextEvents = events.map((x) => (x.id === editingId ? row : x));
-        await persistEvents(nextEvents, row);
+        void persistEvents(nextEvents, row).catch((e) => {
+          setDbMessage(`Aptaujas saglabāšana neizdevās: ${String(e?.message || e)}`);
+        });
       }
 
       async function deletePollById(pollId) {
@@ -1516,7 +2493,7 @@
         const nextPolls = (Array.isArray(polls) ? polls : []).filter((p) => String(p?.id) !== String(pollId));
         const safeNext = nextPolls.length
           ? nextPolls
-          : [{ id: `poll-${Date.now()}`, type: "choice", question: "", optionsText: "", votes: {}, textAnswer: "" }];
+          : [{ id: `poll-${Date.now()}`, type: "choice", pollTitle: "", pollDate: "", question: "", optionsText: "", votes: {}, textAnswer: "", audience: "all", targets: [], sentAt: "", sentBy: "" }];
         setPolls(safeNext);
         if (!editingId) return;
         const updated = events.find((x) => x.id === editingId);
@@ -1524,18 +2501,13 @@
         const row = {
           ...updated,
           poll: {
-            items: safeNext.map((p, idx) => ({
-              id: String(p?.id ?? `poll-${idx + 1}`),
-              type: String(p?.type ?? "choice") === "text" ? "text" : "choice",
-              question: String(p?.question ?? "").trim(),
-              options: pollOptionsArray(p?.optionsText),
-              votes: p?.votes && typeof p.votes === "object" ? p.votes : {},
-              textAnswer: String(p?.textAnswer ?? "").trim(),
-            })),
+            items: pollItemsFromList(safeNext),
           },
         };
         const nextEvents = events.map((x) => (x.id === editingId ? row : x));
-        await persistEvents(nextEvents, row);
+        void persistEvents(nextEvents, row).catch((e) => {
+          setDbMessage(`Aptaujas saglabāšana neizdevās: ${String(e?.message || e)}`);
+        });
       }
 
       async function clearMyPollAnswer(pollId) {
@@ -1554,18 +2526,72 @@
         const row = {
           ...updated,
           poll: {
-            items: nextPolls.map((p, idx) => ({
-              id: String(p?.id ?? `poll-${idx + 1}`),
-              type: String(p?.type ?? "choice") === "text" ? "text" : "choice",
-              question: String(p?.question ?? "").trim(),
-              options: pollOptionsArray(p?.optionsText),
-              votes: p?.votes && typeof p.votes === "object" ? p.votes : {},
-              textAnswer: String(p?.textAnswer ?? "").trim(),
-            })),
+            items: pollItemsFromList(nextPolls),
           },
         };
         const nextEvents = events.map((x) => (x.id === editingId ? row : x));
-        await persistEvents(nextEvents, row);
+        void persistEvents(nextEvents, row).catch((e) => {
+          setDbMessage(`Aptaujas saglabāšana neizdevās: ${String(e?.message || e)}`);
+        });
+      }
+
+      function choiceLinesForEditor(poll) {
+        const parts = String(poll?.optionsText ?? "").split(/\r?\n/);
+        if (parts.length === 0) return ["", ""];
+        if (parts.length === 1) return [parts[0], ""];
+        return parts;
+      }
+
+      function setChoiceLineAt(pollId, index, value) {
+        setPolls((prev) =>
+          prev.map((p) => {
+            if (String(p.id) !== String(pollId)) return p;
+            const base = choiceLinesForEditor(p);
+            const next = base.slice();
+            while (next.length <= index) next.push("");
+            next[index] = value;
+            return { ...p, optionsText: next.join("\n") };
+          })
+        );
+      }
+
+      function addChoiceLineForPoll(pollId) {
+        setPolls((prev) =>
+          prev.map((p) => {
+            if (String(p.id) !== String(pollId)) return p;
+            const base = choiceLinesForEditor(p);
+            return { ...p, optionsText: [...base, ""].join("\n") };
+          })
+        );
+      }
+
+      function removeChoiceLineForPoll(pollId, index) {
+        setPolls((prev) =>
+          prev.map((p) => {
+            if (String(p.id) !== String(pollId)) return p;
+            const base = choiceLinesForEditor(p);
+            const cut = base.filter((_, i) => i !== index);
+            const safe = cut.length >= 2 ? cut : [cut[0] || "", cut[1] || ""];
+            return { ...p, optionsText: safe.join("\n") };
+          })
+        );
+      }
+
+      function applyPollQuickTemplate(pollId, tplKey) {
+        const map = {
+          yes_no_maybe: ["Jā", "Nē", "Varbūt"],
+          agree: ["Piekritu", "Nepiekritu", "Neitrali"],
+          scale5: ["1 — ļoti slikti", "2", "3", "4", "5 — izcili"],
+          weekdaysLv: ["Pirmdiena", "Otrdiena", "Trešdiena", "Ceturtdiena", "Piektdiena"],
+          day_parts: ["Rīts (līdz 12:00)", "Diena (12:00–17:00)", "Vakars (pēc 17:00)"],
+        };
+        const opts = map[tplKey];
+        if (!opts) return;
+        setPolls((prev) =>
+          prev.map((p) =>
+            String(p.id) !== String(pollId) ? p : { ...p, type: "choice", optionsText: opts.join("\n") }
+          )
+        );
       }
 
       async function setRsvp(status) {
@@ -1639,7 +2665,92 @@
         },
         { yes: [], maybe: [], no: [] }
       );
+      const editingEventRow = editingId ? events.find((x) => String(x?.id) === String(editingId)) : null;
+      const organizerKeyStored = String(editingEventRow?.details?.organizerKey || "").trim();
+      const actorK = String(actorKey() || "").trim();
+      const actorEmail = String(globalThis.__PDD_ACTOR_EMAIL__ || sessionStorage.getItem("pdd_local_email") || "")
+        .trim()
+        .toLowerCase();
+      const actorId = String(preferredActorUserId() || "").trim();
+      const mayDesignPolls =
+        !editingId ||
+        !organizerKeyStored ||
+        organizerKeyStored === actorK ||
+        (!!actorEmail && organizerKeyStored.toLowerCase() === actorEmail) ||
+        (!!actorId && organizerKeyStored === actorId);
+
+      function viewerPollTargetKeys() {
+        const keys = new Set();
+        const id = String(preferredActorUserId() || "").trim();
+        const em = String(globalThis.__PDD_ACTOR_EMAIL__ || sessionStorage.getItem("pdd_local_email") || "").trim().toLowerCase();
+        const ak = String(actorKey() || "").trim();
+        if (id) keys.add(id);
+        if (em) keys.add(em);
+        if (ak) keys.add(ak);
+        return keys;
+      }
+      function pollAppliesToViewer(poll) {
+        if (!String(poll?.sentAt || "").trim()) return false;
+        const aud = String(poll?.audience || "all") === "selected" ? "selected" : "all";
+        if (aud !== "selected") return true;
+        const targets = Array.isArray(poll?.targets) ? poll.targets.map((t) => String(t || "").trim()).filter(Boolean) : [];
+        if (!targets.length) return false;
+        const keys = viewerPollTargetKeys();
+        return targets.some((t) => keys.has(t));
+      }
+      function pollPendingForViewer(poll) {
+        if (!pollAppliesToViewer(poll)) return false;
+        if (!String(poll?.question || "").trim()) return false;
+        const who = actorKey();
+        const votes = poll?.votes && typeof poll.votes === "object" ? poll.votes : {};
+        const mine = String(votes[who] || "").trim();
+        if (mine === "__DECLINED__") return false;
+        return !mine;
+      }
+      function pollRecipientsLabel(poll) {
+        if (!String(poll?.sentAt || "").trim()) return "Melnraksts";
+        const aud = String(poll?.audience || "all") === "selected" ? "selected" : "all";
+        if (aud !== "selected") return "Nosūtīts: visiem komandas dalībniekiem";
+        const targets = Array.isArray(poll?.targets) ? poll.targets.map((t) => String(t || "").trim()).filter(Boolean) : [];
+        const teamUsersMeta = loadTeamUsersForPollTargeting();
+        if (!targets.length) return "Nosūtīts: izvēlētajiem (nav adresātu)";
+        const names = targets.map((t) => {
+          const u = teamUsersMeta.find((x) => pollTargetKeyForUser(x) === t);
+          return u ? u.name : t;
+        });
+        const head = names.slice(0, 6).join(", ");
+        return `Nosūtīts: ${head}${names.length > 6 ? "…" : ""}`;
+      }
+      function formatPollDateLv(ymd) {
+        const s = String(ymd || "").trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "";
+        const d = new Date(`${s}T12:00:00`);
+        if (Number.isNaN(d.getTime())) return s;
+        return d.toLocaleDateString("lv-LV", { day: "2-digit", month: "2-digit", year: "numeric" });
+      }
+      function pollDisplayTitle(poll) {
+        const t = String(poll?.pollTitle || "").trim();
+        if (t) return t;
+        const q = String(poll?.question || "").trim();
+        return q.slice(0, 120) || "Aptauja";
+      }
+      const sentPollsForList = (Array.isArray(polls) ? polls : []).filter((p) => String(p?.sentAt || "").trim());
+      const pollHistoryForList = (Array.isArray(polls) ? polls : []).filter((p) => keepPollItemInUiState(p));
+      const pendingPollCountForCard = (Array.isArray(polls) ? polls : []).reduce((acc, p) => acc + (pollPendingForViewer(p) ? 1 : 0), 0);
+
       const useFullEventCard = cardEventType === "saliedesana" || cardEventType === "cits";
+      const useCelebrationCard = cardEventType === "dzimsanas" || cardEventType === "varda_diena";
+      const celHeaderTitle = cardEventType === "varda_diena" ? "Vārda diena" : "Dzimšanas diena";
+      const showCelMeetLink = Boolean(cardOnline) || celKinds.includes("online");
+      const showCelGiftSec = cardEventType === "dzimsanas" && celKinds.includes("gifts");
+      const celSuggestUsers = loadTeamUsersForPollTargeting();
+      function toggleCelKind(kid) {
+        if (cardEventType !== "dzimsanas") return;
+        setCelKinds((prev) => {
+          const p = Array.isArray(prev) ? prev : [];
+          return p.includes(kid) ? p.filter((x) => x !== kid) : [...p, kid];
+        });
+      }
       const cardCategoryIcon = `${cardShortCategory}|${cardIcon}`;
       function onCategoryIconChange(value) {
         const raw = String(value || "");
@@ -1674,17 +2785,22 @@
                   <div key=${`cell-${dKey}`} class=${`sal-cal-cell ${inMonth ? "" : "out"} ${isToday ? "today" : ""}`}>
                     <div class="sal-cal-day"><span>${d.getDate()}</span></div>
                     <div class="sal-cal-list">
-                      ${dayEvents.map((e) => html`
+                      ${dayEvents.map((e) => {
+                        const pal = salCalPaletteForEvent(e);
+                        const pillStyle =
+                          e.category === "holiday" || !pal ? {} : { background: pal.bg, borderColor: pal.border, color: pal.fg };
+                        return html`
                         <span
                           key=${e.id}
-                          class=${`sal-cal-pill ${e.category === "holiday" ? "is-holiday" : "is-event"}`}
-                          style=${{ background: e.color || undefined, borderColor: e.color || undefined }}
+                          class=${salCalPillClassNames(e)}
+                          style=${pillStyle}
                           onClick=${() => openCardEdit(e)}
                           title="Labot ierakstu"
                         >
                           ${(e.icon ? `${e.icon} ` : "") + e.title}
                         </span>
-                      `)}
+                      `;
+                      })}
                     </div>
                     <button type="button" class="sal-cal-add" onClick=${() => openCardCreate(dKey)}>+ Pievienot</button>
                   </div>
@@ -1722,16 +2838,49 @@
           ${cardOpen
             ? html`
                 <div class="sal-modal-bg" onClick=${() => setCardOpen(false)}>
-                  <div class="sal-modal" onClick=${(e) => e.stopPropagation()}>
-                    <h3>${editingId ? "Pasākuma kartiņa" : "Jauns pasākums"}</h3>
-                    <p class="sal-modal-note">Datums: <strong>${cardDate || "—"}</strong>. Krāsaini un atraktīvi! 🎈</p>
-                    <form class="stack" onSubmit=${saveCard}>
+                  <div
+                    class=${`sal-modal${useCelebrationCard ? " sal-modal--cel" : ""}`}
+                    onClick=${(e) => e.stopPropagation()}
+                  >
+                    <h3>${useCelebrationCard ? celHeaderTitle : editingId ? "Pasākuma kartiņa" : "Jauns pasākums"}</h3>
+                    <p class="sal-modal-note">
+                      ${useCelebrationCard
+                        ? html`Komandas iekšējā pieteikuma kartiņa · datums <strong>${cardDate || "—"}</strong>`
+                        : html`Datums: <strong>${cardDate || "—"}</strong>. Krāsaini un atraktīvi! 🎈`}
+                    </p>
+                    <form
+                      class="stack"
+                      onSubmit=${(e) => {
+                        if (useCelebrationCard) {
+                          e.preventDefault();
+                          return;
+                        }
+                        saveCard(e);
+                      }}
+                    >
                       <div class="row" style=${{ gap: ".65rem" }}>
                         <div class="field" style=${{ flex: 1 }}>
                           <label>Pasākuma veids</label>
-                          <select class="select" value=${cardEventType} onChange=${(e) => setCardEventType(e.target.value)}>
+                          <select
+                            class="select"
+                            value=${cardEventType}
+                            onChange=${(e) => {
+                              const v = e.target.value;
+                              const prevEt = cardEventType;
+                              setCardEventType(v);
+                              if (v === "varda_diena") setCelKinds([]);
+                              if (v === "varda_diena" || (prevEt === "dzimsanas" && v !== "dzimsanas")) {
+                                setCelQuizResponsibleKey("");
+                                setCelProgramHtml("");
+                                setCelProgramAttachments([]);
+                                setCelProgAttLabel("");
+                                setCelProgAttUrl("");
+                              }
+                            }}
+                          >
                             <option value="saliedesana">Saliedēšanas pasākums</option>
                             <option value="dzimsanas">Dzimšanas diena</option>
+                            <option value="varda_diena">Vārda diena</option>
                             <option value="cits">Cits pasākums</option>
                           </select>
                         </div>
@@ -1820,6 +2969,14 @@
 
                             <div class="field sal-attachments">
                               <label>Pielikumi</label>
+                              <p style=${{ margin: "0 0 .35rem", fontSize: ".74rem", color: "#64748b" }}>
+                                Saglabāti DB kolonnā <strong>Pielikumi</strong> (kopā ar pasākumu). Faili un attēli — Supabase bucket
+                                <code style=${{ fontSize: ".72rem" }}>pdd-saliedesana-files</code> (vajadzīga pieslēgšanās). Ja augšupielāde neizdodas, attēlam var izmantot datu URL.
+                              </p>
+                              <div class="field" style=${{ marginBottom: ".35rem" }}>
+                                <label style=${{ fontSize: ".78rem" }}>Nosaukums (pēc izvēles, saitei / failam)</label>
+                                <input class="input" placeholder="Piem., Pieteikuma veidlapa" value=${attLabel} onInput=${(e) => setAttLabel(e.target.value)} />
+                              </div>
                               <div class="row" style=${{ gap: ".45rem", flexWrap: "wrap" }}>
                                 <input class="input" style=${{ flex: 1 }} placeholder="https://..." value=${attUrl} onInput=${(e) => setAttUrl(e.target.value)} />
                                 <button type="button" class="btn btn-ghost btn-small" onClick=${() => addAttachment("link")}>Pievienot saiti</button>
@@ -1833,6 +2990,7 @@
                                 >
                                   Pievienot attēlu
                                 </button>
+                                <button type="button" class="btn btn-ghost btn-small" onClick=${() => document.getElementById("sal-file-upload-input")?.click()}>Pievienot failu</button>
                                 <input
                                   id="sal-image-upload-input"
                                   type="file"
@@ -1844,148 +3002,397 @@
                                     e.target.value = "";
                                   }}
                                 />
+                                <input
+                                  id="sal-file-upload-input"
+                                  type="file"
+                                  accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,image/*"
+                                  style=${{ display: "none" }}
+                                  onChange=${(e) => {
+                                    const file = e.target?.files?.[0];
+                                    addBinaryFileAttachment(file);
+                                    e.target.value = "";
+                                  }}
+                                />
                               </div>
                               ${attachments.map((a, idx) => html`
                                 <div key=${`att-${idx}`} class="sal-att-item">
                                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => openUrlSafe(a.url)}>
-                                    ${a.kind === "image" ? "🖼️ " : "🔗 "}${a.label}
+                                    ${a.kind === "image" ? "🖼️ " : a.kind === "file" ? "📎 " : "🔗 "}${a.label}
                                   </button>
-                                  <button
-                                    type="button"
-                                    class="btn btn-danger btn-small"
-                                    onClick=${() => setAttachments((prev) => prev.filter((_, i) => i !== idx))}
-                                  >Dzēst</button>
+                                  <button type="button" class="btn btn-danger btn-small" onClick=${() => removeAttachmentAt(idx)}>Dzēst</button>
                                 </div>
                               `)}
                             </div>
 
-                            <details class="sal-poll-box">
-                              <summary style=${{ cursor: "pointer", color: "#9a3412", fontSize: ".85rem", fontWeight: 700 }}>
-                                Aptaujas (${Array.isArray(polls) ? polls.length : 0})
-                              </summary>
-                              <div style=${{ display: "grid", gap: ".45rem", marginTop: ".4rem" }}>
-                                ${polls.map((poll, idx) => {
-                                const options = pollOptionsArray(poll.optionsText);
-                                const myVote = String((poll.votes && typeof poll.votes === "object" ? poll.votes[actorKey()] : "") || "");
-                                const summary = options.map((opt) => ({
-                                  option: opt,
-                                  count: Object.values(poll.votes || {}).filter((v) => String(v) === opt).length,
-                                }));
-                                const totalVotes = summary.reduce((acc, x) => acc + Number(x.count || 0), 0);
-                                return html`
-                                  <div key=${poll.id} class="sal-reason-block">
-                                    <div class="row" style=${{ gap: ".35rem", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
-                                      <strong style=${{ color: "#9a3412", fontSize: ".78rem" }}>Aptauja ${idx + 1}</strong>
-                                      <div class="row" style=${{ gap: ".3rem", flexWrap: "wrap" }}>
-                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => clearMyPollAnswer(poll.id)}>Atcelt manu atbildi</button>
-                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => cancelPollById(poll.id)}>Atcelt aptauju</button>
-                                        <button type="button" class="btn btn-danger btn-small" onClick=${() => deletePollById(poll.id)}>Dzēst aptauju</button>
-                                      </div>
-                                    </div>
-                                    <select
-                                      class="select"
-                                      value=${poll.type || "choice"}
-                                      onChange=${(e) => {
-                                        const value = String(e.target.value || "choice") === "text" ? "text" : "choice";
-                                        setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, type: value } : p)));
-                                      }}
+                            <div class="sal-poll-box">
+                              <div class="sal-poll-panels">
+                                <div class="sal-poll-panel sal-poll-panel--list">
+                                  <div class="sal-poll-panel-head">
+                                    <strong>Aptauju saraksts</strong>
+                                    <span class="sal-poll-panel-hint"
+                                      >${pollHistoryForList.length
+                                        ? `${pollHistoryForList.length} saglabātas${sentPollsForList.length ? ` · ${sentPollsForList.length} nosūtītas` : ""}`
+                                        : "vēl nav"}</span
                                     >
-                                      <option value="choice">Atbilžu varianti (ķeksis)</option>
-                                      <option value="text">Brīvā teksta atbilde</option>
-                                    </select>
-                                    <input
-                                      class="input"
-                                      placeholder="Aptaujas jautājums"
-                                      value=${poll.question}
-                                      onInput=${(e) => {
-                                        const value = e.target.value;
-                                        setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, question: value } : p)));
-                                      }}
-                                    />
-                                    ${poll.type === "text"
-                                      ? html`
-                                          <textarea
-                                            class="textarea"
-                                            placeholder="Brīva teksta atbilde"
-                                            value=${poll.textAnswer || ""}
-                                            onInput=${(e) => {
-                                              const value = e.target.value;
-                                              setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, textAnswer: value } : p)));
-                                            }}
-                                          ></textarea>
-                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => savePollTextAnswer(poll.id, poll.textAnswer || "")}>
-                                            Saglabāt atbildi
-                                          </button>
-                                          <div class="sal-vote-option">
-                                            <span>Saņemtas atbildes</span>
-                                            <span>${Object.values(poll.votes || {}).filter((v) => String(v || "").trim()).length}</span>
-                                          </div>
-                                        `
-                                      : html`
-                                          <textarea
-                                            class="textarea"
-                                            placeholder="Varianti (katrs jaunā rindā)"
-                                            value=${poll.optionsText}
-                                            onInput=${(e) => {
-                                              const value = e.target.value;
-                                              setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, optionsText: value } : p)));
-                                            }}
-                                          ></textarea>
-                                          ${summary.length
-                                            ? html`
-                                                <div class="sal-vote-row">
-                                                  ${summary.map((v) => {
-                                                    const selected = myVote === v.option;
-                                                    return html`
-                                                      <label
-                                                        key=${v.option}
-                                                        class="sal-vote-option"
-                                                        style=${selected ? { background: "#dbeafe", borderColor: "#60a5fa" } : {}}
-                                                      >
-                                                        <span style=${{ display: "inline-flex", alignItems: "center", gap: ".45rem" }}>
-                                                          <input type="checkbox" checked=${selected} onChange=${() => castPollVote(poll.id, v.option)} />
-                                                          ${v.option}
-                                                        </span>
-                                                        <span>${v.count}</span>
-                                                      </label>
-                                                    `;
-                                                  })}
-                                                </div>
-                                                <div class="sal-poll-bars">
-                                                  ${summary.map((v) => {
-                                                    const pct = totalVotes > 0 ? Math.round((Number(v.count || 0) * 100) / totalVotes) : 0;
-                                                    return html`
-                                                      <div key=${`bar-${poll.id}-${v.option}`} class="sal-poll-bar-item">
-                                                        <div class="sal-poll-bar-label">
-                                                          <span>${v.option}</span>
-                                                          <span>${v.count} (${pct}%)</span>
-                                                        </div>
-                                                        <div class="sal-poll-bar-track">
-                                                          <div class="sal-poll-bar-fill" style=${{ width: `${pct}%` }}></div>
-                                                        </div>
-                                                      </div>
-                                                    `;
-                                                  })}
-                                                </div>
-                                              `
-                                            : null}
-                                        `}
                                   </div>
-                                `;
-                              })}
-                                <button
-                                  type="button"
-                                  class="btn btn-ghost btn-small"
-                                  onClick=${() =>
-                                    setPolls((prev) => [
-                                      ...(Array.isArray(prev) ? prev : []),
-                                      { id: `poll-${Date.now()}`, type: "choice", question: "", optionsText: "", votes: {}, textAnswer: "" },
-                                    ])}
+                                  ${pollHistoryForList.length
+                                    ? html`<ul class="sal-poll-sent-list">
+                                        ${pollHistoryForList.map(
+                                          (poll) => html`<li class="sal-poll-sent-item" key=${poll.id}>
+                                            <div class="sal-poll-sent-title">${pollDisplayTitle(poll)}</div>
+                                            <div class="sal-poll-sent-meta">
+                                              ${[formatPollDateLv(poll.pollDate), pollRecipientsLabel(poll)].filter(Boolean).join(" · ")}
+                                            </div>
+                                          </li>`
+                                        )}
+                                      </ul>`
+                                    : html`<p class="sal-poll-empty">Šeit parādīsies saglabātās aptaujas pēc «Saglabāt pasākumu» vai nosūtīšanas.</p>`}
+                                </div>
+
+                                ${mayDesignPolls
+                                  ? html`<div class="sal-poll-panel sal-poll-panel--design">
+                                      <button type="button" class="sal-poll-panel-toggle" onClick=${() => setPollCreationOpen((v) => !v)}>
+                                        ${pollCreationOpen ? "▼ Slēpt aptauju veidošanu" : "▶ Aptauju veidošana"}
+                                      </button>
+                                      ${pollCreationOpen
+                                        ? html`<div class="sal-poll-panel-body sal-poll-studio">
+                                            <p class="sal-poll-studio-help">
+                                              <strong>Organizatoram:</strong> sagatavo jautājumu un variantus, tad spied
+                                              <strong>Nosūtīt</strong>. Aizpildīšana un apkopojums ir atsevišķos blokos zemāk.
+                                            </p>
+                                            ${polls.map((poll, idx) => {
+                                              const lines = choiceLinesForEditor(poll);
+                                              const teamUsers = loadTeamUsersForPollTargeting();
+                                              const targets = Array.isArray(poll.targets) ? poll.targets : [];
+                                              const audience = String(poll.audience || "all") === "selected" ? "selected" : "all";
+                                              return html`<div key=${poll.id} class="sal-reason-block">
+                                                <p class="sal-poll-sec-title">Aptauja ${idx + 1}</p>
+                                                <div class="row" style=${{ gap: ".3rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => cancelPollById(poll.id)}>Atiestatīt aptauju</button>
+                                                  <button type="button" class="btn btn-danger btn-small" onClick=${() => deletePollById(poll.id)}>Dzēst aptauju</button>
+                                                </div>
+                                                <div class="sal-reason-block" style=${{ borderStyle: "dashed", background: "#fffbeb" }}>
+                                                  <strong style=${{ color: "#9a3412", fontSize: ".78rem" }}>Nosūtīt aptauju</strong>
+                                                  <p style=${{ margin: "0", fontSize: ".74rem", color: "#7c2d12" }}>
+                                                    Uzaicinājums navigācijā parādīsies tikai tiem, kam nosūtīts (vai visiem).
+                                                    ${poll.sentAt
+                                                      ? html`<br /><span style=${{ color: "#64748b" }}>Nosūtīts: ${String(poll.sentAt).slice(0, 16).replace("T", " ")} (${poll.sentBy || "—"})</span>`
+                                                      : null}
+                                                  </p>
+                                                  <div class="row" style=${{ gap: ".35rem", flexWrap: "wrap" }}>
+                                                    <button
+                                                      type="button"
+                                                      class="btn btn-ghost btn-small"
+                                                      onClick=${() => setPollAudienceAll(poll.id)}
+                                                      style=${audience === "all" ? { background: "#dcfce7", borderColor: "#4ade80", color: "#14532d" } : {}}
+                                                    >
+                                                      Visi lietotāji
+                                                    </button>
+                                                    <details class="sal-reason-block" style=${{ margin: 0, padding: ".35rem .45rem", background: "#fff" }} open=${false}>
+                                                      <summary style=${{ cursor: "pointer", fontSize: ".74rem", color: "#0f172a" }}>
+                                                        Izvēlēti lietotāji (${targets.length || 0})
+                                                      </summary>
+                                                      <div style=${{ display: "grid", gap: ".25rem", marginTop: ".35rem", maxHeight: "180px", overflow: "auto" }}>
+                                                        ${teamUsers.length
+                                                          ? teamUsers.map((u) => {
+                                                              const key = pollTargetKeyForUser(u);
+                                                              const checked = key && targets.includes(key);
+                                                              return html`<label key=${`${poll.id}-t-${key}`} style=${{ display: "flex", alignItems: "center", gap: ".45rem", fontSize: ".78rem" }}>
+                                                                <input type="checkbox" checked=${checked} onChange=${() => togglePollTarget(poll.id, key)} />
+                                                                <span>${u.name}</span>
+                                                              </label>`;
+                                                            })
+                                                          : html`<span style=${{ fontSize: ".74rem", color: "#64748b" }}>Nav ielādēts komandas saraksts.</span>`}
+                                                      </div>
+                                                      <div class="row" style=${{ gap: ".35rem", flexWrap: "wrap", marginTop: ".35rem" }}>
+                                                        <button
+                                                          type="button"
+                                                          class="btn btn-ghost btn-small"
+                                                          onClick=${() =>
+                                                            setPolls((prev) =>
+                                                              (Array.isArray(prev) ? prev : []).map((p) =>
+                                                                String(p?.id) === String(poll.id) ? { ...p, audience: "selected" } : p
+                                                              )
+                                                            )}
+                                                          style=${audience === "selected" ? { background: "#dbeafe", borderColor: "#60a5fa" } : {}}
+                                                        >
+                                                          Lietot tikai izvēlētos
+                                                        </button>
+                                                        <button
+                                                          type="button"
+                                                          class="btn btn-ghost btn-small"
+                                                          onClick=${() =>
+                                                            setPolls((prev) =>
+                                                              (Array.isArray(prev) ? prev : []).map((p) =>
+                                                                String(p?.id) === String(poll.id) ? { ...p, targets: [] } : p
+                                                              )
+                                                            )}
+                                                        >
+                                                          Notīrīt izvēli
+                                                        </button>
+                                                      </div>
+                                                    </details>
+                                                    <button type="button" class="btn btn-primary btn-small" onClick=${() => sendPollInvite(poll.id, audience)}>
+                                                      Nosūtīt
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                                <div class="field">
+                                                  <label>Aptaujas veids</label>
+                                                  <select
+                                                    class="select"
+                                                    value=${poll.type || "choice"}
+                                                    onChange=${(e) => {
+                                                      const value = String(e.target.value || "choice") === "text" ? "text" : "choice";
+                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, type: value } : p)));
+                                                    }}
+                                                  >
+                                                    <option value="choice">Vairāki varianti (viena izvēle)</option>
+                                                    <option value="text">Brīva teksta atbilde</option>
+                                                  </select>
+                                                </div>
+                                                <div class="field">
+                                                  <label>Aptaujas nosaukums</label>
+                                                  <input
+                                                    class="input"
+                                                    placeholder="Piem., Kopīgais brauciens — transporta izvēle"
+                                                    value=${poll.pollTitle || ""}
+                                                    onInput=${(e) => {
+                                                      const value = e.target.value;
+                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, pollTitle: value } : p)));
+                                                    }}
+                                                  />
+                                                </div>
+                                                <div class="field">
+                                                  <label>Aptaujas datums</label>
+                                                  <input
+                                                    class="input"
+                                                    type="date"
+                                                    value=${poll.pollDate || ""}
+                                                    onInput=${(e) => {
+                                                      const value = e.target.value;
+                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, pollDate: value } : p)));
+                                                    }}
+                                                  />
+                                                </div>
+                                                <div class="field">
+                                                  <label>Jautājums</label>
+                                                  <input
+                                                    class="input"
+                                                    placeholder="Piem., Kurš datums der vislabāk?"
+                                                    value=${poll.question}
+                                                    onInput=${(e) => {
+                                                      const value = e.target.value;
+                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, question: value } : p)));
+                                                    }}
+                                                  />
+                                                </div>
+                                                ${poll.type === "text"
+                                                  ? html`<p style=${{ margin: 0, fontSize: ".74rem", color: "#64748b" }}>
+                                                      Brīvas atbildes aizpilda dalībnieki blokā «Aizpildi aptauju».
+                                                    </p>`
+                                                  : html`<div class="field">
+                                                      <label>Atbilžu varianti</label>
+                                                      <p style=${{ margin: "0 0 .25rem", fontSize: ".72rem", color: "#64748b" }}>
+                                                        Katram variantam savs lauks. Vismaz divi derīgi varianti, lai varētu balsot.
+                                                      </p>
+                                                      <div class="sal-poll-opt-list">
+                                                        ${lines.map((line, oi) => html`
+                                                          <div key=${`${poll.id}-opt-${oi}`} class="sal-poll-opt-row">
+                                                            <span class="sal-poll-opt-idx">${oi + 1}.</span>
+                                                            <input
+                                                              class="input"
+                                                              placeholder=${`Variants ${oi + 1}`}
+                                                              value=${line}
+                                                              onInput=${(e) => setChoiceLineAt(poll.id, oi, e.target.value)}
+                                                            />
+                                                            <button
+                                                              type="button"
+                                                              class="btn btn-ghost btn-small"
+                                                              disabled=${lines.length <= 2}
+                                                              title="Vismaz divas rindas"
+                                                              onClick=${() => removeChoiceLineForPoll(poll.id, oi)}
+                                                            >
+                                                              ✕
+                                                            </button>
+                                                          </div>`)}
+                                                      </div>
+                                                      <button type="button" class="btn btn-ghost btn-small" onClick=${() => addChoiceLineForPoll(poll.id)}>
+                                                        + Pievienot variantu
+                                                      </button>
+                                                      <div class="sal-poll-quick">
+                                                        <span class="sal-poll-quick-h">Ātri:</span>
+                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "yes_no_maybe")}>Jā / Nē / Varbūt</button>
+                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "agree")}>Piekritu / Nepiekritu / Neitrali</button>
+                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "scale5")}>1–5</button>
+                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "weekdaysLv")}>P–Pk</button>
+                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "day_parts")}>Rīts / Diena / Vakars</button>
+                                                      </div>
+                                                    </div>`}
+                                              </div>`;
+                                            })}
+                                            <button
+                                              type="button"
+                                              class="btn btn-ghost btn-small"
+                                              onClick=${() =>
+                                                setPolls((prev) => [
+                                                  ...(Array.isArray(prev) ? prev : []),
+                                                  {
+                                                    id: `poll-${Date.now()}`,
+                                                    type: "choice",
+                                                    pollTitle: "",
+                                                    pollDate: String(cardDate || "").trim(),
+                                                    question: "",
+                                                    optionsText: "",
+                                                    votes: {},
+                                                    textAnswer: "",
+                                                    audience: "all",
+                                                    targets: [],
+                                                    sentAt: "",
+                                                    sentBy: "",
+                                                  },
+                                                ])}
+                                            >
+                                              + Pievienot jaunu aptauju
+                                            </button>
+                                          </div>`
+                                        : null}
+                                    </div>`
+                                  : null}
+
+                                <div
+                                  class="sal-poll-panel sal-poll-panel--fill"
+                                  id="sal-poll-fill-anchor"
+                                  style=${{ display: pendingPollCountForCard > 0 ? "grid" : "none" }}
                                 >
-                                  + Pievienot aptauju
-                                </button>
+                                  <div class="sal-poll-panel-head sal-poll-panel-head--urgent">
+                                    <strong>Aizpildi aptauju</strong>
+                                    <span class="sal-poll-panel-hint">${pendingPollCountForCard ? `${pendingPollCountForCard} gaida` : "—"}</span>
+                                  </div>
+                                  ${pendingPollCountForCard > 0
+                                    ? (Array.isArray(polls) ? polls : [])
+                                        .filter((poll) => pollPendingForViewer(poll))
+                                        .map((poll, idx) => {
+                                          const options = pollOptionsArray(poll.optionsText).filter((x) => String(x).trim());
+                                          const myVote = String((poll.votes && typeof poll.votes === "object" ? poll.votes[actorKey()] : "") || "");
+                                          return html`<div key=${poll.id} class="sal-reason-block sal-poll-fill-card">
+                                            <p class="sal-poll-sec-title">${pollDisplayTitle(poll)}</p>
+                                            ${formatPollDateLv(poll.pollDate)
+                                              ? html`<div style=${{ fontSize: ".72rem", color: "#64748b", marginBottom: ".25rem" }}>${formatPollDateLv(poll.pollDate)}</div>`
+                                              : null}
+                                            <div style=${{ fontSize: ".82rem", color: "#0f172a", marginBottom: ".35rem" }}>${poll.question || ""}</div>
+                                            ${poll.type === "text"
+                                              ? html`<div class="field">
+                                                  <label>Tava atbilde</label>
+                                                  <textarea
+                                                    class="textarea"
+                                                    rows="3"
+                                                    placeholder="Īss teksts…"
+                                                    value=${poll.textAnswer || myVote || ""}
+                                                    onInput=${(e) => {
+                                                      const value = e.target.value;
+                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, textAnswer: value } : p)));
+                                                    }}
+                                                  ></textarea>
+                                                </div>
+                                                <button type="button" class="btn btn-primary btn-small" onClick=${() => savePollTextAnswer(poll.id, poll.textAnswer || myVote || "")}>
+                                                  Saglabāt atbildi
+                                                </button>`
+                                              : html`<div class="field">
+                                                  <label>Izvēlies variantu</label>
+                                                  <div class="sal-vote-row">
+                                                    ${options.map((opt) => {
+                                                      const selected = myVote === opt;
+                                                      return html`
+                                                        <label
+                                                          key=${`${poll.id}-fill-${opt}`}
+                                                          class="sal-vote-option"
+                                                          style=${selected ? { background: "#dbeafe", borderColor: "#60a5fa" } : {}}
+                                                        >
+                                                          <span style=${{ display: "inline-flex", alignItems: "center", gap: ".45rem" }}>
+                                                            <input
+                                                              type="radio"
+                                                              name=${`sal-poll-fill-${poll.id}`}
+                                                              checked=${selected}
+                                                              onChange=${() => castPollVote(poll.id, opt)}
+                                                            />
+                                                            ${opt}
+                                                          </span>
+                                                        </label>`;
+                                                    })}
+                                                  </div>
+                                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => clearMyPollAnswer(poll.id)}>
+                                                    Notīrīt manu balsi
+                                                  </button>
+                                                </div>`}
+                                          </div>`;
+                                        })
+                                    : null}
+                                </div>
+
+                                <div class="sal-poll-panel sal-poll-panel--results">
+                                  <button type="button" class="sal-poll-panel-toggle" onClick=${() => setPollResultsOpen((v) => !v)}>
+                                    ${pollResultsOpen ? "▼ Slēpt aptauju rezultātus" : "▶ Aptauju rezultāti"}
+                                  </button>
+                                  ${pollResultsOpen
+                                    ? html`<div class="sal-poll-panel-body">
+                                        ${sentPollsForList.length
+                                          ? sentPollsForList.map((poll, idx) => {
+                                              const options = pollOptionsArray(poll.optionsText).filter((x) => String(x).trim());
+                                              const votes = poll.votes && typeof poll.votes === "object" ? poll.votes : {};
+                                              const entries = Object.entries(votes).filter(
+                                                ([uid, val]) => String(val || "").trim() && String(val) !== "__DECLINED__"
+                                              );
+                                              const totalVotes = entries.length;
+                                              return html`<div key=${poll.id} class="sal-reason-block sal-poll-results-card">
+                                                <p class="sal-poll-sec-title">${pollDisplayTitle(poll)}</p>
+                                                <div style=${{ fontSize: ".72rem", color: "#64748b", marginBottom: ".35rem" }}>
+                                                  ${[formatPollDateLv(poll.pollDate), pollRecipientsLabel(poll)].filter(Boolean).join(" · ")}
+                                                </div>
+                                                ${poll.type === "text"
+                                                  ? html`<div class="sal-poll-text-answers">
+                                                      ${entries.length
+                                                        ? entries.map(
+                                                            ([uid, val]) => html`<div key=${uid} class="sal-poll-text-answer">
+                                                              <div class="sal-poll-text-author">${prettyPersonName(uid)}</div>
+                                                              <div>${String(val || "—")}</div>
+                                                            </div>`
+                                                          )
+                                                        : html`<p class="sal-poll-empty">Vēl nav atbilžu.</p>`}
+                                                    </div>`
+                                                  : html`<div class="sal-poll-results-bars">
+                                                      ${(() => {
+                                                        const counts = {};
+                                                        options.forEach((opt) => {
+                                                          counts[opt] = 0;
+                                                        });
+                                                        entries.forEach(([, val]) => {
+                                                          if (counts[val] === undefined) counts[val] = 0;
+                                                          counts[val] += 1;
+                                                        });
+                                                        return options.map((opt) => {
+                                                          const c = counts[opt] || 0;
+                                                          const pct = totalVotes ? Math.round((c / totalVotes) * 100) : 0;
+                                                          return html`<div key=${`res-${poll.id}-${opt}`} class="sal-poll-bar-item">
+                                                            <div class="sal-poll-bar-label">
+                                                              <span>${opt}</span>
+                                                              <span>${c} (${pct}%)</span>
+                                                            </div>
+                                                            <div class="sal-poll-bar-track">
+                                                              <div class="sal-poll-bar-fill" style=${{ width: `${pct}%` }}></div>
+                                                            </div>
+                                                          </div>`;
+                                                        });
+                                                      })()}
+                                                    </div>`}
+                                              </div>`;
+                                            })
+                                          : html`<p class="sal-poll-empty">Nav nosūtītu aptauju, ko rādīt.</p>`}
+                                      </div>`
+                                    : null}
+                                </div>
                               </div>
-                            </details>
+                            </div>
 
                             <div class="sal-poll-box">
                               <strong style=${{ color: "#9a3412", fontSize: ".85rem" }}>Piedalīšanās atzīme</strong>
@@ -2052,7 +3459,317 @@
                               </div>
                             </div>
                           `
-                        : html`<div class="sal-banner">Šim veidam kartiņas saturs būs cits (tiks pievienots nākamajos soļos).</div>`}
+                        : useCelebrationCard
+                          ? html`
+                            <datalist id="sal-cel-jubilar-list">
+                              ${celSuggestUsers.map((u) => html`<option value=${u.name} />`)}
+                            </datalist>
+                            <div class="sal-cel-wrap" role="region" aria-label=${celHeaderTitle}>
+                              <div class="sal-cel-confetti" aria-hidden="true">✨ · 🎈 · ✨</div>
+                              <div class="sal-cel-head">
+                                <div class="sal-cel-head-icon" aria-hidden="true">🎂</div>
+                                <div class="sal-cel-head-text">
+                                  <h4 class="sal-cel-title">${celHeaderTitle}</h4>
+                                  <p class="sal-cel-sub">Paziņo komandai, saplāno formātu un savāc dalības atzīmes.</p>
+                                </div>
+                              </div>
+                              <div class="sal-cel-sec">
+                                <p class="sal-cel-sec-title">Pamata informācija</p>
+                                <div class="sal-cel-field">
+                                  <label for="sal-cel-jubilar">Jubilārs / gaviļnieks</label>
+                                  <input
+                                    id="sal-cel-jubilar"
+                                    class="input"
+                                    list="sal-cel-jubilar-list"
+                                    autocomplete="off"
+                                    value=${celJubilar}
+                                    placeholder="Izvēlies no saraksta vai ieraksti vārdu…"
+                                    onInput=${(e) => setCelJubilar(e.target.value)}
+                                  />
+                                </div>
+                                <div class="sal-cel-field">
+                                  <label for="sal-cel-date">Datums</label>
+                                  <input id="sal-cel-date" class="input" type="date" value=${cardDate} onInput=${(e) => setCardDate(e.target.value)} />
+                                </div>
+                                <div class="sal-cel-row2">
+                                  <div class="sal-cel-field">
+                                    <label for="sal-cel-time-from">No</label>
+                                    <input
+                                      id="sal-cel-time-from"
+                                      class="input"
+                                      type="time"
+                                      value=${cardTime}
+                                      onInput=${(e) => setCardTime(e.target.value)}
+                                    />
+                                  </div>
+                                  <div class="sal-cel-field">
+                                    <label for="sal-cel-time-to">Līdz</label>
+                                    <input
+                                      id="sal-cel-time-to"
+                                      class="input"
+                                      type="time"
+                                      value=${cardTimeTo}
+                                      onInput=${(e) => setCardTimeTo(e.target.value)}
+                                    />
+                                  </div>
+                                </div>
+                                <div class="sal-cel-field">
+                                  <label for="sal-cel-loc">Vieta</label>
+                                  <input
+                                    id="sal-cel-loc"
+                                    class="input"
+                                    value=${cardLocation}
+                                    placeholder="Birojs, sapulču telpa…"
+                                    disabled=${Boolean(cardOnline)}
+                                    onInput=${(e) => setCardLocation(e.target.value)}
+                                  />
+                                </div>
+                                <label class="sal-cel-check">
+                                  <input type="checkbox" checked=${cardOnline} onChange=${(e) => setCardOnline(Boolean(e.target.checked))} />
+                                  Online apsveikums
+                                </label>
+                                ${showCelMeetLink
+                                  ? html`<div class="sal-cel-field sal-cel-meet">
+                                      <label for="sal-cel-meet">Tikšanās saite (Zoom, Meet, Teams…)</label>
+                                      <input
+                                        id="sal-cel-meet"
+                                        class="input"
+                                        type="url"
+                                        inputmode="url"
+                                        placeholder="https://…"
+                                        value=${celMeetingLink}
+                                        onInput=${(e) => setCelMeetingLink(e.target.value)}
+                                      />
+                                    </div>`
+                                  : null}
+                                <div class="sal-cel-field">
+                                  <label for="sal-cel-title-opt">Rādāmais nosaukums kalendārā (pēc izvēles)</label>
+                                  <input
+                                    id="sal-cel-title-opt"
+                                    class="input"
+                                    value=${cardTitle}
+                                    placeholder=${`${celJubilar || "Vārds"} — ${celHeaderTitle}`}
+                                    onInput=${(e) => setCardTitle(e.target.value)}
+                                  />
+                                </div>
+                              </div>
+                              ${cardEventType === "dzimsanas"
+                                ? html`<div class="sal-cel-sec">
+                                    <p class="sal-cel-sec-title">Pasākuma tips</p>
+                                    <p class="sal-cel-sub" style=${{ marginTop: "-.15rem" }}>Izvēlies vienu vai vairākus variantus.</p>
+                                    <div class="sal-cel-chips" role="group" aria-label="Pasākuma formāts">
+                                      ${CELEBRATION_KIND_CHIPS_BD.map(
+                                        (c) =>
+                                          html`<button
+                                            type="button"
+                                            key=${`cel-kind-${c.id}`}
+                                            class=${`sal-cel-chip ${celKinds.includes(c.id) ? "is-on" : ""}`}
+                                            aria-pressed=${celKinds.includes(c.id) ? "true" : "false"}
+                                            onClick=${() => toggleCelKind(c.id)}
+                                          >
+                                            <span aria-hidden="true">${c.icon}</span> ${c.label}
+                                          </button>`
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div class="sal-cel-sec">
+                                    <p class="sal-cel-sec-title">Viktorīna, aptauja vai cits apsveikums</p>
+                                    <p class="sal-cel-sub" style=${{ marginTop: "-.15rem" }}>
+                                      Norādi atbildīgo personu un pievieno materiālus — formāts kā aktualitātēs (teksts, attēli, saites, faili).
+                                    </p>
+                                    <div class="sal-cel-field">
+                                      <label for="sal-cel-quiz-user">Atbildīgais par sagatavošanu</label>
+                                      <select
+                                        id="sal-cel-quiz-user"
+                                        class="select"
+                                        value=${celQuizResponsibleKey}
+                                        onChange=${(e) => setCelQuizResponsibleKey(e.target.value)}
+                                      >
+                                        <option value="">— Izvēlies komandas biedru —</option>
+                                        ${celSuggestUsers.map(
+                                          (u) =>
+                                            html`<option value=${pollTargetKeyForUser(u)} key=${`cel-u-${pollTargetKeyForUser(u)}`}>
+                                              ${u.name}
+                                            </option>`
+                                        )}
+                                      </select>
+                                    </div>
+                                    <div class="sal-cel-field">
+                                      <label for="sal-cel-prog-html">Materiāli un apraksts</label>
+                                      <div class="sal-rich-editor">
+                                        <div class="sal-toolbar">
+                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("bold")}>B</button>
+                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("italic")}><em>I</em></button>
+                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("underline")}><u>U</u></button>
+                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("insertUnorderedList")}>• Saraksts</button>
+                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("insertOrderedList")}>1. Saraksts</button>
+                                          <select class="select" onChange=${(e) => applyCelProgramEditorCommand("fontSize", e.target.value)}>
+                                            <option value="">Šrifta lielums</option>
+                                            <option value="2">Mazs</option>
+                                            <option value="3">Normāls</option>
+                                            <option value="5">Liels</option>
+                                            <option value="6">Ļoti liels</option>
+                                          </select>
+                                          <input type="color" title="Teksta krāsa" onInput=${(e) => applyCelProgramEditorCommand("foreColor", e.target.value)} />
+                                          <input type="color" title="Fona krāsa" onInput=${(e) => applyCelProgramEditorCommand("hiliteColor", e.target.value)} />
+                                        </div>
+                                        <div
+                                          class="sal-editor"
+                                          contenteditable="true"
+                                          ref=${celProgramEditorRef}
+                                          onInput=${(e) => setCelProgramHtml(String(e.currentTarget.innerHTML || ""))}
+                                          dangerouslySetInnerHTML=${{ __html: celProgramHtml }}
+                                        ></div>
+                                      </div>
+                                    </div>
+                                    <div class="field sal-attachments" style=${{ margin: 0 }}>
+                                      <label>Pielikumi</label>
+                                      <p style=${{ margin: "0 0 .35rem", fontSize: ".74rem", color: "#64748b" }}>
+                                        Saglabāti kopā ar pasākumu (kolonna <strong>Pielikumi</strong> un metadatos). Attēli/faili —
+                                        <code style=${{ fontSize: ".72rem" }}>pdd-saliedesana-files</code>.
+                                      </p>
+                                      <div class="field" style=${{ marginBottom: ".35rem" }}>
+                                        <label style=${{ fontSize: ".78rem" }}>Nosaukums (pēc izvēles)</label>
+                                        <input
+                                          class="input"
+                                          placeholder="Piem., Viktorīnas jautājumi"
+                                          value=${celProgAttLabel}
+                                          onInput=${(e) => setCelProgAttLabel(e.target.value)}
+                                        />
+                                      </div>
+                                      <div class="row" style=${{ gap: ".45rem", flexWrap: "wrap" }}>
+                                        <input
+                                          class="input"
+                                          style=${{ flex: 1 }}
+                                          placeholder="https://..."
+                                          value=${celProgAttUrl}
+                                          onInput=${(e) => setCelProgAttUrl(e.target.value)}
+                                        />
+                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => addCelProgramAttachment("link")}>
+                                          Pievienot saiti
+                                        </button>
+                                        <button
+                                          type="button"
+                                          class="btn btn-ghost btn-small"
+                                          onClick=${() => {
+                                            if (String(celProgAttUrl || "").trim()) addCelProgramAttachment("image");
+                                            else document.getElementById("sal-cel-prog-image-upload")?.click();
+                                          }}
+                                        >
+                                          Pievienot attēlu
+                                        </button>
+                                        <button
+                                          type="button"
+                                          class="btn btn-ghost btn-small"
+                                          onClick=${() => document.getElementById("sal-cel-prog-file-upload")?.click()}
+                                        >
+                                          Pievienot failu
+                                        </button>
+                                        <input
+                                          id="sal-cel-prog-image-upload"
+                                          type="file"
+                                          accept="image/*"
+                                          style=${{ display: "none" }}
+                                          onChange=${(e) => {
+                                            const file = e.target?.files?.[0];
+                                            addCelProgramImageFromFile(file);
+                                            e.target.value = "";
+                                          }}
+                                        />
+                                        <input
+                                          id="sal-cel-prog-file-upload"
+                                          type="file"
+                                          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,image/*"
+                                          style=${{ display: "none" }}
+                                          onChange=${(e) => {
+                                            const file = e.target?.files?.[0];
+                                            void addCelProgramBinaryFile(file);
+                                            e.target.value = "";
+                                          }}
+                                        />
+                                      </div>
+                                      ${celProgramAttachments.map(
+                                        (a, idx) => html`
+                                          <div key=${`cel-att-${idx}`} class="sal-att-item">
+                                            <button type="button" class="btn btn-ghost btn-small" onClick=${() => openUrlSafe(a.url)}>
+                                              ${a.kind === "image" ? "🖼️ " : a.kind === "file" ? "📎 " : "🔗 "}${a.label}
+                                            </button>
+                                            <button type="button" class="btn btn-danger btn-small" onClick=${() => void removeCelProgramAttachmentAt(idx)}>
+                                              Dzēst
+                                            </button>
+                                          </div>
+                                        `
+                                      )}
+                                    </div>
+                                  </div>`
+                                : null}
+                              ${showCelGiftSec
+                                ? html`<div class="sal-cel-sec sal-cel-gift">
+                                    <p class="sal-cel-sec-title">Dāvanas</p>
+                                    <div class="sal-cel-field">
+                                      <label for="sal-cel-gift">Dāvanu / pasniegšanas piezīmes</label>
+                                      <textarea
+                                        id="sal-cel-gift"
+                                        class="textarea"
+                                        rows="2"
+                                        placeholder="Piem., kopējā dāvana, naudas aploksne…"
+                                        value=${celGiftNote}
+                                        onInput=${(e) => setCelGiftNote(e.target.value)}
+                                      />
+                                    </div>
+                                  </div>`
+                                : null}
+                              <div class="sal-cel-sec">
+                                <p class="sal-cel-sec-title">Dalība un apsveikumi</p>
+                                <div class="sal-cel-field">
+                                  <label for="sal-cel-msg">Ziņa komandai / apsveikums</label>
+                                  <textarea
+                                    id="sal-cel-msg"
+                                    class="textarea"
+                                    rows="2"
+                                    placeholder="Īss sveiciens vai instrukcijas…"
+                                    value=${celMessage}
+                                    onInput=${(e) => setCelMessage(e.target.value)}
+                                  />
+                                </div>
+                                <div class="sal-cel-rsvp">
+                                  <span class="sal-rsvp-stat">Tava atzīme</span>
+                                  <button
+                                    type="button"
+                                    class="btn btn-ghost btn-small"
+                                    style=${myRsvp?.status === "yes" ? { background: "#dcfce7", borderColor: "#4ade80", color: "#14532d" } : {}}
+                                    onClick=${() => setRsvp("yes")}
+                                  >
+                                    Piedalīšos
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="btn btn-ghost btn-small"
+                                    style=${myRsvp?.status === "maybe" ? { background: "#fef3c7", borderColor: "#fbbf24", color: "#78350f" } : {}}
+                                    onClick=${() => setRsvp("maybe")}
+                                  >
+                                    Varbūt
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="btn btn-ghost btn-small"
+                                    style=${myRsvp?.status === "no" ? { background: "#fee2e2", borderColor: "#f87171", color: "#7f1d1d" } : {}}
+                                    onClick=${() => setRsvp("no")}
+                                  >
+                                    Nepiedalīšos
+                                  </button>
+                                </div>
+                                <p class="sal-cel-sub">
+                                  Kopā atbildes: ${rsvp.yes + rsvp.maybe + rsvp.no} (jā ${rsvp.yes} · varbūt ${rsvp.maybe} · nē ${rsvp.no})
+                                </p>
+                              </div>
+                              <div class="sal-cel-foot">
+                                <button type="button" class="btn btn-primary btn-small" onClick=${() => void saveCelebrationCard(true)}>Publicēt</button>
+                                <button type="button" class="btn btn-ghost btn-small" onClick=${() => void saveCelebrationCard(false)}>Saglabāt melnrakstā</button>
+                              </div>
+                            </div>
+                          `
+                          : html`<div class="sal-banner">Šim veidam kartiņas saturs būs cits (tiks pievienots nākamajos soļos).</div>`}
 
                       <div class="row" style=${{ gap: ".45rem", flexWrap: "wrap" }}>
                         ${useFullEventCard
@@ -2079,5 +3796,8 @@
     createSaliedesanaPanel,
     toYmd,
     DB_SQL_SETUP,
+    /** Prombūtnes kalendāra tiltam: lokālie pasākumi (tostarp pirms paneļa mount). */
+    loadLocalEvents,
+    LS_EVENTS_KEY,
   };
 })();
