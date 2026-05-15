@@ -277,6 +277,10 @@
           position: relative;
           z-index: 2;
         }
+        .cal-chip.cal-chip--atvalinajums {
+          position: relative;
+          z-index: 2;
+        }
         .list-panel {
           background: var(--surface);
           border: 1px solid var(--border);
@@ -460,7 +464,9 @@
       <script src="./Navigacija.js?v=2026051320"></script>
       <script src="./Filtr.js?v=20260407"></script>
       <script src="./Saskaņošana.js?v=20260407"></script>
-      <script src="./Prombutnes_vesture.js?v=20260407"></script>
+      <script src="./Prombutnes_pieteikums.js?v=20260515"></script>
+      <script src="./Prombutnes_vesture.js?v=20260515"></script>
+      <script src="./Atvalinajumi.js?v=2026051517"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo } from "https://esm.sh/react@19.0.0";
@@ -721,6 +727,10 @@
         }
 
         function dbUserRefValue({ userId, userName, columnName }) {
+          const fn =
+            globalThis.PDDPrombutnesVesture?.dbUserRefForPrombutnesColumn ??
+            globalThis.PDD_CITS_PERIOD_HELPERS?.dbUserRefForPrombutnesColumn;
+          if (typeof fn === "function") return fn({ userId, userName, columnName });
           const c = String(columnName ?? "").toLowerCase().trim();
           const name = String(userName ?? "").trim();
           const id = String(userId ?? "").trim();
@@ -1596,6 +1606,15 @@
             /cits\s*\(\s*ar\s+sakanu?osanu\s*\)/i.test(n) ||
             /cits\s*\(\s*ar\s+sakanojumu\s*\)/i.test(n)
           );
+        }
+
+        function isAtvalinajumsTypeName(name) {
+          if (isCitsSaskanotsTypeName(name)) return false;
+          const n = String(name || "")
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "");
+          return n === "atvalinajums" || n.startsWith("atvalinajum");
         }
 
         /** p.i. ir spēkā tikai norādītajā datumu intervālā (ieskaitot galējās dienas); tukši datumi = bez gala.
@@ -2852,6 +2871,16 @@
         }
         /** Katram prombūtnes veidam sava krāsa; statusam — kontūra (gaida / noraidīts). */
         function chipStyle(a) {
+          const atvFn = globalThis.PDD_ATVALINAJUMI?.calendarChipStyle;
+          const fromGrafiks =
+            typeof globalThis.PDD_ATVALINAJUMI?.isPrombutneFromAtvalinajumsGrafiks === "function" &&
+            globalThis.PDD_ATVALINAJUMI.isPrombutneFromAtvalinajumsGrafiks(a?.id);
+          if (
+            ((a?.is_atvalinajums || a?.isAtvalinajums) || fromGrafiks) &&
+            typeof atvFn === "function"
+          ) {
+            return atvFn(a);
+          }
           const raw = a.type?.color ?? "#64748b";
           const tc = String(raw).startsWith("#") ? raw : "#64748b";
           const { r, g, b } = hexToRgb(tc);
@@ -2972,11 +3001,16 @@
                           : null}
                       </div>
                       ${items.map((a) => {
-                        const isCitsType = Boolean(a?.type?.name) && isCitsSaskanotsTypeName(a.type.name);
-                        const periodLabel = extractPeriodLabelLv(a);
+                        const isAtvCal =
+                          Boolean(a?.is_atvalinajums || a?.isAtvalinajums) ||
+                          Boolean(globalThis.PDD_ATVALINAJUMI?.isCalendarAtvalinajumsEntry?.(a));
+                        const isCitsType =
+                          !isAtvCal && Boolean(a?.type?.name) && isCitsSaskanotsTypeName(a.type.name);
+                        const periodLabel = isAtvCal ? "" : extractPeriodLabelLv(a);
                         const hasTimePeriod = Boolean(periodLabel);
-                        const salOpen = buildPrombutnesSaliedesanaOpenDetail(a, d);
+                        const salOpen = isAtvCal ? null : buildPrombutnesSaliedesanaOpenDetail(a, d);
                         const pendingMark = (() => {
+                          if (isAtvCal) return false;
                           const fn = globalThis.PDDPrombutnesVesture?.isPendingCitsAbsence;
                           const base = typeof fn === "function" ? Boolean(fn(a)) : false;
                           const typeName = a?.type?.name ?? "";
@@ -2992,19 +3026,24 @@
                             key=${a.id}
                             role="button"
                             tabindex="0"
-                            class=${`cal-chip${salOpen ? " cal-chip--pdd-saliedesana" : ""}`}
+                            class=${`cal-chip${salOpen ? " cal-chip--pdd-saliedesana" : ""}${isAtvCal ? " cal-chip--atvalinajums" : ""}`}
                             style=${chipStyle(a)}
                             title=${[
                               userDisplayName(a.employee) || "Darbinieks",
                               a.type?.name ?? "",
-                              a.status,
-                              a.comment
+                              isAtvCal && a.comment
+                                ? `Papildinformācija: ${String(a.comment).replace(/"/g, "'")}`
+                                : "",
+                              !isAtvCal ? a.status : "",
+                              !isAtvCal && a.comment
                                 ? `Komentārs: ${String(a.comment).replace(/"/g, "'")}`
                                 : "",
                               onPickAbsence
-                                ? salOpen
-                                  ? "Spied — atvērt Saliedēšanas pasākuma kartiņu"
-                                  : "Spied, lai atvērtu vēsturē"
+                                ? isAtvCal
+                                  ? "Spied — atvērt Atvaļinājumu grafiku"
+                                  : salOpen
+                                    ? "Spied — atvērt Saliedēšanas pasākuma kartiņu"
+                                    : "Spied, lai atvērtu vēsturē"
                                 : "",
                             ]
                               .filter(Boolean)
@@ -3086,6 +3125,7 @@
           presetDate,
           onConsumePreset,
           canApproveRequests,
+          onGoToAtvalinajumiGrafiks,
         }) {
           const [types, setTypes] = useState([]);
           const [typeId, setTypeId] = useState("");
@@ -3113,6 +3153,9 @@
           const [decisionReason, setDecisionReason] = useState({});
           const currentTypeObj = types.find((t) => String(t.id) === String(typeId)) ?? null;
           const isCitsFlow = Boolean(currentTypeObj && isCitsSaskanotsTypeName(currentTypeObj.name));
+          const isAtvalinajumsFlow = Boolean(
+            currentTypeObj && isAtvalinajumsTypeName(currentTypeObj.name)
+          );
           const selfRowLabel = useMemo(() => {
             const fromProfile = String(actorDisplayName ?? "").trim();
             if (fromProfile) return fromProfile;
@@ -3194,6 +3237,41 @@
             setCitsFromTime("09:00");
             setCitsToTime("17:00");
             if (typeof onConsumePreset === "function") onConsumePreset();
+          }
+
+          function goToAtvalinajumiGrafiks() {
+            const uid = String(employeeSelectValue ?? resolvedUserId ?? "").trim();
+            const papParts = [String(comment ?? "").trim(), String(extraInfo ?? "").trim()].filter(Boolean);
+            const preset = {
+              sakuma: String(startDate ?? "").trim(),
+              beigu: String(endDate ?? "").trim(),
+              userRef: uid,
+              papildu: papParts.join(" · "),
+            };
+            const setPreset = globalThis.PDD_ATVALINAJUMI?.setAtvFormPreset;
+            if (typeof setPreset === "function") setPreset(preset);
+            else {
+              try {
+                localStorage.setItem("pdd_atv_form_preset_v1", JSON.stringify(preset));
+              } catch {
+                /* ignore */
+              }
+            }
+            if (typeof onGoToAtvalinajumiGrafiks === "function") onGoToAtvalinajumiGrafiks();
+            else {
+              try {
+                window.dispatchEvent(
+                  new CustomEvent("pdd:prom-sub-change", { detail: { promSub: "atvalinajumi" } })
+                );
+              } catch {
+                /* ignore */
+              }
+            }
+            try {
+              window.dispatchEvent(new CustomEvent("pdd:atvalinajumi-apply-preset"));
+            } catch {
+              /* ignore */
+            }
           }
 
           useEffect(() => {
@@ -3798,6 +3876,34 @@
                     )}
                   </select>
                 </div>
+                ${isAtvalinajumsFlow
+                  ? html`
+                      <div
+                        class="stack"
+                        style=${{
+                          padding: "0.85rem 1rem",
+                          borderRadius: "10px",
+                          border: "1px solid #c4b5fd",
+                          background: "linear-gradient(180deg, #f5f3ff, #ede9fe)",
+                          gap: "0.65rem",
+                        }}
+                      >
+                        <p style=${{ margin: 0, fontSize: "0.88rem", color: "#5b21b6", lineHeight: 1.45 }}>
+                          Atvaļinājumus ievada <strong>Atvaļinājumu grafikā</strong> — tur vari norādīt periodu,
+                          veidu un, ja vēlies, atspoguļot kalendārī.
+                        </p>
+                        <div>
+                          <button
+                            type="button"
+                            class="btn btn-primary"
+                            onClick=${goToAtvalinajumiGrafiks}
+                          >
+                            Ievietot atvaļinājumu caur Atvaļinājumu grafiku
+                          </button>
+                        </div>
+                      </div>
+                    `
+                  : null}
                 <div class="row" style=${{ gap: "0.75rem" }}>
                   <div class="field" style=${{ flex: "1 1 140px" }}>
                     <label for="pstart">No</label>
@@ -5251,6 +5357,15 @@
             setFilters((prev) => ({ ...prev, [key]: "" }));
           }
           function isOwnAbsence(a) {
+            const fn = globalThis.PDDPrombutnesVesture?.isOwnAbsenceRecord;
+            if (typeof fn === "function") {
+              return fn(a, {
+                userId,
+                sessionEmail,
+                localEmail: sessionStorage.getItem(LS_LOCAL_EMAIL),
+                displayName: myNameForFilter,
+              });
+            }
             const uid = String(userId ?? "").trim();
             if (uid && String(a?.user_id ?? "").trim() === uid) return true;
             const em = String(sessionEmail ?? "").trim().toLowerCase();
@@ -5360,10 +5475,22 @@
             return isCitsSaskanotsTypeName(typeName) && String(a?.status || "").toLowerCase() === "approved";
           }
           function canEditAbsence(a) {
+            if (globalThis.PDD_ATVALINAJUMI?.shouldBlockPrombutnesHistoryActions?.(a)) return false;
             if (isApprovedCitsAbsence(a)) return false;
             return true;
           }
           function canDeleteAbsence(a) {
+            if (globalThis.PDD_ATVALINAJUMI?.shouldBlockPrombutnesHistoryActions?.(a)) return false;
+            const fn = globalThis.PDDPrombutnesVesture?.canDeleteAbsenceRecord;
+            if (typeof fn === "function") {
+              return fn(a, {
+                isAdmin,
+                userId,
+                sessionEmail,
+                localEmail: sessionStorage.getItem(LS_LOCAL_EMAIL),
+                displayName: myNameForFilter,
+              });
+            }
             if (isAdmin) return true;
             return isOwnAbsence(a);
           }
@@ -5376,7 +5503,10 @@
           const anyActions = filteredList.some((a) => {
             const canEdit = canEditAbsence(a);
             const canDelete = canDeleteAbsence(a);
-            return canEdit || canDelete;
+            const fromAtvGrafiks =
+              typeof globalThis.PDD_ATVALINAJUMI?.isPrombutneHistoryFromAtvGrafiks === "function" &&
+              globalThis.PDD_ATVALINAJUMI.isPrombutneHistoryFromAtvGrafiks(a);
+            return canEdit || canDelete || fromAtvGrafiks;
           });
           const colCount = anyActions ? 8 : 7;
           useEffect(() => {
@@ -5947,6 +6077,13 @@
                           ${visibleList.map((a) => {
                             const canEdit = canEditAbsence(a);
                             const canDelete = canDeleteAbsence(a);
+                            const fromAtvGrafiks =
+                              typeof globalThis.PDD_ATVALINAJUMI?.isPrombutneHistoryFromAtvGrafiks === "function" &&
+                              globalThis.PDD_ATVALINAJUMI.isPrombutneHistoryFromAtvGrafiks(a);
+                            const histCommentDisplay = fromAtvGrafiks
+                              ? globalThis.PDD_ATVALINAJUMI?.formatPrombutnesHistoryComment?.(a) ||
+                                "No atvaļinājumu grafika"
+                              : a.comment ?? "—";
                             const userFull = userDisplayName(a.employee);
                             const userParts = String(userFull).split(/\s+/).filter(Boolean);
                             const userShown =
@@ -6042,7 +6179,19 @@
                                 </td>
                                 <td>${maybeMark(formatDateLv(a.end_date), filters.end)}</td>
                                 <td style=${{ maxWidth: "140px", wordBreak: "break-word" }}>
-                                  ${maybeMark(a.comment ?? "—", filters.comment)}
+                                  ${fromAtvGrafiks
+                                    ? html`
+                                        <span
+                                          style=${{
+                                            fontStyle: "italic",
+                                            color: "var(--text-muted, #475569)",
+                                          }}
+                                          title="Ieraksts sinhronizēts no Atvaļinājumu grafika"
+                                        >
+                                          ${maybeMark(histCommentDisplay, filters.comment)}
+                                        </span>
+                                      `
+                                    : maybeMark(histCommentDisplay, filters.comment)}
                                 </td>
                                 <td>
                                   <span class=${`badge ${statusBadgeClass}`}>
@@ -6087,17 +6236,36 @@
                                             alignItems: "stretch",
                                           }}
                                         >
-                                          ${canEdit
+                                          ${fromAtvGrafiks
                                             ? html`
                                                 <button
                                                   type="button"
-                                                  class="btn btn-ghost btn-small"
-                                                  onClick=${() => openEdit(a)}
+                                                  class="btn btn-small"
+                                                  style=${{
+                                                    borderColor: "#7c3aed",
+                                                    color: "#5b21b6",
+                                                    background: "#f5f3ff",
+                                                  }}
+                                                  title="Atvērt Atvaļinājumu grafiku un labot šo ierakstu"
+                                                  onClick=${() =>
+                                                    globalThis.PDD_ATVALINAJUMI?.openAtvalinajumiGrafiksForPrombutne?.(
+                                                      a
+                                                    )}
                                                 >
-                                                  Labot
+                                                  Labot caur atvaļinājumu grafiku
                                                 </button>
                                               `
-                                            : null}
+                                            : canEdit
+                                              ? html`
+                                                  <button
+                                                    type="button"
+                                                    class="btn btn-ghost btn-small"
+                                                    onClick=${() => openEdit(a)}
+                                                  >
+                                                    Labot
+                                                  </button>
+                                                `
+                                              : null}
                                           ${canDelete
                                             ? html`
                                                 <button
@@ -6542,7 +6710,10 @@
                   approver_user: r.approved_by ? userStub(r.approved_by) : null,
                 }))
                 .sort((a, b) => a.start_date.localeCompare(b.start_date));
-              setAbsences(list);
+              const appendAtv = globalThis.PDD_ATVALINAJUMI?.appendAtvalinajumiForCalendar;
+              const merged =
+                typeof appendAtv === "function" ? await appendAtv(null, list, []) : list;
+              setAbsences(merged);
               return;
             }
             await ensureDbReadableSession();
@@ -6600,12 +6771,28 @@
               })
             );
             // 4) Normalizējam prombūtnes datus
+            const enrichFn = globalThis.PDDPrombutnesVesture?.enrichAbsenceRow;
+            const enrichCtx = {
+              userId,
+              sessionEmail: String(sessionEmail ?? "").trim(),
+              actorDisplayName: String(actorDisplayName ?? "").trim(),
+            };
             const list = (absRows ?? [])
               .map((r) => {
                 detectAbsenceColumnsFromRow(r);
                 return normalizeAbsenceRecord(r);
               })
               .map((r) => {
+                if (typeof enrichFn === "function") {
+                  const enriched = enrichFn(r, pmap, enrichCtx);
+                  return {
+                    ...enriched,
+                    type: tmap.get(String(enriched.type_id ?? "")) ?? null,
+                    approver_user: enriched.approved_by
+                      ? pmap.get(String(enriched.approved_by)) ?? null
+                      : null,
+                  };
+                }
                 const employee = pmap.get(String(r.user_id)) ?? null;
                 const dn = userDisplayName(employee);
                 const employeeName =
@@ -6621,10 +6808,21 @@
                   approver_user: r.approved_by ? pmap.get(String(r.approved_by)) ?? null : null,
                 };
               });
-            setAbsences(list);
-          }, []);
+            const teamForAtv = (profs ?? []).map((p) => normalizeTeamUserRecord(p));
+            const appendAtv = globalThis.PDD_ATVALINAJUMI?.appendAtvalinajumiForCalendar;
+            const merged =
+              typeof appendAtv === "function"
+                ? await appendAtv(supabase, list, teamForAtv)
+                : list;
+            setAbsences(merged);
+          }, [userId, sessionEmail, actorDisplayName]);
           useEffect(() => {
             void refresh();
+          }, [refresh]);
+          useEffect(() => {
+            const onAtvCal = () => void refresh();
+            window.addEventListener("pdd:atvalinajumi-calendar-changed", onAtvCal);
+            return () => window.removeEventListener("pdd:atvalinajumi-calendar-changed", onAtvCal);
           }, [refresh]);
           useEffect(() => {
             onAbsencesSnapshot?.(absences, userId, canApprove);
@@ -6707,7 +6905,9 @@
                   ? "Komanda"
                   : promSub === "deputy"
                     ? "Apstiprinātāja maiņa"
-                    : "";
+                    : promSub === "atvalinajumi"
+                      ? "Atvaļinājumu grafiks"
+                      : "";
           function tryOpenSaliedesanaFromCalendarChip(a, clickedDay) {
             const detail = buildPrombutnesSaliedesanaOpenDetail(a, clickedDay);
             if (!detail) return false;
@@ -6744,7 +6944,7 @@
                         onMonthChange=${setMonth}
                         absences=${absences}
                         types=${typesList}
-                        caption="Komandas kalendārs. Parastie veidi reģistrējas uzreiz kā apstiprināti; „Cits (ar vadītāja saskaņojumu)” — pēc e-pasta apstiprinājuma. Spied uz krāsainās iezīmes, lai atvērtu ierakstu vēsturē."
+                        caption="Komandas kalendārs. Violetie — tavi atvaļinājumi, ko esi ievietojis grafikā ar pogu „Atspoguļot kalendārī”. Spied uz iezīmes, lai atvērtu vēsturi vai grafiku."
                         onPickDay=${(d) => {
                           const ymd =
                             window.KALENDARS?.toYmd?.(d) ??
@@ -6753,6 +6953,24 @@
                           setPromSub("request");
                         }}
                         onPickAbsence=${(a, clickedDay) => {
+                          const isAtv =
+                            Boolean(a?.is_atvalinajums || a?.isAtvalinajums) ||
+                            Boolean(globalThis.PDD_ATVALINAJUMI?.isCalendarAtvalinajumsEntry?.(a)) ||
+                            Boolean(globalThis.PDD_ATVALINAJUMI?.isPrombutneFromAtvalinajumsGrafiks?.(a?.id));
+                          if (isAtv) {
+                            const atvApi = globalThis.PDD_ATVALINAJUMI;
+                            const atvId =
+                              typeof atvApi?.resolveAtvalinajumsIdFromCalendarAbsence === "function"
+                                ? atvApi.resolveAtvalinajumsIdFromCalendarAbsence(a)
+                                : String(a?.atvalinajums_id ?? a?.id ?? "")
+                                    .trim()
+                                    .replace(/^atv-cal-/, "");
+                            if (atvId && typeof atvApi?.requestHighlightAtvalinajumsRow === "function") {
+                              atvApi.requestHighlightAtvalinajumsRow(atvId);
+                            }
+                            setPromSub("atvalinajumi");
+                            return;
+                          }
                           if (tryOpenSaliedesanaFromCalendarChip(a, clickedDay)) return;
                           setPromSub("history");
                           setHistoryOpen(true);
@@ -6792,6 +7010,7 @@
                       presetDate=${requestPresetDate}
                       onConsumePreset=${() => setRequestPresetDate("")}
                       canApproveRequests=${canApprove}
+                      onGoToAtvalinajumiGrafiks=${() => setPromSub("atvalinajumi")}
                     />
                   `
                 : null}
@@ -6807,6 +7026,20 @@
                 : null}
               ${promSub === "changes"
                 ? html`<${ChangeHistoryPanel} isAdmin=${normalizeUserRole(role) === "admin"} />`
+                : null}
+              ${promSub === "atvalinajumi"
+                ? (() => {
+                    const AtvPanel = globalThis.PDD_ATVALINAJUMI?.createAtvalinajumiPanel?.(html, React);
+                    return AtvPanel
+                      ? html`<${AtvPanel}
+                          supabase=${globalThis.__PDD_SUPABASE__ ?? null}
+                          userId=${userId}
+                          sessionEmail=${sessionEmail ?? ""}
+                          actorDisplayName=${actorDisplayName ?? ""}
+                          onCalendarChanged=${() => void refresh()}
+                        />`
+                      : html`<section class="list-panel"><p>Atvaļinājumu modulis nav ielādēts.</p></section>`;
+                  })()
                 : null}
             </section>
           `;
@@ -6945,6 +7178,7 @@
             if (sectionPromSub === "history") return "Prombūtnes vēsture";
             if (sectionPromSub === "changes") return "Auditācijas vēsture";
             if (sectionPromSub === "deputy") return "Apstiprinātāja maiņa";
+            if (sectionPromSub === "atvalinajumi") return "Atvaļinājumu grafiks";
             if (sectionPromSub === "teamUsers") return "Komanda";
             return "Prombūtnes kalendārs";
           }
@@ -7011,6 +7245,14 @@
             setPromSub(sub);
             setView("prombutnes");
           }, [view, promSub]);
+          useEffect(() => {
+            const onPromSubEvent = (ev) => {
+              const sub = String(ev?.detail?.promSub ?? "").trim();
+              if (sub) handlePromSubChange(sub);
+            };
+            window.addEventListener("pdd:prom-sub-change", onPromSubEvent);
+            return () => window.removeEventListener("pdd:prom-sub-change", onPromSubEvent);
+          }, [handlePromSubChange]);
           useEffect(() => {
             globalThis.__PDD_OPEN_SALIEDESANA_VIEW__ = () => {
               setView("saliedesana");
@@ -7196,12 +7438,25 @@
                   return [String(nt.id), nt];
                 })
               );
+              const enrichFn = globalThis.PDDPrombutnesVesture?.enrichAbsenceRow;
+              const enrichCtx = {
+                userId: session?.user?.id ?? "",
+                sessionEmail: String(session?.user?.email ?? "").trim(),
+                actorDisplayName: String(globalThis.__PDD_ACTOR_DISPLAY_NAME__ ?? "").trim(),
+              };
               const list = (rows ?? [])
                 .map((r) => {
                   detectAbsenceColumnsFromRow(r);
                   return normalizeAbsenceRecord(r);
                 })
                 .map((r) => {
+                  if (typeof enrichFn === "function") {
+                    const enriched = enrichFn(r, pmap, enrichCtx);
+                    return {
+                      ...enriched,
+                      type: tmap.get(String(enriched.type_id ?? "")) ?? null,
+                    };
+                  }
                   const employee = pmap.get(String(r.user_id)) ?? null;
                   const dn = userDisplayName(employee);
                   const employeeName =

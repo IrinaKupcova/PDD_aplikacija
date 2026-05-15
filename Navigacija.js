@@ -519,6 +519,13 @@
                       ? html`<span class="app-nav-badge-cits" title="Gaida apstiprinājumu">Gaida apstiprinājumu</span>`
                       : null}
                   </button>
+                  <button
+                    type="button"
+                    class=${`app-nav-sublink ${view === "prombutnes" && promSub === "atvalinajumi" ? "active" : ""}`}
+                    onClick=${() => onPromSubChange("atvalinajumi")}
+                  >
+                    Atvaļinājumu grafiks
+                  </button>
                   ${showPromDeputyTab
                     ? html`
                         <button
