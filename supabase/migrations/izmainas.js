@@ -20,6 +20,33 @@
     return d.toISOString().slice(0, 10);
   }
 
+  function displayDateLv(v) {
+    const s = ymd(v);
+    if (!s) return "—";
+    const [y, m, d] = s.split("-");
+    return `${d}.${m}.${y}`;
+  }
+
+  function ensureIzmainasStyles() {
+    if (document.getElementById("pdd-izmainas-styles")) return;
+    const el = document.createElement("style");
+    el.id = "pdd-izmainas-styles";
+    el.textContent = `
+      .izmainas-table .col-datums {
+        width: 7.25rem;
+        min-width: 7.25rem;
+        white-space: nowrap;
+      }
+      .izmainas-table tbody tr.izmainas-row-highlight {
+        outline: 2px solid #dc2626;
+        outline-offset: -2px;
+        background: rgba(220, 38, 38, 0.14) !important;
+        box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.35);
+      }
+    `;
+    document.head.appendChild(el);
+  }
+
   async function resolveTable(sb) {
     if (resolvedTable) return resolvedTable;
     let lastErr = null;
@@ -90,13 +117,14 @@
 
   function createChangesView(html, React) {
     const { useEffect, useState } = React;
-    return function AppChangesView({ supabase }) {
+    return function AppChangesView({ supabase, highlightRowId }) {
       const [rows, setRows] = useState([]);
       const [busy, setBusy] = useState(false);
       const [err, setErr] = useState("");
       const [editingId, setEditingId] = useState("");
       const [formOpen, setFormOpen] = useState(false);
       const [draft, setDraft] = useState({ nosaukums: "", apraksts: "", datums: ymd(new Date()) });
+      const hiId = String(highlightRowId ?? "").trim();
 
       async function refresh() {
         setErr("");
@@ -109,8 +137,20 @@
       }
 
       useEffect(() => {
+        ensureIzmainasStyles();
         void refresh();
       }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+      useEffect(() => {
+        if (!hiId || !rows.length) return;
+        const h = window.requestAnimationFrame(() => {
+          document.getElementById(`izmainas-row-${hiId}`)?.scrollIntoView({
+            behavior: "smooth",
+            block: "nearest",
+          });
+        });
+        return () => window.cancelAnimationFrame(h);
+      }, [hiId, rows.length]);
 
       function resetForm() {
         setEditingId("");
@@ -188,10 +228,10 @@
           ${err ? html`<div class="banner-warn" role="alert">${err}</div>` : null}
 
           <div class="iad-table-wrap">
-            <table class="iad-table">
+            <table class="iad-table izmainas-table">
               <thead>
                 <tr>
-                  <th>Datums</th>
+                  <th class="col-datums">Datums</th>
                   <th>Nosaukums</th>
                   <th>Apraksts</th>
                   <th>Darbības</th>
@@ -201,8 +241,12 @@
                 ${rows.length
                   ? rows.map(
                       (row) => html`
-                        <tr key=${row.id}>
-                          <td>${row.datums || "—"}</td>
+                        <tr
+                          key=${row.id}
+                          id=${`izmainas-row-${row.id}`}
+                          class=${hiId && String(row.id) === hiId ? "izmainas-row-highlight" : ""}
+                        >
+                          <td class="col-datums">${displayDateLv(row.datums)}</td>
                           <td>${row.nosaukums || "Bez nosaukuma"}</td>
                           <td style=${{ whiteSpace: "pre-wrap" }}>${row.apraksts || "—"}</td>
                           <td>

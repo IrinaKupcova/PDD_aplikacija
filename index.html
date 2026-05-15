@@ -458,7 +458,7 @@
       <script src="./Komanda.js?v=2026051312"></script>
       <script src="./IAD.js?v=20260443"></script>
       <script src="./Saliedesana.js?v=2026051320"></script>
-      <script src="./supabase/migrations/izmainas.js?v=20260413"></script>
+      <script src="./supabase/migrations/izmainas.js?v=2026051519"></script>
       <script src="./Sodien.js?v=20260422l"></script>
       <script src="./Kalendars.js?v=20260422e"></script>
       <script src="./Navigacija.js?v=2026051320"></script>
@@ -2513,12 +2513,12 @@
           `;
         }
 
-        function PddAppChangesView() {
+        function PddAppChangesView({ highlightRowId }) {
           const View = globalThis.PDD_IZMAINAS?.createChangesView?.(html, React);
           if (!View) {
             return html`<section class="list-panel"><p>Izmaiņu modulis nav ielādēts.</p></section>`;
           }
-          return html`<${View} supabase=${supabase} />`;
+          return html`<${View} supabase=${supabase} highlightRowId=${highlightRowId || ""} />`;
         }
 
         function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenSaliedesana, onOpenTodayTask, absencesToday }) {
@@ -7163,6 +7163,7 @@
           const [darbaUzdevumiFocus, setDarbaUzdevumiFocus] = useState(null);
           const APP_CHANGES_SEEN_KEY = "pdd_app_changes_seen_stamp_v1";
           const [showPddAppChangesBadge, setShowPddAppChangesBadge] = useState(false);
+          const [appChangesHighlightId, setAppChangesHighlightId] = useState("");
           const PINNED_SECTIONS_LS_KEY = "pdd_pinned_sections_v1";
           function makeSectionLabel(sectionView, sectionPromSub, sectionAnchor) {
             if (sectionView === "home") return "Sākums";
@@ -7481,7 +7482,10 @@
             void refreshAppChangesBadge();
           }, [refreshAppChangesBadge]);
           useEffect(() => {
-            if (view !== "pddAppChanges") return;
+            if (view !== "pddAppChanges") {
+              setAppChangesHighlightId("");
+              return;
+            }
             (async () => {
               try {
                 const M = globalThis.PDD_IZMAINAS;
@@ -7490,6 +7494,11 @@
                 await ensureDbReadableSession();
                 const rows = await M.fetchRows(sb);
                 const latest = String(M.latestStamp(rows) || "").trim();
+                const seen = String(localStorage.getItem(APP_CHANGES_SEEN_KEY) || "").trim();
+                if (latest && latest !== seen) {
+                  const newestId = String(rows?.[0]?.id ?? "").trim();
+                  if (newestId) setAppChangesHighlightId(newestId);
+                }
                 if (latest) localStorage.setItem(APP_CHANGES_SEEN_KEY, latest);
                 setShowPddAppChangesBadge(false);
               } catch {
@@ -7798,7 +7807,7 @@
                 : view === "aktualitatesHistory"
                   ? html`<${AktualitatesVestureView} />`
                   : view === "pddAppChanges"
-                    ? html`<${PddAppChangesView} />`
+                    ? html`<${PddAppChangesView} highlightRowId=${appChangesHighlightId} />`
                   : view === "darbaUzdevumiIad"
                     ? null
                   : view === "saliedesana"
