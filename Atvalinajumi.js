@@ -669,33 +669,86 @@
     };
   }
 
-  function isRowOwnedByUser(row, ctx, userMap) {
-    if (!row || !ctx) return false;
-    const uid = String(ctx.userId ?? "").trim();
-    const rowUid = String(row.userId ?? "").trim();
-    const rowRef = String(row.userRef ?? "").trim();
-    if (uid && (rowUid === uid || rowRef === uid)) return true;
+  function normalizeAppRole(role) {
+    const r = String(role ?? "")
+      .trim()
+      .toLowerCase();
+    return r === "admin" ? "admin" : "user";
+  }
 
+  function isAdminAppRole(role) {
+    return normalizeAppRole(role) === "admin";
+  }
+
+  function resolveRowOwnerUserId(row, userMap) {
+    const r = row && typeof row === "object" ? row : {};
     const map = userMap?.byId ? userMap : buildUserMap(userMap);
-    if (uid && map.byId.has(uid)) {
-      const me = map.byId.get(uid);
-      const meName = normLoose(teamUserName(me));
-      const rowName = normLoose(row.userDisplayName || rowFilterValue(row, "vards", map));
-      if (meName && rowName && meName === rowName) return true;
-    }
+    const rowUid = String(r.userId ?? "").trim();
+    if (rowUid && isUuidLike(rowUid)) return rowUid;
 
-    const mine = normLoose(ctx.displayName);
-    const rowName = normLoose(row.userDisplayName || rowFilterValue(row, "vards", map));
-    if (mine && rowName && mine === rowName) return true;
+    const rowRefRaw = String(
+      r.userRefRaw ?? (r._raw ? pickByAliases(r._raw, FIELD_ALIAS.vards, "") : "")
+    ).trim();
+    const rowRef = String(r.userRef ?? "").trim();
+    if (isUuidLike(rowRefRaw)) return rowRefRaw;
+    if (isUuidLike(rowRef)) return rowRef;
 
-    const em = String(ctx.sessionEmail ?? "").trim().toLowerCase();
-    if (em && row._raw) {
-      for (const k of ["e-pasts", "email", "i-mail"]) {
-        const uem = String(row._raw[k] ?? "").trim().toLowerCase();
-        if (uem && uem === em) return true;
+    const resolved = resolveUserRefForUi(rowRefRaw || rowRef, map);
+    const resolvedUid = String(resolved.userId ?? "").trim();
+    if (resolvedUid && isUuidLike(resolvedUid)) return resolvedUid;
+    if (isUuidLike(resolved.selectValue)) return String(resolved.selectValue).trim();
+
+    const nameKey = normLoose(resolved.displayName || rowRefRaw || rowRef);
+    if (!nameKey) return "";
+    for (const u of map.byId.values()) {
+      if (normLoose(teamUserName(u)) === nameKey) {
+        const id = String(u.id ?? "").trim();
+        if (id && isUuidLike(id)) return id;
       }
     }
-    return false;
+    return "";
+  }
+
+  function resolveCurrentUserId(ctx, userMap) {
+    const uid = String(ctx?.userId ?? "").trim();
+    if (uid && isUuidLike(uid)) return uid;
+    const em = normLoose(ctx?.sessionEmail);
+    if (!em) return "";
+    const map = userMap?.byId ? userMap : buildUserMap(userMap);
+    for (const u of map.byId.values()) {
+      if (normLoose(userEmail(u)) === em) {
+        const id = String(u.id ?? "").trim();
+        if (id && isUuidLike(id)) return id;
+      }
+    }
+    return "";
+  }
+
+  function isRowOwnedByUser(row, ctx, userMap) {
+    if (!row || !ctx) return false;
+    const mine = resolveCurrentUserId(ctx, userMap);
+    if (!mine) return false;
+    const owner = resolveRowOwnerUserId(row, userMap);
+    return owner !== "" && owner === mine;
+  }
+
+  function isDraftOwnedByUser(draft, ctx, userMap) {
+    const d = draft && typeof draft === "object" ? draft : {};
+    return isRowOwnedByUser(
+      {
+        userRef: d.userRef,
+        userRefRaw: d.userRef,
+        userDisplayName: "",
+        userId: "",
+      },
+      ctx,
+      userMap
+    );
+  }
+
+  /** Labot, dzēst un kalendārs — tikai ieraksta īpašnieks (ne administrators citu vietā). */
+  function canManageAtvRow(row, ctx, userMap) {
+    return isRowOwnedByUser(row, ctx, userMap);
   }
 
   function findVeidsColumnKey(keys) {
@@ -811,10 +864,15 @@
     const beig = toDateInputValue(d?.beigu);
     if (sak) p[runtimeCols.sakuma] = sak;
     if (beig) p[runtimeCols.beigu] = beig;
-    const ref = resolveUserRefForDb(d?.userRef, users);
-    if (ref) p[runtimeCols.vards] = ref;
+    const refRaw = String(d?.userRef ?? "").trim();
+    if (refRaw) {
+      const ref = resolveUserRefForDb(d.userRef, users);
+      if (ref) p[runtimeCols.vards] = ref;
+    } else {
+      p[runtimeCols.vards] = null;
+    }
     const veids = normalizeVeids(d?.veids);
-    if (veids) p[veidsDbColumn()] = veids;
+    p[veidsDbColumn()] = veids || null;
     const pap = toStr(d?.papildu, 2000);
     p[runtimeCols.papildu] = pap || null;
     return p;
@@ -916,8 +974,6 @@
 
   async function saveRow(sb, draft, teamUsers) {
     if (!draft?.sakuma || !draft?.beigu) throw new Error("Norādi sākuma un beigu datumu.");
-    if (!String(draft?.userRef ?? "").trim()) throw new Error("Izvēlies darbinieku.");
-    if (!normalizeVeids(draft?.veids)) throw new Error("Izvēlies atvaļinājuma veidu.");
 
     const users = Array.isArray(teamUsers) ? teamUsers : [];
     const userMap = buildUserMap(users);
@@ -1060,13 +1116,13 @@
     return [];
   }
 
-  function emptyDraft() {
+  function emptyDraft(defaultUserRef = "") {
     return {
       id: null,
       sakuma: "",
       beigu: "",
-      userRef: "",
-      veids: "Ikgadējais",
+      userRef: String(defaultUserRef ?? "").trim(),
+      veids: "",
       papildu: "",
     };
   }
@@ -1544,6 +1600,7 @@
       userId: currentUserId,
       sessionEmail,
       actorDisplayName,
+      role: appRole,
       onCalendarChanged,
     }) {
       const sb = supabaseProp ?? globalThis.__PDD_SUPABASE__ ?? null;
@@ -1559,11 +1616,11 @@
       const [users, setUsers] = useState([]);
       const [busy, setBusy] = useState(false);
       const [error, setError] = useState(null);
-      const [draftNew, setDraftNew] = useState(() => emptyDraft());
+      const [vardsColumnIsUuid, setVardsColumnIsUuid] = useState(true);
+      const [draftNew, setDraftNew] = useState(() => emptyDraft(String(currentUserId ?? "").trim()));
       const [edits, setEdits] = useState({});
       const [editingIds, setEditingIds] = useState({});
       const [editUndoStacks, setEditUndoStacks] = useState({});
-      const [vardsColumnIsUuid, setVardsColumnIsUuid] = useState(true);
       const [filters, setFilters] = useState({
         sakuma: "",
         beigu: "",
@@ -1610,6 +1667,33 @@
 
       const userMap = useMemo(() => buildUserMap(users), [users]);
 
+      function defaultNewUserRef() {
+        const uid = String(currentUserId ?? "").trim();
+        if (!uid) return "";
+        if (vardsColumnIsUuid) return uid;
+        const me = userMap.byId.get(uid);
+        return teamUserName(me) || uid;
+      }
+
+      const selfUserOptions = useMemo(() => {
+        const uid = String(currentUserId ?? "").trim();
+        if (!uid) return [];
+        const mine = userOptions.filter(
+          (u) => String(u.id) === uid || String(u.selectValue) === uid
+        );
+        if (mine.length) return mine;
+        const me = userMap.byId.get(uid);
+        const name = teamUserName(me);
+        if (name) return [{ id: uid, name, selectValue: name }];
+        return [];
+      }, [userOptions, userMap, currentUserId]);
+
+      useEffect(() => {
+        const ref = defaultNewUserRef();
+        if (!ref) return;
+        setDraftNew((d) => (String(d?.userRef ?? "").trim() ? d : { ...d, userRef: ref }));
+      }, [currentUserId, vardsColumnIsUuid]);
+
       function rowEditState(row) {
         const id = String(row?.id ?? "");
         const pending = editsRef.current[id] ?? edits[id];
@@ -1633,6 +1717,10 @@
       function startRowEdit(row) {
         const rid = String(row?.id ?? "").trim();
         if (!rid) return;
+        if (!canManageAtvRow(rowEditState(row), ownerCtx, userMap)) {
+          setError("Šo ierakstu drīkst labot tikai pats darbinieks, kuram tas pieder.");
+          return;
+        }
         setEditingIds({ [rid]: true });
         setEdits({});
         editsRef.current = {};
@@ -1857,8 +1945,8 @@
 
       async function onSaveExisting(row) {
         const merged = draftForSave(row);
-        if (!normalizeVeids(merged?.veids)) {
-          setError("Izvēlies atvaļinājuma veidu.");
+        if (!canManageAtvRow(merged, ownerCtx, userMap)) {
+          setError("Šo ierakstu drīkst saglabāt tikai pats darbinieks, kuram tas pieder.");
           return;
         }
         setBusy(true);
@@ -1876,11 +1964,19 @@
 
       async function onSaveNew(e) {
         e?.preventDefault?.();
+        const toSave = {
+          ...draftNew,
+          userRef: defaultNewUserRef() || draftNew.userRef,
+        };
+        if (!isDraftOwnedByUser(toSave, ownerCtx, userMap)) {
+          setError("Jaunu ierakstu vari pievienot tikai sev.");
+          return;
+        }
         setBusy(true);
         setError(null);
         try {
-          await saveRow(sb, draftNew, users);
-          setDraftNew(emptyDraft());
+          await saveRow(sb, toSave, users);
+          setDraftNew(emptyDraft(defaultNewUserRef()));
           await refresh();
         } catch (err) {
           setError(err?.message || String(err));
@@ -1891,6 +1987,10 @@
 
       async function onToggleCalendar(row, show) {
         const merged = rowEditState(row);
+        if (!canManageAtvRow(merged, ownerCtx, userMap)) {
+          setError("Kalendārī vari atspoguļot tikai savus atvaļinājumus.");
+          return;
+        }
         const id = String(merged?.id ?? row?.id ?? "").trim();
         if (!id) {
           setError("Vispirms saglabā ierakstu ar pogu „Pievienot”, tad vari atspoguļot kalendārī.");
@@ -1923,6 +2023,10 @@
 
       async function onDelete(row) {
         if (!row?.id) return;
+        if (!canManageAtvRow(rowEditState(row), ownerCtx, userMap)) {
+          setError("Šo ierakstu drīkst dzēst tikai pats darbinieks, kuram tas pieder.");
+          return;
+        }
         if (!confirm("Dzēst šo atvaļinājuma ierakstu?")) return;
         setBusy(true);
         setError(null);
@@ -1997,8 +2101,11 @@
 
       function renderRowCells(r, { isNew }) {
         const state = isNew ? draftNew : rowEditState(r);
-        const editing = !isNew && isRowEditing(r?.id);
-        const readOnly = !isNew && !editing;
+        const ownsRow = isNew ? false : canManageAtvRow(r, ownerCtx, userMap);
+        const editing = !isNew && ownsRow && isRowEditing(r?.id);
+        const readOnly = !isNew && (!ownsRow || !editing);
+        const canManage = isNew ? selfUserOptions.length > 0 : ownsRow;
+        const lockEmployeeField = !isNew && editing && canManage;
         const setState = isNew
           ? (patch) => setDraftNew((d) => ({ ...d, ...patch }))
           : (patch) => patchEdit(r.id, patch);
@@ -2024,9 +2131,23 @@
               : renderDateInput(state.beigu, (v) => setState({ beigu: v }))}
           </td>
           <td>
-            ${readOnly
+            ${readOnly || lockEmployeeField
               ? renderViewValue(userLabel)
-              : renderUserSelect(state.userRef, (v) => setState({ userRef: v }), isNew ? null : r)}
+              : isNew
+                ? html`
+                    <select
+                      class="select"
+                      value=${defaultNewUserRef() || state.userRef || ""}
+                      onChange=${(ev) => setState({ userRef: ev.target.value })}
+                    >
+                      ${selfUserOptions.map(
+                        (u) => html`
+                          <option key=${u.selectValue} value=${u.selectValue}>${u.name}</option>
+                        `
+                      )}
+                    </select>
+                  `
+                : renderUserSelect(state.userRef, (v) => setState({ userRef: v }), isNew ? null : r)}
           </td>
           <td>
             ${readOnly
@@ -2049,14 +2170,18 @@
           <td>
             <div class="atv-actions">
               ${isNew
-                ? html`
-                    <button type="button" class="btn btn-primary btn-small" disabled=${busy} onClick=${onSaveNew}>
-                      Pievienot
-                    </button>
-                  `
-                : html`
-                    ${isRowOwnedByUser(rowEditState(r), ownerCtx, userMap)
-                      ? rowEditState(r).showOnCalendar
+                ? selfUserOptions.length
+                  ? html`
+                      <button type="button" class="btn btn-primary btn-small" disabled=${busy} onClick=${onSaveNew}>
+                        Pievienot
+                      </button>
+                    `
+                  : html`
+                      <span class="atv-view-empty" style=${{ fontSize: "0.8rem" }}>Nav piesaistes lietotājam</span>
+                    `
+                : ownsRow
+                  ? html`
+                      ${rowEditState(r).showOnCalendar
                         ? html`
                             <span
                               class="atv-cal-badge"
@@ -2087,58 +2212,62 @@
                             >
                               Atspoguļot kalendārī
                             </button>
+                          `}
+                      ${editing
+                        ? html`
+                            <button
+                              type="button"
+                              class="btn btn-primary btn-small"
+                              disabled=${busy}
+                              onClick=${() => onSaveExisting(r)}
+                            >
+                              Saglabāt
+                            </button>
+                            <button
+                              type="button"
+                              class="btn btn-ghost btn-small"
+                              disabled=${busy}
+                              onClick=${() => cancelRowEdit(r)}
+                            >
+                              Atcelt izmaiņas
+                            </button>
+                            ${canUndo
+                              ? html`
+                                  <button
+                                    type="button"
+                                    class="btn btn-ghost btn-small"
+                                    disabled=${busy}
+                                    onClick=${() => undoLastRowEdit(r)}
+                                  >
+                                    Atsaukt pēdējo soli
+                                  </button>
+                                `
+                              : null}
                           `
-                      : null}
-                    ${editing
-                      ? html`
-                          <button
-                            type="button"
-                            class="btn btn-primary btn-small"
-                            disabled=${busy}
-                            onClick=${() => onSaveExisting(r)}
-                          >
-                            Saglabāt
-                          </button>
-                          <button
-                            type="button"
-                            class="btn btn-ghost btn-small"
-                            disabled=${busy}
-                            onClick=${() => cancelRowEdit(r)}
-                          >
-                            Atcelt izmaiņas
-                          </button>
-                          ${canUndo
-                            ? html`
-                                <button
-                                  type="button"
-                                  class="btn btn-ghost btn-small"
-                                  disabled=${busy}
-                                  onClick=${() => undoLastRowEdit(r)}
-                                >
-                                  Atsaukt pēdējo soli
-                                </button>
-                              `
-                            : null}
-                        `
-                      : html`
-                          <button
-                            type="button"
-                            class="btn btn-ghost btn-small"
-                            disabled=${busy}
-                            onClick=${() => startRowEdit(r)}
-                          >
-                            Labot
-                          </button>
-                          <button
-                            type="button"
-                            class="btn btn-danger btn-small"
-                            disabled=${busy}
-                            onClick=${() => onDelete(r)}
-                          >
-                            Dzēst
-                          </button>
-                        `}
-                  `}
+                        : html`
+                            <button
+                              type="button"
+                              class="btn btn-ghost btn-small"
+                              disabled=${busy}
+                              onClick=${() => startRowEdit(r)}
+                            >
+                              Labot
+                            </button>
+                            <button
+                              type="button"
+                              class="btn btn-danger btn-small"
+                              disabled=${busy}
+                              onClick=${() => onDelete(r)}
+                            >
+                              Dzēst
+                            </button>
+                          `}
+                    `
+                  : html`
+                      <span class="atv-view-empty" style=${{ fontSize: "0.8rem" }} title="Tikai savi ieraksti">
+                        —
+                      </span>
+                    `}
             </div>
           </td>
         `;
@@ -2149,9 +2278,8 @@
           <div class="atv-head">
             <h2>Atvaļinājumu grafiks</h2>
             <p>
-              Ieplānotie atvaļinājumi sinhronizēti ar datubāzi. Lai mainītu rindu, vispirms spied
-              <strong> Labot</strong>, pēc tam <strong>Saglabāt</strong> vai atceli izmaiņas. Savus ierakstus vari ievietot
-              Prombūtnes kalendārī ar pogu <strong>Atspoguļot kalendārī</strong> (violetā krāsa kalendārī).
+              Ieplānotie atvaļinājumi sinhronizēti ar datubāzi. <strong>Labot</strong>, <strong>dzēst</strong> un
+              <strong>Atspoguļot kalendārī</strong> vari tikai savus ierakstus — citu darbinieku ierakstus ne.
             </p>
           </div>
           <div class="atv-toolbar">
@@ -2275,6 +2403,8 @@
     setRowShowOnCalendar,
     notifyCalendarChanged,
     isRowOwnedByUser,
+    canManageAtvRow,
+    isAdminAppRole,
     isCalendarAtvalinajumsEntry,
     isPrombutneFromAtvalinajumsGrafiks,
     isPrombutneHistoryFromAtvGrafiks,

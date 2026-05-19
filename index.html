@@ -466,7 +466,7 @@
       <script src="./Saskaņošana.js?v=20260407"></script>
       <script src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script src="./Prombutnes_vesture.js?v=20260515"></script>
-      <script src="./Atvalinajumi.js?v=2026051517"></script>
+      <script src="./Atvalinajumi.js?v=2026051523"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo } from "https://esm.sh/react@19.0.0";
@@ -7036,6 +7036,7 @@
                           userId=${userId}
                           sessionEmail=${sessionEmail ?? ""}
                           actorDisplayName=${actorDisplayName ?? ""}
+                          role=${role ?? "user"}
                           onCalendarChanged=${() => void refresh()}
                         />`
                       : html`<section class="list-panel"><p>Atvaļinājumu modulis nav ielādēts.</p></section>`;
