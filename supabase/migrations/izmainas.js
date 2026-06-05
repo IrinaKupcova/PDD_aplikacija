@@ -73,9 +73,15 @@
 
   function latestStamp(rows) {
     const list = Array.isArray(rows) ? rows : [];
-    const first = list[0] ?? null;
-    if (!first) return "";
-    return `${pick(first.created_at)}|${pick(first.id)}`;
+    if (!list.length) return "";
+    let best = list[0];
+    for (const row of list) {
+      const bestCreated = String(best?.created_at ?? "");
+      const rowCreated = String(row?.created_at ?? "");
+      if (rowCreated > bestCreated) best = row;
+      else if (rowCreated === bestCreated && String(row?.id ?? "") > String(best?.id ?? "")) best = row;
+    }
+    return String(best?.id ?? "").trim();
   }
 
   async function fetchRows(sb) {

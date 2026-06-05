@@ -458,7 +458,7 @@
       <script src="./Komanda.js?v=2026051312"></script>
       <script src="./IAD.js?v=20260443"></script>
       <script src="./Saliedesana.js?v=2026051320"></script>
-      <script src="./supabase/migrations/izmainas.js?v=2026051519"></script>
+      <script src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script src="./Sodien.js?v=20260422l"></script>
       <script src="./Kalendars.js?v=20260422e"></script>
       <script src="./Navigacija.js?v=2026051320"></script>
@@ -503,18 +503,79 @@
         const LS_LOCAL_DEPUTY_FROM = "pdd_local_deputy_from";
         const LS_LOCAL_DEPUTY_TO = "pdd_local_deputy_to";
         function getStickyAuthValue(key) {
+          if (EMAIL_AUTH_KEYS.includes(key)) return sessionStorage.getItem(key);
           const a = localStorage.getItem(key);
           if (a != null && String(a).trim() !== "") return a;
           return sessionStorage.getItem(key);
         }
         function setStickyAuthValue(key, value) {
           const v = String(value ?? "");
+          if (EMAIL_AUTH_KEYS.includes(key)) {
+            sessionStorage.setItem(key, v);
+            localStorage.removeItem(key);
+            return;
+          }
           localStorage.setItem(key, v);
           sessionStorage.setItem(key, v);
         }
         function removeStickyAuthValue(key) {
           localStorage.removeItem(key);
           sessionStorage.removeItem(key);
+        }
+        const EMAIL_AUTH_KEYS = [LS_LOCAL_OK, LS_LOCAL_USER_ID, LS_LOCAL_EMAIL, LS_LOCAL_NAME];
+        for (const k of EMAIL_AUTH_KEYS) localStorage.removeItem(k);
+
+        function rawUserRole(u) {
+          return String(
+            u?.role ?? u?.Role ?? u?.[COL_USER_ROLE] ?? u?.loma ?? u?.Loma ?? u?.LOMA ?? ""
+          )
+            .trim()
+            .toLowerCase();
+        }
+
+        function isGuestRole(uOrRole) {
+          const v = typeof uOrRole === "string" ? String(uOrRole).trim().toLowerCase() : rawUserRole(uOrRole);
+          return v === "viesis" || v === "guest" || v === "viesi";
+        }
+
+        function setEmailAuthSession({ userId, email, displayName }) {
+          sessionStorage.setItem(LS_LOCAL_OK, "1");
+          sessionStorage.setItem(LS_LOCAL_USER_ID, String(userId ?? "").trim());
+          sessionStorage.setItem(LS_LOCAL_EMAIL, String(email ?? "").trim().toLowerCase());
+          if (String(displayName ?? "").trim()) {
+            sessionStorage.setItem(LS_LOCAL_NAME, String(displayName).trim());
+          }
+          for (const k of EMAIL_AUTH_KEYS) localStorage.removeItem(k);
+        }
+
+        function clearEmailAuthSession() {
+          for (const k of EMAIL_AUTH_KEYS) removeStickyAuthValue(k);
+        }
+
+        function findTeamUserByEmail(email) {
+          const entered = String(email ?? "").trim().toLowerCase();
+          if (!entered || !entered.includes("@")) return null;
+          const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
+          const list = Array.isArray(users) ? users : [];
+          return (
+            list.find(
+              (u) =>
+                String(u?.email ?? u?.["i-mail"] ?? u?.["e-mail"] ?? u?.["e-pasts"] ?? "")
+                  .trim()
+                  .toLowerCase() === entered
+            ) ?? null
+          );
+        }
+
+        function emailAuthSessionActive() {
+          if (ADMIN_AUTO_ENTER && isLocalMode()) return true;
+          if (sessionStorage.getItem(LS_LOCAL_OK) !== "1") return false;
+          const entered = String(sessionStorage.getItem(LS_LOCAL_EMAIL) || "").trim().toLowerCase();
+          if (!entered || !entered.includes("@")) return false;
+          const picked = findTeamUserByEmail(entered);
+          if (!picked) return false;
+          if (isGuestRole(picked)) return false;
+          return true;
         }
         /** Pamata e-pasts paziņojumiem, kad nav aktīva aizvietotāja (saskaņā ar PDD iestatījumiem). */
         const DEFAULT_MANAGER_EMAIL = "pliada@inbox.lv";
@@ -2015,18 +2076,7 @@
         }
 
         function localSessionActive() {
-          if (ADMIN_AUTO_ENTER && isLocalMode()) return true;
-          if (getStickyAuthValue(LS_LOCAL_OK) !== "1") return false;
-          const entered = String(getStickyAuthValue(LS_LOCAL_EMAIL) || "").trim().toLowerCase();
-          if (!entered || !entered.includes("@")) return false;
-          const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
-          const list = Array.isArray(users) ? users : [];
-          return list.some(
-            (u) =>
-              String(u?.email ?? u?.["i-mail"] ?? u?.["e-mail"] ?? u?.["e-pasts"] ?? "")
-                .trim()
-                .toLowerCase() === entered
-          );
+          return emailAuthSessionActive();
         }
 
         function ensureLocalAdminSession() {
@@ -2064,25 +2114,28 @@
               setErr("Ievadi darba e-pastu.");
               return;
             }
-            const pickedUser =
-              teamUsers.find((u) => String(u.email ?? u["i-mail"] ?? u["e-pasts"] ?? "").trim().toLowerCase() === entered) ??
-              null;
+            const pickedUser = findTeamUserByEmail(entered);
             if (!pickedUser) {
               setErr("Šis e-pasts nav atrasts Komandas tabulā.");
               return;
             }
+            if (isGuestRole(pickedUser)) {
+              setErr("Lietotājiem ar lomu „viesis” pieeja nav atļauta.");
+              return;
+            }
 
-            setStickyAuthValue(LS_LOCAL_OK, "1");
-            setStickyAuthValue(LS_LOCAL_USER_ID, String(pickedUser.id));
-            setStickyAuthValue(LS_LOCAL_EMAIL, entered);
             const nm = pickedUser[COL_USER_NAME] ?? pickedUser.full_name ?? pickedUser["Vārds uzvārds"] ?? "";
-            if (String(nm || "").trim()) setStickyAuthValue(LS_LOCAL_NAME, String(nm).trim());
+            setEmailAuthSession({
+              userId: pickedUser.id,
+              email: entered,
+              displayName: String(nm || "").trim(),
+            });
             location.reload();
           }
           return html`
             <div class="auth-box" style=${{ maxWidth: "420px" }}>
               <h1>PDD — ieeja</h1>
-              <p class="app-sub">Pagaidu režīms: dati tikai šajā pārlūkā.</p>
+              <p class="app-sub">Ievadi darba e-pastu. Lomai „viesis” pieeja nav atļauta.</p>
               <form class="stack" onSubmit=${submit}>
                 <div class="field">
                   <label for="loc-email">e-pasts</label>
@@ -2138,29 +2191,19 @@
               setLoading(false);
               return;
             }
-            if (localSessionActive()) {
-              const uid = getStickyAuthValue(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
-              const em = getStickyAuthValue(LS_LOCAL_EMAIL) || "demo@local";
-              setSession({ user: { id: uid, email: em } });
-              setLoading(false);
-              return;
-            }
-            if (!supabase) {
-              setLoading(false);
-              return;
-            }
-            let cancelled = false;
-            supabase.auth.getSession().then(({ data }) => {
-              if (!cancelled) {
-                setSession(data.session);
-                setLoading(false);
+            if (configured() && !TIKAI_VIENKARSI_SKATS) {
+              if (emailAuthSessionActive()) {
+                const uid = getStickyAuthValue(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
+                const em = getStickyAuthValue(LS_LOCAL_EMAIL) || "";
+                setSession({ user: { id: uid, email: em } });
+              } else {
+                setSession(null);
               }
-            });
-            const { data } = supabase.auth.onAuthStateChange((_e, next) => setSession(next));
-            return () => {
-              cancelled = true;
-              data.subscription.unsubscribe();
-            };
+              setLoading(false);
+              return;
+            }
+            setSession(null);
+            setLoading(false);
           }, []);
           return { session, loading };
         }
@@ -2316,10 +2359,7 @@
                   return;
                 }
                 const list = Array.isArray(data) ? data : [];
-                const user =
-                  list.find(
-                    (u) => String(u?.email ?? u?.["i-mail"] ?? u?.["e-mail"] ?? u?.["e-pasts"] ?? "").trim().toLowerCase() === entered
-                  ) ?? null;
+                const user = findTeamUserByEmail(entered);
                 if (!user) {
                   if (rpcErr) {
                     setMessage(
@@ -2333,9 +2373,19 @@
                 }
                 uid = String(user.id);
               }
-              setStickyAuthValue(LS_LOCAL_OK, "1");
-              setStickyAuthValue(LS_LOCAL_USER_ID, uid);
-              setStickyAuthValue(LS_LOCAL_EMAIL, entered);
+              const picked = findTeamUserByEmail(entered);
+              if (picked && isGuestRole(picked)) {
+                setMessage("Lietotājiem ar lomu „viesis” pieeja nav atļauta.");
+                return;
+              }
+              if (uid && supabase) {
+                const { data: urow } = await supabase.from("users").select("*").eq("id", uid).maybeSingle();
+                if (urow && isGuestRole(urow)) {
+                  setMessage("Lietotājiem ar lomu „viesis” pieeja nav atļauta.");
+                  return;
+                }
+              }
+              setEmailAuthSession({ userId: uid, email: entered });
               location.reload();
             } finally {
               setBusy(false);
@@ -2345,7 +2395,8 @@
             <div class="auth-box">
               <h1>PDD — Pieslēgšanās</h1>
               <p style=${{ margin: "0 0 1rem", fontSize: "0.88rem", color: "var(--muted)" }}>
-                Tikai <strong>darba e-pasts</strong>. Parole nav nepieciešama.
+                Ievadi <strong>darba e-pastu</strong> no Komandas tabulas. Lietotājiem ar lomu <strong>viesis</strong> pieeja
+                nav atļauta.
               </p>
               <form class="stack" onSubmit=${onSubmit}>
                 <div class="field">
@@ -7132,6 +7183,13 @@
         function App() {
           const { session, loading } = useSession();
           const { profile, loading: profileLoading } = useProfile(session?.user?.id, session?.user?.email);
+          useEffect(() => {
+            if (!session?.user || profileLoading || !profile) return;
+            if (isGuestRole(profile.raw_role ?? profile[COL_USER_ROLE] ?? profile)) {
+              clearEmailAuthSession();
+              location.reload();
+            }
+          }, [session?.user, profile, profileLoading]);
           /** `??` neaizstāj tukšu virkni — normalizēts profils var dot id "", tad jāņem auth/local uid. */
           const effectiveUserId = (() => {
             const a = String(profile?.id ?? "").trim();
@@ -7162,7 +7220,14 @@
           const [promSub, setPromSub] = useState("calendar");
           const [navPast, setNavPast] = useState([]);
           const [darbaUzdevumiFocus, setDarbaUzdevumiFocus] = useState(null);
-          const APP_CHANGES_SEEN_KEY = "pdd_app_changes_seen_stamp_v1";
+          const APP_CHANGES_SEEN_KEY = "pdd_app_changes_seen_id_v2";
+          function parseAppChangesSeenId(raw) {
+            const s = String(raw ?? "").trim();
+            if (!s) return "";
+            const pipe = s.lastIndexOf("|");
+            if (pipe >= 0) return s.slice(pipe + 1).trim();
+            return s;
+          }
           const [showPddAppChangesBadge, setShowPddAppChangesBadge] = useState(false);
           const [appChangesHighlightId, setAppChangesHighlightId] = useState("");
           const PINNED_SECTIONS_LS_KEY = "pdd_pinned_sections_v1";
@@ -7412,7 +7477,7 @@
               await ensureDbReadableSession();
               const rows = await M.fetchRows(sb);
               const latest = String(M.latestStamp(rows) || "").trim();
-              const seen = String(localStorage.getItem(APP_CHANGES_SEEN_KEY) || "").trim();
+              const seen = parseAppChangesSeenId(localStorage.getItem(APP_CHANGES_SEEN_KEY));
               setShowPddAppChangesBadge(Boolean(latest && latest !== seen));
             } catch {
               setShowPddAppChangesBadge(false);
@@ -7495,11 +7560,8 @@
                 await ensureDbReadableSession();
                 const rows = await M.fetchRows(sb);
                 const latest = String(M.latestStamp(rows) || "").trim();
-                const seen = String(localStorage.getItem(APP_CHANGES_SEEN_KEY) || "").trim();
-                if (latest && latest !== seen) {
-                  const newestId = String(rows?.[0]?.id ?? "").trim();
-                  if (newestId) setAppChangesHighlightId(newestId);
-                }
+                const seen = parseAppChangesSeenId(localStorage.getItem(APP_CHANGES_SEEN_KEY));
+                if (latest && latest !== seen) setAppChangesHighlightId(latest);
                 if (latest) localStorage.setItem(APP_CHANGES_SEEN_KEY, latest);
                 setShowPddAppChangesBadge(false);
               } catch {
@@ -7662,11 +7724,8 @@
               setView("home");
               return;
             }
-            if (isLocalMode() || getStickyAuthValue(LS_LOCAL_OK) === "1") {
-              removeStickyAuthValue(LS_LOCAL_OK);
-              sessionStorage.removeItem(LS_LOCAL_NAME);
-              removeStickyAuthValue(LS_LOCAL_USER_ID);
-              removeStickyAuthValue(LS_LOCAL_EMAIL);
+            clearEmailAuthSession();
+            if (isLocalMode() || configured()) {
               setNavPast([]);
               setView("home");
               location.reload();
