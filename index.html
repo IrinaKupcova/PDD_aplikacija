@@ -552,26 +552,38 @@
           for (const k of EMAIL_AUTH_KEYS) removeStickyAuthValue(k);
         }
 
-        function findTeamUserByEmail(email) {
+        function userEmailKeys() {
+          return ["email", "i-mail", "e-mail", "e-pasts"];
+        }
+
+        function matchUserEmail(user, email) {
           const entered = String(email ?? "").trim().toLowerCase();
-          if (!entered || !entered.includes("@")) return null;
+          if (!entered || !entered.includes("@")) return false;
+          const u = user && typeof user === "object" ? user : {};
+          return userEmailKeys().some((k) => String(u[k] ?? "").trim().toLowerCase() === entered);
+        }
+
+        function findUserByEmailInList(list, email) {
+          const arr = Array.isArray(list) ? list : [];
+          return arr.find((u) => matchUserEmail(u, email)) ?? null;
+        }
+
+        function findTeamUserByEmail(email) {
           const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
-          const list = Array.isArray(users) ? users : [];
-          return (
-            list.find(
-              (u) =>
-                String(u?.email ?? u?.["i-mail"] ?? u?.["e-mail"] ?? u?.["e-pasts"] ?? "")
-                  .trim()
-                  .toLowerCase() === entered
-            ) ?? null
-          );
+          return findUserByEmailInList(users, email);
         }
 
         function emailAuthSessionActive() {
           if (ADMIN_AUTO_ENTER && isLocalMode()) return true;
           if (sessionStorage.getItem(LS_LOCAL_OK) !== "1") return false;
           const entered = String(sessionStorage.getItem(LS_LOCAL_EMAIL) || "").trim().toLowerCase();
-          if (!entered || !entered.includes("@")) return false;
+          const uid = String(sessionStorage.getItem(LS_LOCAL_USER_ID) || "").trim();
+          if (!entered || !entered.includes("@") || !uid) return false;
+          if (configured() && !TIKAI_VIENKARSI_SKATS && !isLocalMode()) {
+            const localHit = findTeamUserByEmail(entered);
+            if (localHit && isGuestRole(localHit)) return false;
+            return true;
+          }
           const picked = findTeamUserByEmail(entered);
           if (!picked) return false;
           if (isGuestRole(picked)) return false;
@@ -2116,7 +2128,7 @@
             }
             const pickedUser = findTeamUserByEmail(entered);
             if (!pickedUser) {
-              setErr("Šis e-pasts nav atrasts Komandas tabulā.");
+              setErr("Neatpazīts darba e-pasts.");
               return;
             }
             if (isGuestRole(pickedUser)) {
@@ -2135,7 +2147,7 @@
           return html`
             <div class="auth-box" style=${{ maxWidth: "420px" }}>
               <h1>PDD — ieeja</h1>
-              <p class="app-sub">Ievadi darba e-pastu. Lomai „viesis” pieeja nav atļauta.</p>
+              <p class="app-sub">Ieeja ar darba e-pastu.</p>
               <form class="stack" onSubmit=${submit}>
                 <div class="field">
                   <label for="loc-email">e-pasts</label>
@@ -2359,7 +2371,7 @@
                   return;
                 }
                 const list = Array.isArray(data) ? data : [];
-                const user = findTeamUserByEmail(entered);
+                const user = findUserByEmailInList(list, entered) ?? findTeamUserByEmail(entered);
                 if (!user) {
                   if (rpcErr) {
                     setMessage(
@@ -2367,7 +2379,7 @@
                         "\n\nJa esi administrators: palaid Supabase SQL skriptu `pdd_lookup_user_by_email` (migration)."
                     );
                   } else {
-                    setMessage("Šis e-pasts nav atrasts Komandas tabulā.");
+                    setMessage("Neatpazīts darba e-pasts.");
                   }
                   return;
                 }
@@ -2395,8 +2407,7 @@
             <div class="auth-box">
               <h1>PDD — Pieslēgšanās</h1>
               <p style=${{ margin: "0 0 1rem", fontSize: "0.88rem", color: "var(--muted)" }}>
-                Ievadi <strong>darba e-pastu</strong> no Komandas tabulas. Lietotājiem ar lomu <strong>viesis</strong> pieeja
-                nav atļauta.
+                Ieeja ar <strong>darba e-pastu</strong>.
               </p>
               <form class="stack" onSubmit=${onSubmit}>
                 <div class="field">
