@@ -938,8 +938,9 @@ function onPickAttachment(ev) {
       alert(
         "Neizdevās augšupielādēt pielikumu uz Supabase Storage: " +
           (e?.message || String(e)) +
-          ". Pārbaudi bucketu/politikas.",
+          ". Pielikums tiks ievietots lokāli šajā ierakstā."
       );
+      fallbackToInline();
     });
   } else {
     fallbackToInline();
@@ -1299,6 +1300,14 @@ const sodienAktHtmlBox = {
   overflowX: "auto",
 };
 
+function htmlHasAttachments(htmlRaw) {
+  const s = String(htmlRaw ?? "");
+  if (!s) return false;
+  if (/data-akt-attachment/i.test(s)) return true;
+  if (/pdd-aktualitates-files/i.test(s)) return true;
+  return false;
+}
+
 function renderTodayInfo({
   html,
   absences,
@@ -1415,6 +1424,9 @@ function renderTodayInfo({
                     >
                       <div style=${{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.3rem", ...sodienAktFlexibleBox }}>
                         ${x.use_period ? `Periods: ${formatLvDate(x.start)} — ${formatLvDate(x.end)}` : `Datums: ${formatLvDate(x.start)}`}
+                        ${htmlHasAttachments(x.html)
+                          ? html`<span class="pdd-attach-clip" title="Ir pievienots pielikums" aria-label="Ir pievienots pielikums">📎</span>`
+                          : null}
                       </div>
                       <div style=${{ fontSize: "0.82rem", color: "var(--muted)", marginBottom: "0.3rem", ...sodienAktFlexibleBox }}>
                         Autors: ${pick(x.authorLabel) || "—"}
@@ -1570,6 +1582,9 @@ function renderTodayInfo({
                     ${String(t?.module || "Darba uzdevumi")} · ${String(t?.subtitle || "").trim() ? `${String(t.subtitle).trim()} — ` : ""}${String(t?.title || "Uzdevums")}
                     ${String(t?.topic || "").trim() ? ` · Tēma: ${String(t.topic).trim()}` : ""}
                     ${String(t?.dueDate || "").trim() ? ` (${formatLvDate(String(t.dueDate))})` : ""}
+                    ${t?.hasAttachments
+                      ? html`<span class="pdd-attach-clip" title="Ir pievienots pielikums" aria-label="Ir pievienots pielikums">📎</span>`
+                      : null}
                   </button>
                 `
               )}
@@ -1582,6 +1597,7 @@ function renderTodayInfo({
 
 window.PDDSodien = {
   renderTodayInfo,
+  htmlHasAttachments,
   loadAktualitates,
   visibleAktualitatesActive,
   fetchActiveAktualitatesFromSupabase,

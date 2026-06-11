@@ -115,6 +115,11 @@
 -- Dress_code, Ko_nemt_lidzi, Dalibas_maksa, Brivs_apraksts, Papildu_piezimes, Pielikumi (jsonb)
 `;
 
+  function eventHasAttachments(ev) {
+    const list = ev?.attachments;
+    return Array.isArray(list) && list.length > 0;
+  }
+
   function ensureStyles() {
     if (typeof document === "undefined") return;
     if (document.getElementById("pdd-saliedesana-style-v2")) return;
@@ -464,7 +469,20 @@
     const details = src.details && typeof src.details === "object" ? src.details : (metaObj.details && typeof metaObj.details === "object" ? metaObj.details : {});
     const poll = src.poll && typeof src.poll === "object" ? src.poll : emptyPoll();
     const participantsRaw = src.participants && typeof src.participants === "object" ? src.participants : {};
-    const colAttachments = src.Pielikumi !== undefined && src.Pielikumi !== null ? src.Pielikumi : src.pielikumi;
+    let colAttachments = src.Pielikumi !== undefined && src.Pielikumi !== null ? src.Pielikumi : src.pielikumi;
+    if (typeof colAttachments === "string") {
+      const rawCol = String(colAttachments).trim();
+      if (rawCol) {
+        try {
+          const parsedCol = JSON.parse(rawCol);
+          colAttachments = Array.isArray(parsedCol) ? parsedCol : parsedCol && typeof parsedCol === "object" ? [parsedCol] : [];
+        } catch {
+          colAttachments = [];
+        }
+      } else {
+        colAttachments = [];
+      }
+    }
     const attachments = Array.isArray(colAttachments)
       ? colAttachments
       : Array.isArray(src.attachments)
@@ -628,9 +646,9 @@
       ),
       attachments: attachments
         .map((a) => ({
-          label: String(a?.label ?? "").trim(),
-          url: String(a?.url ?? "").trim(),
-          kind: String(a?.kind ?? "").trim() || "link",
+          label: String(a?.label ?? a?.name ?? "").trim(),
+          url: String(a?.url ?? a?.dataUrl ?? a?.href ?? "").trim(),
+          kind: String(a?.kind ?? a?.type ?? "").trim() || "link",
           storagePath: String(a?.storagePath ?? a?.storage_path ?? "").trim(),
         }))
         .filter((a) => a.label && a.url),
@@ -983,7 +1001,7 @@
         const icon = String(ev?.icon || "").trim() || "✨";
         const txt = String(ev?.title || "").trim();
         const eventId = String(ev?.id || "").trim();
-        badge.textContent = `${icon} ${txt}`;
+        badge.textContent = `${icon} ${txt}${eventHasAttachments(ev) ? " 📎" : ""}`;
         badge.title = txt;
         badge.setAttribute("aria-label", txt ? `Atvērt pasākumu: ${txt}` : "Atvērt pasākumu");
         const pal = salCalPaletteForEvent(ev);
@@ -2798,6 +2816,7 @@
                           title="Labot ierakstu"
                         >
                           ${(e.icon ? `${e.icon} ` : "") + e.title}
+                          ${eventHasAttachments(e) ? html`<span class="pdd-attach-clip" title="Ir pievienots pielikums" aria-label="Ir pievienots pielikums">📎</span>` : null}
                         </span>
                       `;
                       })}
@@ -2815,7 +2834,10 @@
               ${sortedEvents.length
                 ? sortedEvents.map((e) => html`
                     <article key=${`hist-${e.id}`} class="sal-history-item" onClick=${() => openCardEdit(e)}>
-                      <strong>${(e.icon ? `${e.icon} ` : "") + e.title}</strong>
+                      <strong>
+                        ${(e.icon ? `${e.icon} ` : "") + e.title}
+                        ${eventHasAttachments(e) ? html`<span class="pdd-attach-clip" title="Ir pievienots pielikums" aria-label="Ir pievienots pielikums">📎</span>` : null}
+                      </strong>
                       <span class="sal-history-meta">${formatDateTime(e)} · ${e.location || (e.online ? "online" : "—")}</span>
                       <div class="sal-history-actions">
                         <button

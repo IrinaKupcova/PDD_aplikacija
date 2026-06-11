@@ -448,6 +448,15 @@
         .cal-chip {
           cursor: pointer;
         }
+        .pdd-attach-clip {
+          display: inline-flex;
+          align-items: center;
+          margin-left: 0.28rem;
+          font-size: 0.92em;
+          line-height: 1;
+          opacity: 0.92;
+          vertical-align: middle;
+        }
       </style>
     </head>
     <body>
@@ -455,21 +464,21 @@
       <div id="root"></div>
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
-      <script src="./Komanda.js?v=2026051312"></script>
-      <script src="./IAD.js?v=20260443"></script>
-      <script src="./Saliedesana.js?v=2026051320"></script>
-      <script src="./supabase/migrations/izmainas.js?v=2026051524"></script>
-      <script src="./Sodien.js?v=20260422l"></script>
-      <script src="./Kalendars.js?v=20260422e"></script>
-      <script src="./Navigacija.js?v=2026051320"></script>
-      <script src="./Filtr.js?v=20260407"></script>
-      <script src="./Saskaņošana.js?v=20260407"></script>
-      <script src="./Prombutnes_pieteikums.js?v=20260515"></script>
-      <script src="./Prombutnes_vesture.js?v=20260515"></script>
-      <script src="./Atvalinajumi.js?v=2026051523"></script>
+      <script defer src="./Komanda.js?v=2026051312"></script>
+      <script defer src="./IAD.js?v=202605193"></script>
+      <script defer src="./Saliedesana.js?v=2026051320"></script>
+      <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
+      <script defer src="./Sodien.js?v=20260422l"></script>
+      <script defer src="./Kalendars.js?v=20260422e"></script>
+      <script defer src="./Navigacija.js?v=2026051320"></script>
+      <script defer src="./Filtr.js?v=20260407"></script>
+      <script defer src="./Saskaņošana.js?v=20260407"></script>
+      <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
+      <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
+      <script defer src="./Atvalinajumi.js?v=202605192"></script>
 
       <script type="module">
-        import React, { useState, useEffect, useCallback, useMemo } from "https://esm.sh/react@19.0.0";
+        import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
         import { createRoot } from "https://esm.sh/react-dom@19.0.0/client";
         import htm from "https://esm.sh/htm@3.1.1";
         import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
@@ -1279,6 +1288,34 @@
         }
 
         const html = htm.bind(React.createElement);
+        function deferNonCritical(fn) {
+          const run = () => {
+            try {
+              void fn();
+            } catch {
+              /* ignore */
+            }
+          };
+          if (typeof requestIdleCallback === "function") {
+            requestIdleCallback(run, { timeout: 1500 });
+          } else {
+            setTimeout(run, 1);
+          }
+        }
+        let cachedIadPanel = null;
+        let cachedSaliedesanaPanel = null;
+        function getIadPanel() {
+          if (!cachedIadPanel && globalThis.IAD?.createIadModule) {
+            cachedIadPanel = globalThis.IAD.createIadModule(html, React);
+          }
+          return cachedIadPanel;
+        }
+        function getSaliedesanaPanel() {
+          if (!cachedSaliedesanaPanel && globalThis.SALIEDESANA?.createSaliedesanaPanel) {
+            cachedSaliedesanaPanel = globalThis.SALIEDESANA.createSaliedesanaPanel(html, React);
+          }
+          return cachedSaliedesanaPanel;
+        }
         const AppShellWithNav =
           globalThis.PDD_NAV?.createAppShellWithNav?.(html) ??
           (({ header, children }) => html`
@@ -1531,6 +1568,9 @@
           const s2 = await supabase.auth.getSession();
           if (!s2.error && s2.data?.session?.access_token) return true;
           return false;
+        }
+        if (supabase && configured() && !isLocalMode() && !TIKAI_VIENKARSI_SKATS) {
+          void ensureDbReadableSession();
         }
 
         async function restAuthHeaders() {
@@ -2179,50 +2219,74 @@
           `;
         }
 
-        function useSession() {
-          const [session, setSession] = useState(null);
-          const [loading, setLoading] = useState(true);
-          useEffect(() => {
-            if (TIKAI_VIENKARSI_SKATS) {
-              ensureLocalAdminSession();
+        function readSessionSnapshot() {
+          if (TIKAI_VIENKARSI_SKATS) {
+            ensureLocalAdminSession();
+            const uid = getStickyAuthValue(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
+            const em = getStickyAuthValue(LS_LOCAL_EMAIL) || "local@pdd";
+            return { session: { user: { id: uid, email: em } }, loading: false };
+          }
+          if (isLocalMode()) {
+            ensureLocalAdminSession();
+            if (localSessionActive()) {
               const uid = getStickyAuthValue(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
-              const em = getStickyAuthValue(LS_LOCAL_EMAIL) || "local@pdd";
-              setSession({ user: { id: uid, email: em } });
-              setLoading(false);
-              return;
+              const em = getStickyAuthValue(LS_LOCAL_EMAIL) || "demo@local";
+              return { session: { user: { id: uid, email: em } }, loading: false };
             }
-            if (isLocalMode()) {
-              ensureLocalAdminSession();
-              if (localSessionActive()) {
-                const uid = getStickyAuthValue(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
-                const em = getStickyAuthValue(LS_LOCAL_EMAIL) || "demo@local";
-                setSession({ user: { id: uid, email: em } });
-              } else {
-                setSession(null);
-              }
-              setLoading(false);
-              return;
+            return { session: null, loading: false };
+          }
+          if (configured() && !TIKAI_VIENKARSI_SKATS) {
+            if (emailAuthSessionActive()) {
+              const uid = getStickyAuthValue(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
+              const em = getStickyAuthValue(LS_LOCAL_EMAIL) || "";
+              return { session: { user: { id: uid, email: em } }, loading: false };
             }
-            if (configured() && !TIKAI_VIENKARSI_SKATS) {
-              if (emailAuthSessionActive()) {
-                const uid = getStickyAuthValue(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
-                const em = getStickyAuthValue(LS_LOCAL_EMAIL) || "";
-                setSession({ user: { id: uid, email: em } });
-              } else {
-                setSession(null);
-              }
-              setLoading(false);
-              return;
-            }
-            setSession(null);
-            setLoading(false);
+            return { session: null, loading: false };
+          }
+          return { session: null, loading: false };
+        }
+
+        function useSession() {
+          const [session, setSession] = useState(() => readSessionSnapshot().session);
+          const [loading, setLoading] = useState(() => readSessionSnapshot().loading);
+          useEffect(() => {
+            const snap = readSessionSnapshot();
+            setSession(snap.session);
+            setLoading(snap.loading);
           }, []);
           return { session, loading };
         }
 
+        function readProfileBootstrap(userId, sessionEmail) {
+          if (!userId) return { profile: null, loading: false };
+          if (isLocalMode() || TIKAI_VIENKARSI_SKATS) {
+            return { profile: null, loading: Boolean(userId) };
+          }
+          if (!supabase) return { profile: null, loading: false };
+          const users = window.KOMANDA?.loadTeamUsers?.() ?? [];
+          const uid = String(userId).trim();
+          const em = String(sessionEmail || "").trim().toLowerCase();
+          let me = (Array.isArray(users) ? users : []).find((u) => String(u?.id ?? "").trim() === uid);
+          if (!me && em) {
+            me = users.find((u) => {
+              const a = String(u?.email ?? "").trim().toLowerCase();
+              const b = String(u?.["i-mail"] ?? "").trim().toLowerCase();
+              const c = String(u?.["e-mail"] ?? "").trim().toLowerCase();
+              return a === em || b === em || c === em;
+            });
+          }
+          if (me) {
+            return {
+              profile: normalizeTeamUserRecord({ ...me, id: uid }),
+              loading: true,
+            };
+          }
+          return { profile: null, loading: true };
+        }
+
         function useProfile(userId, sessionEmail) {
-          const [profile, setProfile] = useState(null);
-          const [loading, setLoading] = useState(Boolean(userId));
+          const [profile, setProfile] = useState(() => readProfileBootstrap(userId, sessionEmail).profile);
+          const [loading, setLoading] = useState(() => readProfileBootstrap(userId, sessionEmail).loading);
           useEffect(() => {
             if (!userId) {
               setProfile(null);
@@ -2255,8 +2319,14 @@
               return;
             }
             let cancelled = false;
-            setLoading(true);
-            (async () => {
+            const boot = readProfileBootstrap(userId, sessionEmail);
+            if (boot.profile) setProfile(boot.profile);
+            else {
+              setProfile(null);
+              setLoading(true);
+            }
+            deferNonCritical(async () => {
+              if (cancelled) return;
               await ensureDbReadableSession();
               const q1 = await supabase.from("users").select("*").eq("id", userId).maybeSingle();
               let data = q1.data;
@@ -2296,7 +2366,7 @@
                 }
                 setLoading(false);
               }
-            })();
+            });
             return () => {
               cancelled = true;
             };
@@ -2545,9 +2615,14 @@
                                 <span style=${{ fontSize: "0.82rem", color: "var(--muted)" }}>
                                   ${formatLvDate(x.start)} — ${formatLvDate(x.end)}
                                 </span>
-                                ${active
-                                  ? html`<span style=${{ fontSize: "0.75rem", fontWeight: 600, color: "#047857" }}>Aktīvs</span>`
-                                  : html`<span style=${{ fontSize: "0.75rem", color: "var(--muted)" }}>Periods beidzies</span>`}
+                                <span class="row" style=${{ gap: "0.35rem", alignItems: "center" }}>
+                                  ${globalThis.PDDSodien?.htmlHasAttachments?.(x.html)
+                                    ? html`<span class="pdd-attach-clip" title="Ir pievienots pielikums" aria-label="Ir pievienots pielikums">📎</span>`
+                                    : null}
+                                  ${active
+                                    ? html`<span style=${{ fontSize: "0.75rem", fontWeight: 600, color: "#047857" }}>Aktīvs</span>`
+                                    : html`<span style=${{ fontSize: "0.75rem", color: "var(--muted)" }}>Periods beidzies</span>`}
+                                </span>
                               </div>
                               <div style=${{ fontSize: "0.82rem", color: "var(--muted)", marginBottom: "0.35rem" }}>
                                 Autors: ${String(x.authorLabel || "—").trim()}
@@ -2677,10 +2752,10 @@
           }, []);
           useEffect(() => {
             if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !globalThis.__PDD_SUPABASE__) return;
-            void refreshSodienAktualitates();
+            deferNonCritical(() => refreshSodienAktualitates());
           }, [refreshSodienAktualitates]);
           useEffect(() => {
-            void refreshTodayTasks();
+            deferNonCritical(() => refreshTodayTasks());
           }, [refreshTodayTasks]);
           useEffect(() => {
             const sb = globalThis.__PDD_SUPABASE__;
@@ -3188,6 +3263,7 @@
           onConsumePreset,
           canApproveRequests,
           onGoToAtvalinajumiGrafiks,
+          onClose,
         }) {
           const [types, setTypes] = useState([]);
           const [typeId, setTypeId] = useState("");
@@ -3299,6 +3375,11 @@
             setCitsFromTime("09:00");
             setCitsToTime("17:00");
             if (typeof onConsumePreset === "function") onConsumePreset();
+          }
+
+          function closeAbsenceForm() {
+            cancelAbsenceForm();
+            if (typeof onClose === "function") onClose();
           }
 
           function goToAtvalinajumiGrafiks() {
@@ -3859,11 +3940,25 @@
           }
           return html`
             <div class="list-panel">
-              <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
-                <strong>Cits (ar vadītāja saskaņojumu)</strong> — obligāta e-pasta saskaņošana: pieprasījums un saite uz
-                <strong> katrina.jirgensone@vid.gov.lv</strong>. Pārējie veidi tiek ierakstīti kā apstiprināti un
-                uzreiz redzami kalendārā (bez atsevišķa akcepta soļa šeit).
-              </p>
+              <div
+                class="row"
+                style=${{ justifyContent: "space-between", alignItems: "flex-start", gap: "0.75rem", marginBottom: "0.75rem" }}
+              >
+                <p style=${{ margin: 0, fontSize: "0.82rem", color: "var(--muted)", flex: "1 1 auto" }}>
+                  <strong>Cits (ar vadītāja saskaņojumu)</strong> — obligāta e-pasta saskaņošana: pieprasījums un saite uz
+                  <strong> katrina.jirgensone@vid.gov.lv</strong>. Pārējie veidi tiek ierakstīti kā apstiprināti un
+                  uzreiz redzami kalendārā (bez atsevišķa akcepta soļa šeit).
+                </p>
+                <button
+                  type="button"
+                  class="btn btn-ghost"
+                  style=${{ flex: "0 0 auto" }}
+                  disabled=${busy}
+                  onClick=${closeAbsenceForm}
+                >
+                  Aizvērt
+                </button>
+              </div>
               <form class="stack" onSubmit=${handleSubmit}>
                 <div class="field">
                   <label>Darbinieks</label>
@@ -4091,6 +4186,9 @@
                   </button>
                   <button type="button" class="btn btn-ghost" disabled=${busy} onClick=${cancelAbsenceForm}>
                     Atcelt
+                  </button>
+                  <button type="button" class="btn btn-ghost" disabled=${busy} onClick=${closeAbsenceForm}>
+                    Aizvērt
                   </button>
                 </div>
               </form>
@@ -6645,6 +6743,8 @@
           onAbsencesSnapshot,
           sessionEmail,
           actorDisplayName,
+          canGoBack,
+          onGoBack,
         }) {
           const [month, setMonth] = useState(() => new Date());
           const [absences, setAbsences] = useState([]);
@@ -6663,6 +6763,22 @@
           const [highlightAbsenceId, setHighlightAbsenceId] = useState(null);
           const [requestPresetDate, setRequestPresetDate] = useState("");
           const [highlightFromUrl, setHighlightFromUrl] = useState(null);
+          const requestReturnPromSubRef = useRef("calendar");
+          const prevPromSubRef = useRef(promSub);
+          useEffect(() => {
+            const prev = prevPromSubRef.current;
+            if (promSub === "request" && prev !== "request") {
+              requestReturnPromSubRef.current = prev && prev !== "request" ? prev : "calendar";
+            }
+            prevPromSubRef.current = promSub;
+          }, [promSub]);
+          function closeRequestForm() {
+            if (canGoBack && typeof onGoBack === "function") {
+              onGoBack();
+              return;
+            }
+            setPromSub(requestReturnPromSubRef.current || "calendar");
+          }
           useEffect(() => {
             if (isLocalMode()) {
               setTypesList(getLocalTypes());
@@ -6986,10 +7102,27 @@
               ${promSub === "teamUsers"
                 ? null
                 : html`
-                    <div>
-                      <h2 style=${{ margin: 0, fontSize: "1.15rem" }}>Prombūtnes</h2>
-                      ${headerSubLabel
-                        ? html`<p class="app-sub" style=${{ margin: "0.25rem 0 0" }}>${headerSubLabel}</p>`
+                    <div
+                      class="row"
+                      style=${{
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        gap: "0.75rem",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <div>
+                        <h2 style=${{ margin: 0, fontSize: "1.15rem" }}>Prombūtnes</h2>
+                        ${headerSubLabel
+                          ? html`<p class="app-sub" style=${{ margin: "0.25rem 0 0" }}>${headerSubLabel}</p>`
+                          : null}
+                      </div>
+                      ${promSub === "request"
+                        ? html`
+                            <button type="button" class="btn btn-ghost" onClick=${closeRequestForm}>
+                              Aizvērt
+                            </button>
+                          `
                         : null}
                     </div>
                   `}
@@ -7073,6 +7206,7 @@
                       onConsumePreset=${() => setRequestPresetDate("")}
                       canApproveRequests=${canApprove}
                       onGoToAtvalinajumiGrafiks=${() => setPromSub("atvalinajumi")}
+                      onClose=${closeRequestForm}
                     />
                   `
                 : null}
@@ -7232,14 +7366,46 @@
           const [navPast, setNavPast] = useState([]);
           const [darbaUzdevumiFocus, setDarbaUzdevumiFocus] = useState(null);
           const APP_CHANGES_SEEN_KEY = "pdd_app_changes_seen_id_v2";
-          function parseAppChangesSeenId(raw) {
+          function appChangesStampId(raw) {
             const s = String(raw ?? "").trim();
             if (!s) return "";
             const pipe = s.lastIndexOf("|");
-            if (pipe >= 0) return s.slice(pipe + 1).trim();
-            return s;
+            const id = pipe >= 0 ? s.slice(pipe + 1).trim() : s;
+            return id.toLowerCase();
+          }
+          function appChangesSeenStorageKey() {
+            const uid = String(
+              getStickyAuthValue(LS_LOCAL_USER_ID) || session?.user?.id || ""
+            ).trim();
+            const em = String(
+              getStickyAuthValue(LS_LOCAL_EMAIL) ||
+                session?.user?.email ||
+                profile?.email ||
+                ""
+            )
+              .trim()
+              .toLowerCase();
+            const who = uid || em;
+            return who ? `${APP_CHANGES_SEEN_KEY}:${who}` : APP_CHANGES_SEEN_KEY;
+          }
+          function readAppChangesSeenId(storageKey) {
+            const scoped = appChangesStampId(localStorage.getItem(storageKey));
+            if (scoped) return scoped;
+            return appChangesStampId(localStorage.getItem(APP_CHANGES_SEEN_KEY));
+          }
+          function writeAppChangesSeenId(storageKey, stampOrId) {
+            const id = appChangesStampId(stampOrId);
+            if (!id) return;
+            localStorage.setItem(storageKey, id);
+          }
+          function isAppChangesUnread(latestStamp, seenId) {
+            const latest = appChangesStampId(latestStamp);
+            const seen = appChangesStampId(seenId);
+            return Boolean(latest && latest !== seen);
           }
           const [showPddAppChangesBadge, setShowPddAppChangesBadge] = useState(false);
+          const [appChangesLatestId, setAppChangesLatestId] = useState("");
+          const appChangesLatestIdRef = useRef("");
           const [appChangesHighlightId, setAppChangesHighlightId] = useState("");
           const PINNED_SECTIONS_LS_KEY = "pdd_pinned_sections_v1";
           function makeSectionLabel(sectionView, sectionPromSub, sectionAnchor) {
@@ -7483,17 +7649,22 @@
               const sb = globalThis.__PDD_SUPABASE__;
               if (!M?.fetchRows || !M?.latestStamp || !sb || TIKAI_VIENKARSI_SKATS || isLocalMode()) {
                 setShowPddAppChangesBadge(false);
+                setAppChangesLatestId("");
                 return;
               }
               await ensureDbReadableSession();
               const rows = await M.fetchRows(sb);
               const latest = String(M.latestStamp(rows) || "").trim();
-              const seen = parseAppChangesSeenId(localStorage.getItem(APP_CHANGES_SEEN_KEY));
-              setShowPddAppChangesBadge(Boolean(latest && latest !== seen));
+              const latestId = appChangesStampId(latest);
+              const seenKey = appChangesSeenStorageKey();
+              const seen = readAppChangesSeenId(seenKey);
+              appChangesLatestIdRef.current = latestId;
+              setAppChangesLatestId(latestId);
+              setShowPddAppChangesBadge(isAppChangesUnread(latest, seen));
             } catch {
               setShowPddAppChangesBadge(false);
             }
-          }, []);
+          }, [session?.user?.id, session?.user?.email, profile?.email]);
           const onAbsencesSnapshot = useCallback((list, uid, canAppr) => {
             const V = globalThis.PDDPrombutnesVesture;
             setPendingCitsNav(Boolean(V?.shouldShowPendingCitsNavBadge?.(list, uid, canAppr)));
@@ -7501,7 +7672,7 @@
           }, []);
           useEffect(() => {
             let cancelled = false;
-            (async () => {
+            deferNonCritical(async () => {
               if (!session?.user || !supabase) return;
               if (homeAbsencesSnapshot.length > 0) return;
               await ensureDbReadableSession();
@@ -7550,19 +7721,22 @@
                   };
                 });
               setHomeAbsencesSnapshot(list);
-            })();
+            });
             return () => {
               cancelled = true;
             };
           }, [session?.user, homeAbsencesSnapshot.length]);
           useEffect(() => {
-            void refreshAppChangesBadge();
+            deferNonCritical(() => refreshAppChangesBadge());
           }, [refreshAppChangesBadge]);
           useEffect(() => {
             if (view !== "pddAppChanges") {
               setAppChangesHighlightId("");
               return;
             }
+            setShowPddAppChangesBadge(false);
+            const seenKey = appChangesSeenStorageKey();
+            if (appChangesLatestIdRef.current) writeAppChangesSeenId(seenKey, appChangesLatestIdRef.current);
             (async () => {
               try {
                 const M = globalThis.PDD_IZMAINAS;
@@ -7571,15 +7745,18 @@
                 await ensureDbReadableSession();
                 const rows = await M.fetchRows(sb);
                 const latest = String(M.latestStamp(rows) || "").trim();
-                const seen = parseAppChangesSeenId(localStorage.getItem(APP_CHANGES_SEEN_KEY));
-                if (latest && latest !== seen) setAppChangesHighlightId(latest);
-                if (latest) localStorage.setItem(APP_CHANGES_SEEN_KEY, latest);
+                const latestId = appChangesStampId(latest);
+                const seen = readAppChangesSeenId(seenKey);
+                appChangesLatestIdRef.current = latestId;
+                setAppChangesLatestId(latestId);
+                if (isAppChangesUnread(latest, seen)) setAppChangesHighlightId(latestId);
+                if (latestId) writeAppChangesSeenId(seenKey, latestId);
                 setShowPddAppChangesBadge(false);
               } catch {
                 // ignore
               }
             })();
-          }, [view]);
+          }, [view, session?.user?.id, session?.user?.email, profile?.email]);
           useEffect(() => {
             const sb = globalThis.__PDD_SUPABASE__;
             if (!sb || isLocalMode() || TIKAI_VIENKARSI_SKATS) return undefined;
@@ -7821,8 +7998,8 @@
               `}
             >
               ${(() => {
-                const IadPanel = globalThis.IAD?.createIadModule?.(html, React);
-                const SaliedesanaPanel = globalThis.SALIEDESANA?.createSaliedesanaPanel?.(html, React);
+                const IadPanel = getIadPanel();
+                const SaliedesanaPanel = getSaliedesanaPanel();
                 if (view === "darbaUzdevumiIad") {
                   return IadPanel
                     ? html`<${IadPanel}
@@ -7903,6 +8080,8 @@
                         onAbsencesSnapshot=${onAbsencesSnapshot}
                         sessionEmail=${String(session?.user?.email || sessionStorage.getItem(LS_LOCAL_EMAIL) || "").trim()}
                         actorDisplayName=${actorDisplayName}
+                        canGoBack=${navPast.length > 0}
+                        onGoBack=${handleGoBack}
                       />`}
             </${AppShellWithNav}>
           `;

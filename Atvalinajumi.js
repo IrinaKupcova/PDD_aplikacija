@@ -1312,24 +1312,13 @@
         border-color: #059669;
         box-shadow: 0 0 0 2px rgba(5, 150, 105, 0.15);
       }
-      .atv-filter-btn {
-        flex: 0 0 auto;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 0.15rem 0.3rem;
-        border: 1px solid transparent;
-        border-radius: 6px;
-        background: transparent;
-        color: #64748b;
-        cursor: pointer;
+      .atv-filter-row th {
+        padding: 0.35rem 0.45rem;
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
       }
-      .atv-filter-btn:hover { background: rgba(5, 150, 105, 0.08); color: #047857; }
-      .atv-filter-btn.active {
-        border-color: #f97316;
-        background: #fff7ed;
-        color: #c2410c;
-        box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.35);
+      .atv-filter-row .atv-col-filter {
+        width: 100%;
       }
       .atv-cal-badge {
         display: inline-block;
@@ -1630,7 +1619,7 @@
       });
       const [highlightRowId, setHighlightRowId] = useState(null);
       const [dataReady, setDataReady] = useState(false);
-      const filterInputRefs = useRef({});
+      const [filtersOpen, setFiltersOpen] = useState(false);
       const editsRef = useRef({});
 
       useEffect(() => {
@@ -1785,46 +1774,59 @@
           clearFilter(key);
           return;
         }
-        const el = filterInputRefs.current?.[key];
-        if (el && typeof el.focus === "function") el.focus();
+        setFiltersOpen((open) => !open);
       }
 
       function renderFilterHeader(label, key) {
         const active = filterActive[key];
+        return html`
+          <th>
+            <div class="atv-th-label-row">
+              <span>${label}</span>
+              <button
+                type="button"
+                class=${`btn btn-ghost btn-small ${active ? "btn-danger" : ""}`}
+                title=${active ? "Notīrīt filtru" : "Filtrs"}
+                aria-pressed=${active}
+                onClick=${() => onFilterBtnClick(key)}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
+                </svg>
+              </button>
+            </div>
+          </th>
+        `;
+      }
+
+      function renderFilterCell(key) {
+        if (key === "sakuma" || key === "beigu") {
+          return html`
+            <th>
+              <input
+                type="date"
+                class="input atv-col-filter"
+                value=${filters[key] ?? ""}
+                onChange=${(ev) => setFilter(key, ev.target.value)}
+              />
+            </th>
+          `;
+        }
         const options = filterOptions[key] ?? [];
         return html`
           <th>
-            <div class="atv-th-stack">
-              <div class="atv-th-label-row">
-                <span>${label}</span>
-                <button
-                  type="button"
-                  class=${`atv-filter-btn${active ? " active" : ""}`}
-                  title=${active ? "Notīrīt filtru" : "Filtrēt"}
-                  aria-pressed=${active}
-                  onClick=${() => onFilterBtnClick(key)}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                    <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
-                  </svg>
-                </button>
-              </div>
-              <select
-                ref=${(el) => {
-                  if (el) filterInputRefs.current[key] = el;
-                }}
-                class="select atv-col-filter"
-                value=${filters[key] ?? ""}
-                onChange=${(ev) => setFilter(key, ev.target.value)}
-              >
-                <option value="">Visi</option>
-                ${options.map(
-                  (o) => html`
-                    <option key=${`${key}-${o.value}`} value=${o.value}>${o.label}</option>
-                  `
-                )}
-              </select>
-            </div>
+            <select
+              class="select atv-col-filter"
+              value=${filters[key] ?? ""}
+              onChange=${(ev) => setFilter(key, ev.target.value)}
+            >
+              <option value="">Visi</option>
+              ${options.map(
+                (o) => html`
+                  <option key=${`${key}-${o.value}`} value=${o.value}>${o.label}</option>
+                `
+              )}
+            </select>
           </th>
         `;
       }
@@ -2313,6 +2315,16 @@
                   ${renderFilterHeader(UI.papildu, "papildu")}
                   <th>${UI.darbibas}</th>
                 </tr>
+                ${filtersOpen
+                  ? html`<tr class="atv-filter-row">
+                      ${renderFilterCell("sakuma")}
+                      ${renderFilterCell("beigu")}
+                      ${renderFilterCell("vards")}
+                      ${renderFilterCell("veids")}
+                      ${renderFilterCell("papildu")}
+                      <th></th>
+                    </tr>`
+                  : null}
               </thead>
               <tbody>
                 ${!dataReady

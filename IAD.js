@@ -201,24 +201,38 @@
     return String(v ?? "").replace(/\r\n/g, "\n").trim();
   }
 
+  function normalizeAttachmentItem(item) {
+    if (item == null) return null;
+    if (typeof item === "string") {
+      const s = String(item).trim();
+      return s ? { name: s, dataUrl: "", size: 0, type: "" } : null;
+    }
+    if (typeof item !== "object") return null;
+    const name = String(item.name ?? item.label ?? item.filename ?? "").trim();
+    const dataUrl = String(item.dataUrl ?? item.url ?? item.href ?? item.link ?? "").trim();
+    if (!name && !dataUrl) return null;
+    return {
+      name: name || dataUrl || "Pielikums",
+      dataUrl,
+      size: Number(item.size ?? 0) || 0,
+      type: String(item.type ?? item.kind ?? "").trim(),
+    };
+  }
+
   function parseAttachments(v) {
-    if (Array.isArray(v)) return v.filter(Boolean);
+    if (Array.isArray(v)) {
+      return v.map(normalizeAttachmentItem).filter(Boolean);
+    }
     const raw = String(v ?? "").trim();
     if (!raw) return [];
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed
-          .map((item) => {
-            if (!item || typeof item !== "object") return null;
-            return {
-              name: String(item.name ?? "").trim(),
-              dataUrl: String(item.dataUrl ?? "").trim(),
-              size: Number(item.size ?? 0) || 0,
-              type: String(item.type ?? "").trim(),
-            };
-          })
-          .filter((item) => item && item.name && item.dataUrl);
+        return parsed.map(normalizeAttachmentItem).filter(Boolean);
+      }
+      if (parsed && typeof parsed === "object") {
+        const one = normalizeAttachmentItem(parsed);
+        return one ? [one] : [];
       }
     } catch {
       // ignore non-json legacy values
@@ -232,14 +246,12 @@
 
   function serializeAttachments(list) {
     return JSON.stringify(
-      (Array.isArray(list) ? list : [])
-        .map((item) => ({
-          name: String(item?.name ?? "").trim(),
-          dataUrl: String(item?.dataUrl ?? "").trim(),
-          size: Number(item?.size ?? 0) || 0,
-          type: String(item?.type ?? "").trim(),
-        }))
-        .filter((item) => item.name)
+      parseAttachments(list).map((item) => ({
+        name: String(item?.name ?? "").trim(),
+        dataUrl: String(item?.dataUrl ?? "").trim(),
+        size: Number(item?.size ?? 0) || 0,
+        type: String(item?.type ?? "").trim(),
+      }))
     );
   }
 
@@ -248,6 +260,26 @@
     if (!size) return String(item?.name ?? "").trim();
     const kb = Math.max(1, Math.round(size / 1024));
     return `${String(item?.name ?? "").trim()} (${kb} KB)`;
+  }
+
+  function attachmentIdentity(item) {
+    const name = String(item?.name ?? "").trim();
+    const dataUrl = String(item?.dataUrl ?? "").trim();
+    return `${name}::${dataUrl}`;
+  }
+
+  function draftAttachmentList(draftOrValue) {
+    const raw = draftOrValue && typeof draftOrValue === "object" && "Pielikumi" in draftOrValue ? draftOrValue.Pielikumi : draftOrValue;
+    return parseAttachments(raw);
+  }
+
+  function rowHasAttachments(row) {
+    return parseAttachments(row?.Pielikumi).length > 0;
+  }
+
+  function renderAttachmentClip(html) {
+    if (typeof html !== "function") return null;
+    return html`<span class="pdd-attach-clip" title="Ir pievienots pielikums" aria-label="Ir pievienots pielikums">📎</span>`;
   }
 
   function isExternalAttachmentLink(item) {
@@ -713,6 +745,7 @@
         topic: String(r?.IAD_ieteikuma_tema || "").trim(),
         subtitle: String(r?.IAD_numurs || "").trim(),
         dueDate: toDateInputValue(r?.IAD_termins) || toDateInputValue(r?.IAD_datums) || "",
+        hasAttachments: rowHasAttachments(r),
         target: {
           submodule: "iad",
           rowId: r?.id ?? null,
@@ -890,36 +923,15 @@
         gap:.3rem;
         position:relative;
       }
-      .iad-filter-btn {
-        border:1px solid #bae6fd;
+      .iad-filter-row th {
+        padding:.35rem .45rem;
         background:#f8fafc;
-        color:#0f3f68;
-        border-radius:999px;
-        font-size:.72rem;
-        padding:.08rem .32rem;
-        cursor:pointer;
-        line-height:1.2;
+        border-bottom:1px solid #e2e8f0;
       }
-      .iad-filter-btn.is-active {
-        border-color:#0284c7;
-        background:#e0f2fe;
-        color:#0369a1;
-      }
-      .iad-filter-pop {
-        position:absolute;
-        top:calc(100% + 4px);
-        right:0;
-        z-index:6;
-        min-width:170px;
-        border:1px solid #bfdbfe;
-        border-radius:10px;
-        background:#fff;
-        box-shadow:0 8px 24px rgba(15,23,42,.18);
-        padding:.42rem;
-      }
-      .iad-filter-pop .input,
-      .iad-filter-pop .select {
+      .iad-filter-row .input,
+      .iad-filter-row .select {
         width:100%;
+        font-size:.78rem;
       }
       .iad-list-pin-btn {
         border:1px solid #fecaca;
@@ -1031,7 +1043,7 @@
       });
       const [sectionSearch, setSectionSearch] = useState({ current: "", done: "" });
       const [searchBoxOpen, setSearchBoxOpen] = useState({ current: false, done: false });
-      const [activeColumnFilter, setActiveColumnFilter] = useState({ section: "", column: "" });
+      const [filterRowOpen, setFilterRowOpen] = useState({ current: false, done: false });
 
       const activeRows = rows.filter((r) => !isInactiveStatus(r.IAD_statuss));
       const inactiveRows = rows.filter((r) => isInactiveStatus(r.IAD_statuss));
@@ -1072,17 +1084,42 @@
         return hay.includes(q);
       }
 
+      function listRowFilterValue(row, colKey) {
+        if (colKey === "numurs") return String(row?.IAD_numurs ?? "").trim();
+        if (colKey === "nosaukums") return String(row?.IAD_nosaukums ?? "").trim();
+        if (colKey === "tema") return String(row?.IAD_ieteikuma_tema ?? "").trim();
+        if (colKey === "atbildigais") return formatPersonField(row?.Atbildigais);
+        if (colKey === "statuss") return statusLabel(row?.IAD_statuss);
+        return "";
+      }
+
+      function buildListFilterOptions(rowsList, colKey) {
+        const seen = new Set();
+        const values = [];
+        for (const row of Array.isArray(rowsList) ? rowsList : []) {
+          const v = listRowFilterValue(row, colKey);
+          if (!v || seen.has(v)) continue;
+          seen.add(v);
+          values.push(v);
+        }
+        values.sort((a, b) => a.localeCompare(b, "lv"));
+        return values.map((v) => ({
+          value: v,
+          label: v.length > 48 ? `${v.slice(0, 45)}…` : v,
+        }));
+      }
+
       function applyListFiltering(rowsList, sectionKey) {
         const src = Array.isArray(rowsList) ? rowsList : [];
         const f = listFilters?.[sectionKey] || {};
         const sectionNeedle = sectionSearch?.[sectionKey] || "";
         return src.filter((row) => {
-          if (f.numurs && !normalizeLookupText(row?.IAD_numurs).includes(normalizeLookupText(f.numurs))) return false;
-          if (f.nosaukums && !normalizeLookupText(row?.IAD_nosaukums).includes(normalizeLookupText(f.nosaukums))) return false;
-          if (f.tema && !normalizeLookupText(row?.IAD_ieteikuma_tema).includes(normalizeLookupText(f.tema))) return false;
-          if (f.termins && !normalizeLookupText(displayDate(row?.IAD_termins)).includes(normalizeLookupText(f.termins))) return false;
-          if (f.atbildigais && !normalizeLookupText(row?.Atbildigais).includes(normalizeLookupText(f.atbildigais))) return false;
-          if (f.statuss && normalizeLookupText(statusLabel(row?.IAD_statuss)) !== normalizeLookupText(f.statuss)) return false;
+          if (f.numurs && listRowFilterValue(row, "numurs") !== String(f.numurs).trim()) return false;
+          if (f.nosaukums && listRowFilterValue(row, "nosaukums") !== String(f.nosaukums).trim()) return false;
+          if (f.tema && listRowFilterValue(row, "tema") !== String(f.tema).trim()) return false;
+          if (f.termins && toDateInputValue(row?.IAD_termins) !== toDateInputValue(f.termins)) return false;
+          if (f.atbildigais && listRowFilterValue(row, "atbildigais") !== String(f.atbildigais).trim()) return false;
+          if (f.statuss && listRowFilterValue(row, "statuss") !== String(f.statuss).trim()) return false;
           if (!rowHasSearchHit(row, sectionNeedle)) return false;
           return true;
         });
@@ -1103,15 +1140,21 @@
         setSearchBoxOpen((prev) => ({ ...prev, [sectionKey]: !Boolean(prev?.[sectionKey]) }));
       }
 
-      function toggleColumnFilter(sectionKey, colKey) {
-        setActiveColumnFilter((prev) => {
-          if (prev?.section === sectionKey && prev?.column === colKey) return { section: "", column: "" };
-          return { section: sectionKey, column: colKey };
-        });
+      function clearColumnFilter(sectionKey, colKey) {
+        setColumnFilter(sectionKey, colKey, "");
       }
 
-      function isColumnFilterOpen(sectionKey, colKey) {
-        return activeColumnFilter?.section === sectionKey && activeColumnFilter?.column === colKey;
+      function isColumnFilterActive(sectionKey, colKey) {
+        const f = listFilters?.[sectionKey] || {};
+        return String(f[colKey] ?? "").trim() !== "";
+      }
+
+      function onColumnFilterBtnClick(sectionKey, colKey) {
+        if (isColumnFilterActive(sectionKey, colKey)) {
+          clearColumnFilter(sectionKey, colKey);
+          return;
+        }
+        setFilterRowOpen((prev) => ({ ...prev, [sectionKey]: !Boolean(prev?.[sectionKey]) }));
       }
 
       function findRowForTableFocus(ft, list) {
@@ -1550,7 +1593,7 @@
           );
           setDraft((prev) => ({
             ...prev,
-            Pielikumi: [...(Array.isArray(prev?.Pielikumi) ? prev.Pielikumi : []), ...mapped],
+            Pielikumi: [...draftAttachmentList(prev), ...mapped],
           }));
         } catch (e) {
           setErr(String(e?.message || e || "Neizdevās pievienot pielikumu."));
@@ -1559,11 +1602,20 @@
         }
       }
 
-      function removeAttachment(index) {
-        setDraft((prev) => ({
-          ...prev,
-          Pielikumi: (Array.isArray(prev?.Pielikumi) ? prev.Pielikumi : []).filter((_, i) => i !== index),
-        }));
+      function removeAttachment(item) {
+        const targetId = attachmentIdentity(item);
+        setDraft((prev) => {
+          const list = draftAttachmentList(prev);
+          let removed = false;
+          const next = list.filter((entry) => {
+            if (!removed && attachmentIdentity(entry) === targetId) {
+              removed = true;
+              return false;
+            }
+            return true;
+          });
+          return { ...prev, Pielikumi: next };
+        });
       }
 
       function addAttachmentLink() {
@@ -1575,10 +1627,7 @@
           const name = String(u.hostname + u.pathname).replace(/\/$/, "") || u.hostname || "Saite";
           setDraft((prev) => ({
             ...prev,
-            Pielikumi: [
-              ...(Array.isArray(prev?.Pielikumi) ? prev.Pielikumi : []),
-              { name, dataUrl: href, size: 0, type: "link" },
-            ],
+            Pielikumi: [...draftAttachmentList(prev), { name, dataUrl: href, size: 0, type: "link" }],
           }));
           setAttachmentLinkDraft("");
         } catch {
@@ -1738,8 +1787,40 @@
           if (key === "IAD_termins" || key === "IAD_datums" || /termin|datums/i.test(key)) value = displayDate(raw);
           if (key === "Atbildigais" || key === "Lidzatbildigais" || /atbild/i.test(key)) value = formatPersonField(raw);
           if (key === "Pielikumi") value = parseAttachments(raw).map((item) => item.name).join(", ");
-          return { key, label: prettyDbLabel(key), value: String(value ?? "").trim() || "—" };
+          const hasAttach = key === "Pielikumi" && parseAttachments(raw).length > 0;
+          return {
+            key,
+            label: prettyDbLabel(key),
+            value: String(value ?? "").trim() || "—",
+            hasAttach,
+          };
         });
+      }
+
+      function finalizeSavedRow(savedRow, draftLike) {
+        const merged = savedRow
+          ? normalizeIadRow({ ...savedRow, ...payloadFromDraft(draftLike) })
+          : normalizeIadRow({ ...payloadFromDraft(draftLike) });
+        merged.IAD_statuss = statusLabel(draftLike?.IAD_statuss ?? merged.IAD_statuss);
+        return merged;
+      }
+
+      function handleStatusListMigration(savedRow) {
+        if (!savedRow || typeof savedRow !== "object") return;
+        setSubmod("iad");
+        const focusKey = rowFocusKey(savedRow);
+        if (isInactiveStatus(savedRow.IAD_statuss)) {
+          setOpenDone(true);
+          if (focusKey) setFocusedRowKey(focusKey);
+          return;
+        }
+        setOpenCurrent(true);
+        if (focusKey) setFocusedRowKey(focusKey);
+      }
+
+      function replaceRowInList(list, row, matcher) {
+        const src = Array.isArray(list) ? list : [];
+        return src.map((r) => (matcher(r) ? row : r));
       }
 
       async function onSave(ev) {
@@ -1751,58 +1832,80 @@
         }
         setBusy(true);
         try {
+          const becameInactive = isInactiveStatus(draft.IAD_statuss);
           if (useDb) {
             let savedRow = null;
             if (editingId != null) {
               savedRow = await updateIadRowInSupabase(supabase, editingId, draft);
               if (savedRow) {
-                setRows((prev) =>
-                  (Array.isArray(prev) ? prev : []).map((r) =>
-                    String(r?.id ?? "") === String(editingId) ? savedRow : r
-                  )
-                );
+                const row = finalizeSavedRow(savedRow, draft);
+                setRows((prev) => replaceRowInList(prev, row, (r) => String(r?.id ?? "") === String(editingId)));
+                handleStatusListMigration(row);
               }
             } else if (editingSourceRow) {
               savedRow = await updateIadRowByNaturalKeyInSupabase(supabase, editingSourceRow, draft);
               if (savedRow) {
+                const row = finalizeSavedRow(savedRow, draft);
                 setRows((prev) =>
-                  (Array.isArray(prev) ? prev : []).map((r) => {
+                  replaceRowInList(prev, row, (r) => {
                     const sameNumurs = String(r?.IAD_numurs ?? "") === String(editingSourceRow?.IAD_numurs ?? "");
                     const sameNosaukums = String(r?.IAD_nosaukums ?? "") === String(editingSourceRow?.IAD_nosaukums ?? "");
-                    return sameNumurs && sameNosaukums ? savedRow : r;
+                    return sameNumurs && sameNosaukums;
                   })
                 );
+                handleStatusListMigration(row);
               }
             } else {
               savedRow = await insertIadRowToSupabase(supabase, draft);
               if (savedRow) {
-                setRows((prev) => [savedRow, ...(Array.isArray(prev) ? prev : [])]);
+                const row = finalizeSavedRow(savedRow, draft);
+                setRows((prev) => [row, ...(Array.isArray(prev) ? prev : [])]);
+                handleStatusListMigration(row);
               }
             }
             closeOverlay();
             try {
               await refresh();
+              if (becameInactive) {
+                setOpenDone(true);
+                setSubmod("iad");
+              }
             } catch (refreshErr) {
               setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
             }
           } else {
             const list = loadLocalRows();
+            let savedRow = null;
             if (editingId != null) {
               const i = list.findIndex((x) => String(x.id) === String(editingId));
               if (i >= 0) {
-                list[i] = normalizeIadRow({ ...list[i], ...payloadFromDraft(draft) });
+                savedRow = finalizeSavedRow({ ...list[i], ...payloadFromDraft(draft) }, draft);
+                list[i] = savedRow;
+              }
+            } else if (editingSourceRow) {
+              const i = list.findIndex((x) => {
+                const sameNumurs = String(x?.IAD_numurs ?? "") === String(editingSourceRow?.IAD_numurs ?? "");
+                const sameNosaukums = String(x?.IAD_nosaukums ?? "") === String(editingSourceRow?.IAD_nosaukums ?? "");
+                return sameNumurs && sameNosaukums;
+              });
+              if (i >= 0) {
+                savedRow = finalizeSavedRow({ ...list[i], ...payloadFromDraft(draft) }, draft);
+                list[i] = savedRow;
               }
             } else {
-              list.unshift(
-                normalizeIadRow({
+              savedRow = finalizeSavedRow(
+                {
                   id: localId(),
                   ...payloadFromDraft(draft),
                   created_at: new Date().toISOString(),
-                })
+                },
+                draft
               );
+              list.unshift(savedRow);
             }
             saveLocalRows(list);
             setRows(list);
+            if (savedRow) handleStatusListMigration(savedRow);
             closeOverlay();
           }
         } catch (e) {
@@ -1849,6 +1952,42 @@
       function renderList(rowsList, emptyText, sectionKey) {
         const filteredRows = applyListFiltering(rowsList, sectionKey);
         const f = listFilters?.[sectionKey] || {};
+        const filtersOpen = Boolean(filterRowOpen?.[sectionKey]);
+        const filterOptions = {
+          numurs: buildListFilterOptions(rowsList, "numurs"),
+          nosaukums: buildListFilterOptions(rowsList, "nosaukums"),
+          tema: buildListFilterOptions(rowsList, "tema"),
+          atbildigais: buildListFilterOptions(rowsList, "atbildigais"),
+          statuss: buildListFilterOptions(rowsList, "statuss"),
+        };
+        const filterFunnel = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
+        </svg>`;
+        function filterSelect(colKey) {
+          const options = filterOptions[colKey] ?? [];
+          return html`<select
+            class="select"
+            value=${f[colKey] || ""}
+            onChange=${(e) => setColumnFilter(sectionKey, colKey, e.target.value)}
+          >
+            <option value="">Visi</option>
+            ${options.map(
+              (o) => html`
+                <option key=${`${colKey}-${o.value}`} value=${o.value}>${o.label}</option>
+              `
+            )}
+          </select>`;
+        }
+        function filterBtn(colKey) {
+          const active = isColumnFilterActive(sectionKey, colKey);
+          return html`<button
+            type="button"
+            class=${`btn btn-ghost btn-small ${active ? "btn-danger" : ""}`}
+            title=${active ? "Notīrīt filtru" : "Filtrs"}
+            aria-pressed=${active}
+            onClick=${() => onColumnFilterBtnClick(sectionKey, colKey)}
+          >${filterFunnel}</button>`;
+        }
         return html`
           <div class="iad-table-wrap">
             <table class="iad-table">
@@ -1857,66 +1996,59 @@
                   <th>
                     <div class="iad-th-filter">
                       <span>IaD numurs</span>
-                      <button type="button" class=${`iad-filter-btn ${f.numurs ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "numurs")}>⏷</button>
-                      ${isColumnFilterOpen(sectionKey, "numurs")
-                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.numurs || ""} onInput=${(e) => setColumnFilter(sectionKey, "numurs", e.target.value)} /></div>`
-                        : null}
+                      ${filterBtn("numurs")}
                     </div>
                   </th>
                   <th>
                     <div class="iad-th-filter">
                       <span>IaD nosaukums</span>
-                      <button type="button" class=${`iad-filter-btn ${f.nosaukums ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "nosaukums")}>⏷</button>
-                      ${isColumnFilterOpen(sectionKey, "nosaukums")
-                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.nosaukums || ""} onInput=${(e) => setColumnFilter(sectionKey, "nosaukums", e.target.value)} /></div>`
-                        : null}
+                      ${filterBtn("nosaukums")}
                     </div>
                   </th>
                   <th>
                     <div class="iad-th-filter">
                       <span>IaD ieteikuma tēma (īss apraksts)</span>
-                      <button type="button" class=${`iad-filter-btn ${f.tema ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "tema")}>⏷</button>
-                      ${isColumnFilterOpen(sectionKey, "tema")
-                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.tema || ""} onInput=${(e) => setColumnFilter(sectionKey, "tema", e.target.value)} /></div>`
-                        : null}
+                      ${filterBtn("tema")}
                     </div>
                   </th>
                   <th>
                     <div class="iad-th-filter">
                       <span>IaD ieteikuma termiņš</span>
-                      <button type="button" class=${`iad-filter-btn ${f.termins ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "termins")}>⏷</button>
-                      ${isColumnFilterOpen(sectionKey, "termins")
-                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.termins || ""} onInput=${(e) => setColumnFilter(sectionKey, "termins", e.target.value)} /></div>`
-                        : null}
+                      ${filterBtn("termins")}
                     </div>
                   </th>
                   <th>
                     <div class="iad-th-filter">
                       <span>Atbildīgais</span>
-                      <button type="button" class=${`iad-filter-btn ${f.atbildigais ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "atbildigais")}>⏷</button>
-                      ${isColumnFilterOpen(sectionKey, "atbildigais")
-                        ? html`<div class="iad-filter-pop"><input class="input" placeholder="Filtrs..." value=${f.atbildigais || ""} onInput=${(e) => setColumnFilter(sectionKey, "atbildigais", e.target.value)} /></div>`
-                        : null}
+                      ${filterBtn("atbildigais")}
                     </div>
                   </th>
                   <th>
                     <div class="iad-th-filter">
                       <span>IaD ieteikuma statuss</span>
-                      <button type="button" class=${`iad-filter-btn ${f.statuss ? "is-active" : ""}`} onClick=${() => toggleColumnFilter(sectionKey, "statuss")}>⏷</button>
-                      ${isColumnFilterOpen(sectionKey, "statuss")
-                        ? html`<div class="iad-filter-pop">
-                            <select class="select" value=${f.statuss || ""} onChange=${(e) => setColumnFilter(sectionKey, "statuss", e.target.value)}>
-                              <option value="">Visi</option>
-                              <option value="Aktīvs">Aktīvs</option>
-                              <option value="Pabeigts">Pabeigts</option>
-                              <option value="Atcelts">Atcelts</option>
-                            </select>
-                          </div>`
-                        : null}
+                      ${filterBtn("statuss")}
                     </div>
                   </th>
                   <th>IaD ieteikuma kartiņa</th>
                 </tr>
+                ${filtersOpen
+                  ? html`<tr class="iad-filter-row">
+                      <th>${filterSelect("numurs")}</th>
+                      <th>${filterSelect("nosaukums")}</th>
+                      <th>${filterSelect("tema")}</th>
+                      <th>
+                        <input
+                          type="date"
+                          class="input"
+                          value=${toDateInputValue(f.termins) || ""}
+                          onChange=${(e) => setColumnFilter(sectionKey, "termins", e.target.value)}
+                        />
+                      </th>
+                      <th>${filterSelect("atbildigais")}</th>
+                      <th>${filterSelect("statuss")}</th>
+                      <th></th>
+                    </tr>`
+                  : null}
               </thead>
               <tbody>
                 ${filteredRows.length
@@ -1930,7 +2062,10 @@
                       return html`
                         <tr id=${rowId} key=${String(r?.id ?? `${r.IAD_numurs}-${r.IAD_nosaukums}`)} class=${isFocused ? "iad-row-focus" : ""}>
                           <td>${r.IAD_numurs || "—"}</td>
-                          <td>${r.IAD_nosaukums || "—"}</td>
+                          <td>
+                            ${r.IAD_nosaukums || "—"}
+                            ${rowHasAttachments(r) ? renderAttachmentClip(html) : null}
+                          </td>
                           <td>${r.IAD_ieteikuma_tema || "—"}</td>
                           <td>
                             ${displayDate(r.IAD_termins)}
@@ -2178,7 +2313,7 @@
                               ${renderCardTextarea("Plānotās aktivitātes", "Planotas_aktivitates", "Var ievadīt neierobežotu teksta apjomu")}
                               ${renderCardTextarea("Izpildes informācija", "Piezimes", "Var ievadīt neierobežotu teksta apjomu")}
                               <div class="iad-kv">
-                                <strong>Pielikumi</strong>
+                                <strong>Pielikumi${draftAttachmentList(draft).length ? renderAttachmentClip(html) : null}</strong>
                                 <div class="iad-kv-value editable">
                                   <div class="iad-attachments">
                                     <input type="file" multiple onClick=${onAttachmentInputClick} onChange=${onAttachmentPick} />
@@ -2193,21 +2328,24 @@
                                       <button type="button" class="btn btn-ghost btn-small" onClick=${addAttachmentLink}>Pievienot saiti</button>
                                     </div>
                                     <div class="iad-attachment-list">
-                                      ${(Array.isArray(draft?.Pielikumi) ? draft.Pielikumi : []).length
-                                        ? (Array.isArray(draft?.Pielikumi) ? draft.Pielikumi : []).map(
-                                            (item, index) => html`
-                                              <div key=${`${item?.name || "pielikums"}-${index}`} class="iad-attachment-item">
-                                                <span class="iad-attachment-name">${attachmentLabel(item)}</span>
-                                                <div class="row" style=${{ gap: "0.35rem", flexWrap: "wrap" }}>
-                                                  ${item?.dataUrl
-                                                    ? html`<button type="button" class="btn btn-ghost btn-small" onClick=${() => downloadAttachment(item)}>${isExternalAttachmentLink(item) ? "Atvērt saiti" : "Lejupielādēt"}</button>`
-                                                    : null}
-                                                  <button type="button" class="btn btn-danger btn-small" onClick=${() => removeAttachment(index)}>Dzēst</button>
+                                      ${(() => {
+                                        const attList = draftAttachmentList(draft);
+                                        return attList.length
+                                          ? attList.map(
+                                              (item, index) => html`
+                                                <div key=${`${attachmentIdentity(item)}-${index}`} class="iad-attachment-item">
+                                                  <span class="iad-attachment-name">${attachmentLabel(item)}</span>
+                                                  <div class="row" style=${{ gap: "0.35rem", flexWrap: "wrap" }}>
+                                                    ${item?.dataUrl
+                                                      ? html`<button type="button" class="btn btn-ghost btn-small" onClick=${() => downloadAttachment(item)}>${isExternalAttachmentLink(item) ? "Atvērt saiti" : "Lejupielādēt"}</button>`
+                                                      : null}
+                                                    <button type="button" class="btn btn-danger btn-small" onClick=${() => removeAttachment(item)}>Dzēst</button>
+                                                  </div>
                                                 </div>
-                                              </div>
-                                            `
-                                          )
-                                        : html`<div class="iad-team-empty">Pielikumi vēl nav pievienoti.</div>`}
+                                              `
+                                            )
+                                          : html`<div class="iad-team-empty">Pielikumi vēl nav pievienoti.</div>`;
+                                      })()}
                                     </div>
                                   </div>
                                 </div>
@@ -2227,12 +2365,13 @@
                       : html`
                           <h3 style=${{ margin: "0 0 0.45rem" }}>
                             ${cardOpen?.IAD_nosaukums || "IaD ieteikuma kartiņa"}
+                            ${rowHasAttachments(cardOpen) ? renderAttachmentClip(html) : null}
                           </h3>
                           <div class="iad-card-grid">
                             ${cardEntries(cardOpen).map(
                               (f) => html`
                                 <div key=${f.key} class="iad-kv">
-                                  <strong>${f.label}</strong>
+                                  <strong>${f.label}${f.hasAttach ? renderAttachmentClip(html) : null}</strong>
                                   <div class="iad-kv-value">${f.value}</div>
                                 </div>
                               `
