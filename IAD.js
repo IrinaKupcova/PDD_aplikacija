@@ -1999,9 +1999,23 @@
               if (out?.skipped && out?.reason === "assignment_unchanged") return;
               if (out?.skipped) console.info("[PDD_INFORMESHANA] pēc saglabāšanas", out.reason || out);
               const fails = (out?.results || []).filter((r) => r && !r.ok && !r.skipped);
-              if (fails.length) console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", fails);
+              if (fails.length) {
+                console.error(
+                  "[PDD_INFORMESHANA] vēstules NETIKA nosūtītas:",
+                  fails.map((f) => ({
+                    email: f.email,
+                    name: f.name,
+                    reason: f.reason,
+                    pddApi: f.pddApi?.reason,
+                    edge: f.edge?.reason,
+                  })),
+                );
+              }
               if (out?.count > 0 && !out?.sent) {
-                console.warn("[PDD_INFORMESHANA] vēstules netika nosūtītas — deploy Edge sendIadEmail (npm run deploy:send-iad-email)", out);
+                console.warn(
+                  "[PDD_INFORMESHANA] vēstules netika nosūtītas — pārbaudi F12 konsoli. Ja prombūtnes strādā: localStorage.pdd_resend_api_url. Vai Supabase → Secrets → RESEND_API_KEY.",
+                  out,
+                );
               }
               if (out?.sent > 0) console.info("[PDD_INFORMESHANA] nosūtītas vēstules:", out.sent);
             })

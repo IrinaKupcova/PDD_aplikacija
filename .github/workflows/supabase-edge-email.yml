@@ -1,23 +1,24 @@
-# Automātiski: Resend secrets + Edge Function „sendEmail” deploy uz Supabase.
-# Vienreiz: GitHub repo → Settings → Secrets and variables → Actions → New repository secret:
-#   SUPABASE_ACCESS_TOKEN   (https://supabase.com/dashboard/account/tokens)
-#   SUPABASE_PROJECT_REF    (Settings → General → Reference ID, piem. fdnkvecgqetmwilwolgt)
-#   RESEND_API_KEY          (Resend → API Keys)
-#   RESEND_FROM             (piem. PDD <onboarding@resend.dev> vai verificēts domēns)
-# Tālāk katrs push uz main/master vai Actions → šī darbplūsma → Run workflow.
+# Automātiski: Resend secrets + Edge Functions deploy uz Supabase.
+# Secrets (GitHub → Settings → Secrets → Actions):
+#   SUPABASE_ACCESS_TOKEN, SUPABASE_PROJECT_REF, RESEND_API_KEY, RESEND_FROM
 name: Supabase Edge — sendEmail + Resend
 
 on:
   push:
     branches: [main, master]
+    paths:
+      - "supabase/functions/**"
+      - ".github/workflows/supabase-edge-email.yml"
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' && secrets.SUPABASE_PROJECT_REF != '' }}
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      RESEND_FROM: ${{ secrets.RESEND_FROM }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,26 +26,33 @@ jobs:
         with:
           version: latest
 
+      - name: Pārbauda deploy priekšnosacījumus
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$SUPABASE_PROJECT_REF" ]; then
+            echo "::warning::Trūkst SUPABASE_ACCESS_TOKEN vai SUPABASE_PROJECT_REF — deploy izlaists."
+            echo "skip_deploy=true" >> "$GITHUB_ENV"
+          else
+            echo "skip_deploy=false" >> "$GITHUB_ENV"
+          fi
+
       - name: Resend secrets uz Supabase Edge
-        if: ${{ secrets.RESEND_API_KEY != '' }}
-        env:
-          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          RESEND_FROM: ${{ secrets.RESEND_FROM }}
+        if: env.skip_deploy == 'false'
         run: |
           set -e
+          if [ -z "$RESEND_API_KEY" ]; then
+            echo "::warning::RESEND_API_KEY nav — deployo funkcijas, bet Resend secret netiek atjaunināts."
+            exit 0
+          fi
           if [ -n "$RESEND_FROM" ]; then
-            supabase secrets set --project-ref "$REF" RESEND_API_KEY="$RESEND_API_KEY" RESEND_FROM="$RESEND_FROM"
+            supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" RESEND_API_KEY="$RESEND_API_KEY" RESEND_FROM="$RESEND_FROM"
           else
-            supabase secrets set --project-ref "$REF" RESEND_API_KEY="$RESEND_API_KEY"
+            supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" RESEND_API_KEY="$RESEND_API_KEY"
           fi
 
       - name: Deploy sendIadEmail (--no-verify-jwt)
-        env:
-          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: supabase functions deploy sendIadEmail --project-ref "$REF" --no-verify-jwt
+        if: env.skip_deploy == 'false'
+        run: supabase functions deploy sendIadEmail --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
 
       - name: Deploy sendEmail (--no-verify-jwt)
-        env:
-          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: supabase functions deploy sendEmail --project-ref "$REF" --no-verify-jwt
+        if: env.skip_deploy == 'false'
+        run: supabase functions deploy sendEmail --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
