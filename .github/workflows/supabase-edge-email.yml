@@ -37,10 +37,10 @@ jobs:
 
       - name: Resend secrets uz Supabase Edge
         if: env.skip_deploy == 'false'
+        continue-on-error: true
         run: |
-          set -e
           if [ -z "$RESEND_API_KEY" ]; then
-            echo "::warning::RESEND_API_KEY nav — deployo funkcijas, bet Resend secret netiek atjaunināts."
+            echo "::warning::RESEND_API_KEY nav — Resend secret netiek atjaunināts."
             exit 0
           fi
           if [ -n "$RESEND_FROM" ]; then

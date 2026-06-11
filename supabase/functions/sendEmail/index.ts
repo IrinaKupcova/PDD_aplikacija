@@ -1,6 +1,6 @@
 /**
  * PDD: Edge Function slug `sendEmail` (parasti šis ir deployots projektā).
- * Tāds pats saturs kā `resend-email`. POST JSON { name, veids, type?: "cits" } → Resend.
+ * POST JSON { name, veids, type?: "cits" } vai IaD { type: "iad_*", to, subject, text, html, cc } → Resend.
  */
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
