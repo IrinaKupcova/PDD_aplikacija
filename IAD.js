@@ -1788,26 +1788,46 @@
       }
 
       function renderPersonSelect(fieldKey) {
-        const selected = parseNameList(draft?.[fieldKey]).map((n) => resolvePersonName(n, teamUsers));
-        const current = selected[0] || "";
+        const selectedSet = new Set(
+          parseNameList(draft?.[fieldKey])
+            .map((n) => resolvePersonName(n, teamUsers))
+            .filter(Boolean)
+        );
         const options = teamOptions.length ? teamOptions : listTeamNamesFromUsers(teamUsers);
+        const legacy = [...selectedSet].filter((name) => !options.includes(name));
+        const allOptions = [...options, ...legacy];
+
+        function togglePerson(name, checked) {
+          const next = new Set(
+            parseNameList(draft?.[fieldKey])
+              .map((n) => resolvePersonName(n, teamUsers))
+              .filter(Boolean)
+          );
+          if (checked) next.add(name);
+          else next.delete(name);
+          setDraft((prev) => ({ ...prev, [fieldKey]: joinNameList([...next]) }));
+        }
+
         return html`
-          <select
-            class="iad-kv-select"
-            value=${current}
-            onChange=${(e) => setDraft((prev) => ({ ...prev, [fieldKey]: String(e.target.value ?? "").trim() }))}
-          >
-            <option value="">— Izvēlies personu —</option>
-            ${options.map(
-              (name) => html`
-                <option key=${`${fieldKey}-${name}`} value=${name}>${name}</option>
-              `
-            )}
-            ${current && !options.includes(current)
-              ? html`<option key=${`${fieldKey}-legacy`} value=${current}>${current}</option>`
+          <div class="iad-team-select">
+            ${allOptions.length
+              ? allOptions.map(
+                  (name) => html`
+                    <label key=${`${fieldKey}-${name}`} class="iad-team-option">
+                      <input
+                        type="checkbox"
+                        checked=${selectedSet.has(name)}
+                        onChange=${(e) => togglePerson(name, e.target.checked)}
+                      />
+                      <span>${name}</span>
+                    </label>
+                  `
+                )
+              : html`<div class="iad-team-empty">Komandas saraksts vēl ielādējas...</div>`}
+            ${selectedSet.size
+              ? html`<div class="iad-team-empty" style=${{ marginTop: ".2rem" }}>Izvēlētas: ${joinNameList([...selectedSet])}</div>`
               : null}
-          </select>
-          ${!options.length ? html`<div class="iad-team-empty">Komandas saraksts vēl ielādējas...</div>` : null}
+          </div>
         `;
       }
 
