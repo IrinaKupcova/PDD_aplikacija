@@ -885,6 +885,26 @@
     return FILE_SUPABASE_ANON_KEY;
   }
 
+  function openIadMailtoFallback({ to, subject, text, url, cc }) {
+    if (typeof window === "undefined") return false;
+    const addr = String(to ?? "").trim();
+    if (!isValidEmail(addr)) return false;
+    const ccList = uniqEmails(Array.isArray(cc) ? cc : []).filter((em) => normEmail(em) !== normEmail(addr));
+    const body = `${String(text ?? "").trim()}\n\nAtvērt aplikācijā: ${String(url ?? "").trim()}`;
+    const params = new URLSearchParams();
+    params.set("subject", String(subject ?? "").trim() || "PDD: IaD informēšana");
+    params.set("body", body);
+    if (ccList.length) params.set("cc", ccList.join(","));
+    const href = `mailto:${encodeURIComponent(addr)}?${params.toString()}`;
+    try {
+      const popup = window.open(href, "_blank");
+      if (!popup) window.location.href = href;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function sendEmailViaPddResendApi({ to, subject, text, html, url, cc }) {
     const callApi = root.__PDD_CALL_PDD_RESEND_API__;
     if (typeof callApi !== "function") return { ok: false, reason: "no_pdd_resend_api" };
@@ -1165,6 +1185,25 @@
         supabase,
       });
       return viaEdge;
+    }
+
+    if (
+      openIadMailtoFallback({
+        to: email,
+        subject,
+        text: messageText || text,
+        url,
+        cc: ccList,
+      })
+    ) {
+      return {
+        ok: true,
+        via: "mailto_fallback",
+        manual: true,
+        note: "Serveris nevarēja nosūtīt automātiski — atvērta e-pasta programma. Nospied Sūtīt.",
+        pddApi: viaPddApi,
+        edge: viaEdge,
+      };
     }
 
     return { ok: false, reason: "all_channels_failed", pddApi: viaPddApi, resend: viaResend, edge: viaEdge };

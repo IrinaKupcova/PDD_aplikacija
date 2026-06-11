@@ -2017,6 +2017,13 @@
                   out,
                 );
               }
+              const manual = (out?.results || []).filter((r) => r?.manual);
+              if (manual.length) {
+                console.info(
+                  "[PDD_INFORMESHANA] automātiska sūtīšana neizdevās — atvērta e-pasta programma. Nospied Sūtīt.",
+                  manual,
+                );
+              }
               if (out?.sent > 0) console.info("[PDD_INFORMESHANA] nosūtītas vēstules:", out.sent);
             })
             .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", e));
