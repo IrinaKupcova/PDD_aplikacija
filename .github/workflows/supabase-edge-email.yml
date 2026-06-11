@@ -51,6 +51,7 @@ jobs:
 
       - name: Deploy sendIadEmail (--no-verify-jwt)
         if: env.skip_deploy == 'false'
+        continue-on-error: true
         run: supabase functions deploy sendIadEmail --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
 
       - name: Deploy sendEmail (--no-verify-jwt)
