@@ -255,13 +255,19 @@
     return /^https?:\/\//i.test(href);
   }
 
-  function listTeamOptions() {
+  function teamUserDisplayName(u) {
+    return String(
+      u?.["Vārds uzvārds"] ?? u?.["Vards uzvards"] ?? u?.full_name ?? u?.name ?? ""
+    ).trim();
+  }
+
+  function listTeamNamesFromUsers(users) {
     try {
-      const rows = globalThis.KOMANDA?.loadTeamUsers?.() ?? [];
+      const rows = Array.isArray(users) ? users : [];
       return Array.from(
         new Map(
           rows
-            .map((u) => String(u?.["Vārds uzvārds"] ?? "").trim())
+            .map((u) => teamUserDisplayName(u))
             .filter(Boolean)
             .map((name) => [name.toLowerCase(), name])
         ).values()
@@ -269,6 +275,51 @@
     } catch {
       return [];
     }
+  }
+
+  function resolvePersonName(value, users) {
+    const raw = String(value ?? "").trim();
+    if (!raw) return "";
+    const list = Array.isArray(users) ? users : [];
+    if (/^[0-9a-f-]{36}$/i.test(raw)) {
+      const hit = list.find((u) => String(u?.id ?? u?.user_id ?? "").trim() === raw);
+      if (hit) return teamUserDisplayName(hit) || raw;
+    }
+    const byName = list.find((u) => teamUserDisplayName(u).toLowerCase() === raw.toLowerCase());
+    if (byName) return teamUserDisplayName(byName);
+    return raw;
+  }
+
+  async function fetchTeamUsersForIad(sb) {
+    try {
+      const fromKomanda = globalThis.KOMANDA?.loadTeamUsers?.() ?? [];
+      if (fromKomanda.length) return fromKomanda;
+    } catch {
+      // ignore
+    }
+    try {
+      const raw = localStorage.getItem("pdd_team_users_v1");
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    } catch {
+      // ignore
+    }
+    if (!sb) return [];
+    try {
+      const pu = await sb.from("users").select("*").order("Vārds uzvārds", { ascending: true });
+      if (!pu.error && Array.isArray(pu.data) && pu.data.length) return pu.data;
+    } catch {
+      // ignore
+    }
+    try {
+      const pp = await sb.from("profiles").select("*");
+      if (!pp.error && Array.isArray(pp.data) && pp.data.length) {
+        return pp.data.sort((a, b) => teamUserDisplayName(a).localeCompare(teamUserDisplayName(b), "lv"));
+      }
+    } catch {
+      // ignore
+    }
+    return [];
   }
 
   function prettyDbLabel(key) {
@@ -967,6 +1018,7 @@
       const [editingId, setEditingId] = useState(null);
       const [editingSourceRow, setEditingSourceRow] = useState(null);
       const [draft, setDraft] = useState(emptyDraft());
+      const [teamUsers, setTeamUsers] = useState([]);
       const [teamOptions, setTeamOptions] = useState([]);
       const [attachmentLinkDraft, setAttachmentLinkDraft] = useState("");
       const focusRetryRef = useRef({ sig: "", retries: 0 });
@@ -1214,14 +1266,22 @@
 
       useEffect(() => {
         let cancelled = false;
-        (async () => {
-          const teamNames = listTeamOptions();
-          if (!cancelled) setTeamOptions(teamNames);
-        })();
+        async function loadTeam() {
+          const users = await fetchTeamUsersForIad(supabase);
+          if (cancelled) return;
+          setTeamUsers(users);
+          setTeamOptions(listTeamNamesFromUsers(users));
+        }
+        void loadTeam();
+        const onTeamChanged = () => {
+          void loadTeam();
+        };
+        window.addEventListener("pdd:komanda-team-users-changed", onTeamChanged);
         return () => {
           cancelled = true;
+          window.removeEventListener("pdd:komanda-team-users-changed", onTeamChanged);
         };
-      }, [submod, editMode]);
+      }, [submod, editMode, supabase]);
 
       useEffect(() => {
         if (pendingFocusTask) return;
@@ -1361,10 +1421,10 @@
           IAD_nosaukums: row.IAD_nosaukums || "",
           IAD_ieteikuma_tema: row.IAD_ieteikuma_tema || "",
           IAD_termins: toDateInputValue(row.IAD_termins),
-          Atbildigais: joinNameList(parseNameList(row.Atbildigais)),
+          Atbildigais: formatPersonField(row.Atbildigais),
           IAD_statuss: statusLabel(row.IAD_statuss || "Aktīvs"),
           IAD_datums: toDateInputValue(row.IAD_datums),
-          Lidzatbildigais: joinNameList(parseNameList(row.Lidzatbildigais)),
+          Lidzatbildigais: formatPersonField(row.Lidzatbildigais),
           IAD_PDD_komp_uzdevums: row.IAD_PDD_komp_uzdevums || "",
           Starptermins: toDateInputValue(row.Starptermins),
           Planotas_aktivitates: row.Planotas_aktivitates || "",
@@ -1443,12 +1503,8 @@
         }
       }
 
-      function toggleName(fieldKey, personName, checked) {
-        setDraft((prev) => {
-          const current = parseNameList(prev?.[fieldKey]);
-          const next = checked ? [...current, personName] : current.filter((x) => x !== personName);
-          return { ...prev, [fieldKey]: joinNameList(next) };
-        });
+      function formatPersonField(v) {
+        return joinNameList(parseNameList(v).map((n) => resolvePersonName(n, teamUsers)));
       }
 
       function readFileAsDataUrl(file) {
@@ -1599,28 +1655,27 @@
         exportRowsToExcel(rows, "visi");
       }
 
-      function renderPersonCheckboxes(fieldKey, label) {
-        const selected = new Set(parseNameList(draft?.[fieldKey]));
+      function renderPersonSelect(fieldKey) {
+        const selected = parseNameList(draft?.[fieldKey]).map((n) => resolvePersonName(n, teamUsers));
+        const current = selected[0] || "";
+        const options = teamOptions.length ? teamOptions : listTeamNamesFromUsers(teamUsers);
         return html`
-          <div class="field">
-            ${label ? html`<label>${label}</label>` : null}
-            <div class="iad-team-select">
-              ${teamOptions.length
-                ? teamOptions.map(
-                    (name) => html`
-                      <label key=${`${fieldKey}-${name}`} class="iad-team-option">
-                        <input
-                          type="checkbox"
-                          checked=${selected.has(name)}
-                          onChange=${(e) => toggleName(fieldKey, name, Boolean(e.target.checked))}
-                        />
-                        <span>${name}</span>
-                      </label>
-                    `
-                  )
-                : html`<div class="iad-team-empty">Komandas saraksts nav pieejams.</div>`}
-            </div>
-          </div>
+          <select
+            class="iad-kv-select"
+            value=${current}
+            onChange=${(e) => setDraft((prev) => ({ ...prev, [fieldKey]: String(e.target.value ?? "").trim() }))}
+          >
+            <option value="">— Izvēlies personu —</option>
+            ${options.map(
+              (name) => html`
+                <option key=${`${fieldKey}-${name}`} value=${name}>${name}</option>
+              `
+            )}
+            ${current && !options.includes(current)
+              ? html`<option key=${`${fieldKey}-legacy`} value=${current}>${current}</option>`
+              : null}
+          </select>
+          ${!options.length ? html`<div class="iad-team-empty">Komandas saraksts vēl ielādējas...</div>` : null}
         `;
       }
 
@@ -1681,7 +1736,7 @@
           const raw = row[key];
           let value = raw;
           if (key === "IAD_termins" || key === "IAD_datums" || /termin|datums/i.test(key)) value = displayDate(raw);
-          if (key === "Atbildigais" || key === "Lidzatbildigais" || /atbild/i.test(key)) value = joinNameList(parseNameList(raw));
+          if (key === "Atbildigais" || key === "Lidzatbildigais" || /atbild/i.test(key)) value = formatPersonField(raw);
           if (key === "Pielikumi") value = parseAttachments(raw).map((item) => item.name).join(", ");
           return { key, label: prettyDbLabel(key), value: String(value ?? "").trim() || "—" };
         });
@@ -1883,7 +1938,7 @@
                               ? html`<div><span class=${`iad-deadline-note ${deadlineBadge.tone}`}>${deadlineBadge.text}</span></div>`
                               : null}
                           </td>
-                          <td>${joinNameList(parseNameList(r.Atbildigais)) || "—"}</td>
+                          <td>${formatPersonField(r.Atbildigais) || "—"}</td>
                           <td>
                             <span class=${`iad-status ${done ? "done" : ""}`}>${st}</span>
                           </td>
@@ -2111,12 +2166,12 @@
                               </div>
                               <div class="iad-kv">
                                 <strong>Atbildīgais</strong>
-                                <div class="iad-kv-value editable">${renderPersonCheckboxes("Atbildigais", "")}</div>
+                                <div class="iad-kv-value editable">${renderPersonSelect("Atbildigais")}</div>
                               </div>
                               ${renderCardInput("IaD datums", "IAD_datums", { type: "date" })}
                               <div class="iad-kv">
                                 <strong>Līdzatbildīgais</strong>
-                                <div class="iad-kv-value editable">${renderPersonCheckboxes("Lidzatbildigais", "")}</div>
+                                <div class="iad-kv-value editable">${renderPersonSelect("Lidzatbildigais")}</div>
                               </div>
                               ${renderCardTextarea("PDD kompetences uzdevums", "IAD_PDD_komp_uzdevums")}
                               ${renderCardInput("Starptermiņš", "Starptermins", { type: "date" })}
