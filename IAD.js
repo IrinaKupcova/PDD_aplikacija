@@ -1979,22 +1979,35 @@
         return src.map((r) => (matcher(r) ? row : r));
       }
 
-      function triggerInformeshanaAfterSave(savedRow) {
+      function capturePreviousRowForInformeshana() {
+        if (editingSourceRow) return { ...editingSourceRow };
+        if (editingId != null) {
+          const hit = rows.find((r) => String(r?.id ?? "") === String(editingId));
+          if (hit) return { ...hit };
+        }
+        return null;
+      }
+
+      function triggerInformeshanaAfterSave(savedRow, previousRow) {
         const api = globalThis.PDD_INFORMESHANA;
         if (!api?.runAssignmentWelcomeEmails || !savedRow) return;
         const sb = supabase ?? globalThis.__PDD_SUPABASE__ ?? null;
-        setTimeout(() => {
+        const run = () => {
           void api
-            .runAssignmentWelcomeEmails({ supabase: sb, savedRow, afterSave: true })
+            .runAssignmentWelcomeEmails({ supabase: sb, savedRow, previousRow, afterSave: true })
             .then((out) => {
+              if (out?.skipped && out?.reason === "assignment_unchanged") return;
+              if (out?.skipped) console.info("[PDD_INFORMESHANA] pēc saglabāšanas", out.reason || out);
               const fails = (out?.results || []).filter((r) => r && !r.ok && !r.skipped);
               if (fails.length) console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", fails);
               if (out?.count > 0 && !out?.sent) {
-                console.warn("[PDD_INFORMESHANA] jauni piešķīrumi, bet vēstules netika nosūtītas", out);
+                console.warn("[PDD_INFORMESHANA] vēstules netika nosūtītas — pārbaudi Edge sendEmail deploy", out);
               }
+              if (out?.sent > 0) console.info("[PDD_INFORMESHANA] nosūtītas vēstules:", out.sent);
             })
             .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", e));
-        }, 400);
+        };
+        setTimeout(run, 150);
       }
 
       async function onSave(ev) {
@@ -2007,6 +2020,7 @@
         setBusy(true);
         try {
           const becameInactive = isInactiveStatus(draft.IAD_statuss);
+          const previousRowForInform = capturePreviousRowForInformeshana();
           let savedRowOut = null;
           if (useDb) {
             let savedRow = null;
@@ -2051,7 +2065,9 @@
             } catch (refreshErr) {
               setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
             }
-            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) triggerInformeshanaAfterSave(savedRowOut);
+            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) {
+              triggerInformeshanaAfterSave(savedRowOut, previousRowForInform);
+            }
           } else {
             const list = loadLocalRows();
             let savedRow = null;
@@ -2089,7 +2105,9 @@
               handleStatusListMigration(savedRow);
             }
             closeOverlay();
-            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) triggerInformeshanaAfterSave(savedRowOut);
+            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) {
+              triggerInformeshanaAfterSave(savedRowOut, previousRowForInform);
+            }
           }
         } catch (e) {
           setErr(String(e?.message || e || "Neizdevās saglabāt."));

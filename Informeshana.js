@@ -966,7 +966,7 @@
           return custom;
         }
       } catch (e) {
-        return { ok: false, reason: "custom_hook_error", error: String(e?.message || e) };
+        console.warn("[PDD_INFORMESHANA] custom hook error", e);
       }
     }
 
@@ -1021,6 +1021,107 @@
     });
   }
 
+  function assignmentPersonsSignature(row, teamUsers) {
+    return collectRowRecipientPersons(row, teamUsers)
+      .map((name) => personNameKey(name))
+      .sort()
+      .join("|");
+  }
+
+  function assignmentFieldsChanged(previousRow, savedRow, teamUsers) {
+    const prevSig = assignmentPersonsSignature(previousRow, teamUsers);
+    const nextSig = assignmentPersonsSignature(savedRow, teamUsers);
+    return prevSig !== nextSig;
+  }
+
+  function buildWelcomeAssignmentsForPersons(row, persons, teamUsers) {
+    const rowKey = rowStableId(row);
+    const items = [];
+    for (const name of Array.isArray(persons) ? persons : []) {
+      const emails = resolveEmailsForNames([name], teamUsers);
+      if (emails.length) {
+        for (const em of emails) items.push({ row, email: em, name, rowKey });
+      } else {
+        items.push({ row, email: null, name, rowKey, reason: "no_email_for_name" });
+      }
+    }
+    return items;
+  }
+
+  async function sendWelcomeAssignmentBatch(items, sb) {
+    const results = [];
+    for (const item of items) {
+      if (!item.email) {
+        results.push({
+          rowKey: item.rowKey,
+          name: item.name,
+          ok: false,
+          reason: item.reason || "no_email_for_name",
+        });
+        continue;
+      }
+      const url = buildIadDeepLink(item.row);
+      const r = await sendIadWelcomeEmail({ to: item.email, row: item.row, url, supabase: sb });
+      results.push({
+        rowKey: item.rowKey,
+        email: item.email,
+        name: item.name,
+        ...r,
+      });
+    }
+    return results;
+  }
+
+  async function runWelcomeOnRowSave(opts) {
+    const sb =
+      opts?.supabase ||
+      (typeof process !== "undefined" ? await getSupabaseClientForNode() : getSupabaseClientForBrowser());
+    const teamUsers = await loadTeamUsers(sb);
+    const savedRow = opts?.savedRow;
+    const previousRow = opts?.previousRow || null;
+
+    if (!savedRow || isInactiveStatus(savedRow?.IAD_statuss)) {
+      return { ok: true, skipped: true, reason: "inactive_or_missing_row", count: 0, results: [] };
+    }
+
+    if (!assignmentFieldsChanged(previousRow, savedRow, teamUsers)) {
+      return { ok: true, skipped: true, reason: "assignment_unchanged", count: 0, results: [] };
+    }
+
+    const targets = collectRowRecipientPersons(savedRow, teamUsers);
+    if (!targets.length) {
+      return { ok: true, skipped: true, reason: "no_assignment_persons", count: 0, results: [] };
+    }
+
+    const newAssignments = buildWelcomeAssignmentsForPersons(savedRow, targets, teamUsers);
+    if (typeof console !== "undefined" && console.info) {
+      console.info("[PDD_INFORMESHANA] atbildīgo izmaiņa — sūta pievienošanas vēstules", {
+        rowKey: rowStableId(savedRow),
+        persons: targets,
+      });
+    }
+
+    const results = await sendWelcomeAssignmentBatch(newAssignments, sb);
+    const rows = mergeSavedRowIntoList(await loadIadRows(sb), savedRow);
+    const prevSnapshot = readRecipientsSnapshot(rows, teamUsers);
+    const nextSnapshot = finalizeSnapshotAfterWelcome(
+      prevSnapshot,
+      rows,
+      teamUsers,
+      newAssignments,
+      results
+    );
+    await persistRecipientsSnapshot(sb, rows, nextSnapshot);
+
+    const sent = results.filter((r) => r.ok).length;
+    const fails = results.filter((r) => !r.ok);
+    if (fails.length && typeof console !== "undefined" && console.warn) {
+      console.warn("[PDD_INFORMESHANA] daļa vēstuļu netika nosūtīta", fails);
+    }
+
+    return { ok: true, count: newAssignments.length, sent, results, via: "row_save" };
+  }
+
   async function sendIadWelcomeEmail({ to, row, url, supabase }) {
     const email = String(to ?? "").trim();
     if (!isValidEmail(email)) return { ok: false, reason: "invalid_email" };
@@ -1042,6 +1143,10 @@
   }
 
   async function runAssignmentWelcomeEmails(opts) {
+    if (opts?.afterSave && opts?.savedRow) {
+      return runWelcomeOnRowSave(opts);
+    }
+
     const sb =
       opts?.supabase ||
       (typeof process !== "undefined" ? await getSupabaseClientForNode() : getSupabaseClientForBrowser());
@@ -1052,34 +1157,14 @@
 
     const prevSnapshot = readRecipientsSnapshot(rows, teamUsers);
 
-    if (!opts?.afterSave && !opts?.forceWelcome && isInformeshanaBootstrap(rows, prevSnapshot, teamUsers)) {
+    if (!opts?.forceWelcome && isInformeshanaBootstrap(rows, prevSnapshot, teamUsers)) {
       const nextSnapshot = buildRecipientsSnapshot(rows, teamUsers, prevSnapshot);
       await persistRecipientsSnapshot(sb, rows, nextSnapshot);
       return { ok: true, skipped: true, reason: "bootstrap_snapshot", count: 0, results: [] };
     }
 
     const { newAssignments } = detectNewAssignments(rows, teamUsers, prevSnapshot);
-    const results = [];
-
-    for (const item of newAssignments) {
-      if (!item.email) {
-        results.push({
-          rowKey: item.rowKey,
-          name: item.name,
-          ok: false,
-          reason: item.reason || "no_email_for_name",
-        });
-        continue;
-      }
-      const url = buildIadDeepLink(item.row);
-      const r = await sendIadWelcomeEmail({ to: item.email, row: item.row, url, supabase: sb });
-      results.push({
-        rowKey: item.rowKey,
-        email: item.email,
-        name: item.name,
-        ...r,
-      });
-    }
+    const results = await sendWelcomeAssignmentBatch(newAssignments, sb);
 
     const nextSnapshot = finalizeSnapshotAfterWelcome(
       prevSnapshot,
@@ -1204,6 +1289,7 @@
     runInformeshanaTick,
     runMonthlyIadReminders,
     runAssignmentWelcomeEmails,
+    runWelcomeOnRowSave,
     sendIadReminderEmail,
     sendIadWelcomeEmail,
     buildReminderText,

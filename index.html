@@ -465,8 +465,8 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=2026051312"></script>
-      <script defer src="./Informeshana.js?v=202605197"></script>
-      <script defer src="./IAD.js?v=202605198"></script>
+      <script defer src="./Informeshana.js?v=202605198"></script>
+      <script defer src="./IAD.js?v=202605199"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=20260422l"></script>
@@ -1550,6 +1550,7 @@
           const resendApiUrl = getPddResendApiUrl();
           if (resendApiUrl && supabase) {
             try {
+              await getAccessTokenForFunctions();
               const r = await callPddResendApi({
                 action: "iad_informesana",
                 to,
@@ -1587,29 +1588,50 @@
             ...(cc.length ? { cc } : {}),
           };
           const fetchUrls = getEdgeFnCandidateUrls(fnUrl);
+          let accessToken = await getAccessTokenForFunctions();
+          accessToken = sanitizeHttpHeaderValue(accessToken);
+          const bearerVariants = [apiKey];
+          if (accessToken && accessToken !== apiKey) bearerVariants.push(accessToken);
+
           for (const u of fetchUrls) {
-            try {
-              const out = await fetch(u, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  apikey: apiKey,
-                  Authorization: "Bearer " + apiKey,
-                },
-                body: JSON.stringify(emailPayload),
-              });
-              const txt = await out.text();
-              let j = null;
+            for (const bearer of bearerVariants) {
               try {
-                j = txt ? JSON.parse(txt) : null;
-              } catch {
-                j = { raw: txt };
+                const out = await fetch(u, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    apikey: apiKey,
+                    Authorization: "Bearer " + bearer,
+                  },
+                  body: JSON.stringify(emailPayload),
+                });
+                const txt = await out.text();
+                let j = null;
+                try {
+                  j = txt ? JSON.parse(txt) : null;
+                } catch {
+                  j = { raw: txt };
+                }
+                if (isSendPddEmailResponseOk(j, out.ok)) {
+                  return { ok: true, via: "edge_sendEmail", body: j };
+                }
+                if (!out.ok || j?.skipped) {
+                  console.warn("[PDD_INFORMESHANA] edge atbilde", u, out.status, j);
+                }
+              } catch (e) {
+                console.warn("[PDD_INFORMESHANA] edge", e);
               }
-              if (isSendPddEmailResponseOk(j, out.ok)) {
-                return { ok: true, via: "edge_sendEmail", body: j };
+            }
+            try {
+              const { data, error } = await supabase.functions.invoke(
+                String(u).match(/\/functions\/v1\/([^/?#]+)/i)?.[1] || "sendEmail",
+                { body: emailPayload }
+              );
+              if (!error && isSendPddEmailResponseOk(data, true)) {
+                return { ok: true, via: "edge_invoke", body: data };
               }
             } catch (e) {
-              console.warn("[PDD_INFORMESHANA] edge", e);
+              console.warn("[PDD_INFORMESHANA] edge invoke", e);
             }
           }
           return { ok: false, reason: "all_channels_failed" };
