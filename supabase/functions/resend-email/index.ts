@@ -15,7 +15,7 @@ const DEFAULT_APPROVAL_URL =
   "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
 const DEFAULT_TO = "katrina.jirgensone@vid.gov.lv";
 /** Noklusējuma CC: pamata kopija + testa adrese (RESEND_CC var pārrakstīt, komati atdala vairākas). */
-const DEFAULT_CC = "irina.kupcova@vid.gov.lv,pliada@inbox.lv";
+const DEFAULT_CC = "irina.kupcova@vid.gov.lv";
 
 function parseEmailList(raw: string | undefined | null, fallback: string): string[] {
   const src = String(raw ?? "").trim() || fallback;

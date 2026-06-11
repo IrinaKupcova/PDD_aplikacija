@@ -27,7 +27,7 @@
   const FILE_PDD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendEmail";
   const FILE_PDD_IAD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendIadEmail";
   /** CC uzraudzībai — kopijas uz abiem, lai var pārbaudīt sūtīšanu. */
-  const CONTROL_CC_EMAILS = ["irina.kupcova@vid.gov.lv", "pliada@inbox.lv"];
+  const CONTROL_CC_EMAILS = ["irina.kupcova@vid.gov.lv"];
 
   function toStr(v, max) {
     const s = String(v ?? "").trim();

@@ -13,7 +13,7 @@ const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const DEFAULT_APPROVAL_URL =
   "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
 const DEFAULT_TO = "katrina.jirgensone@vid.gov.lv";
-const DEFAULT_CC = "irina.kupcova@vid.gov.lv,pliada@inbox.lv";
+const DEFAULT_CC = "irina.kupcova@vid.gov.lv";
 
 function sanitizeHeaderValue(v: unknown): string {
   const s = String(v ?? "").replace(/^\uFEFF/, "").replace(/[\u200B-\u200D\uFEFF]/g, "");
