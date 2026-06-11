@@ -51,6 +51,10 @@ type RequestBody = {
   type?: unknown;
   subject?: unknown;
   url?: unknown;
+  to?: unknown;
+  text?: unknown;
+  html?: unknown;
+  cc?: unknown;
 };
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -86,6 +90,55 @@ function isCitsPayload(raw: RequestBody, veids: string): boolean {
   return false;
 }
 
+function isIadInformeshanaPayload(raw: RequestBody): boolean {
+  const t = String(raw?.type ?? "").trim().toLowerCase();
+  return (
+    t === "iad_atgadinajums" ||
+    t === "iad_informesana" ||
+    t === "iad_welcome" ||
+    t === "iad_reminder"
+  );
+}
+
+function parseCcFromRequest(raw: RequestBody): string[] {
+  const cc = raw?.cc;
+  if (Array.isArray(cc)) {
+    return cc
+      .map((x) => sanitizeHeaderValue(x))
+      .filter((x) => x.includes("@") && x.includes("."));
+  }
+  const s = String(cc ?? "").trim();
+  if (!s) return [];
+  return s
+    .split(/[,;]+/)
+    .map((x) => sanitizeHeaderValue(x))
+    .filter((x) => x.includes("@") && x.includes("."));
+}
+
+async function sendViaResend(
+  resendApiKey: string,
+  emailBody: Record<string, unknown>,
+): Promise<{ ok: boolean; status: number; parsed: unknown }> {
+  const resendResp = await fetch(RESEND_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${resendApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(emailBody),
+  });
+
+  const raw = await resendResp.text();
+  let parsed: unknown = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = raw;
+  }
+
+  return { ok: resendResp.ok, status: resendResp.status, parsed };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -106,6 +159,64 @@ Deno.serve(async (req: Request) => {
     rawBody = (await req.json()) as RequestBody;
   } catch {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (isIadInformeshanaPayload(rawBody)) {
+    const toAddr = sanitizeHeaderValue(rawBody?.to);
+    if (!toAddr || !toAddr.includes("@")) {
+      return jsonResponse({ error: "to is required for IaD informēšana" }, 400);
+    }
+
+    const subject =
+      String(rawBody?.subject ?? "").trim() || "PDD: IaD informēšana";
+    const htmlRaw = String(rawBody?.html ?? "").trim();
+    const textRaw = String(rawBody?.text ?? "").trim();
+    const urlRaw = String(rawBody?.url ?? "").trim();
+    const html =
+      htmlRaw ||
+      `<!doctype html><html><body style="font-family:Segoe UI,Arial,sans-serif;line-height:1.45;color:#0f172a"><p>${escapeHtml(
+        textRaw || String(rawBody?.name ?? ""),
+      )}</p>${
+        urlRaw
+          ? `<p><a href="${escapeHtml(urlRaw)}" target="_blank" rel="noopener">Atvērt aplikācijā</a></p>`
+          : ""
+      }</body></html>`;
+
+    const emailBody: Record<string, unknown> = {
+      from,
+      to: [toAddr],
+      subject,
+      html,
+    };
+    if (textRaw) emailBody.text = textRaw;
+
+    const bodyCc = parseCcFromRequest(rawBody).filter(
+      (em) => em.toLowerCase() !== toAddr.toLowerCase(),
+    );
+    if (allowCc && bodyCc.length > 0) {
+      emailBody.cc = bodyCc;
+    }
+
+    try {
+      const sent = await sendViaResend(resendApiKey, emailBody);
+      if (!sent.ok) {
+        return jsonResponse(
+          {
+            error: "Resend request failed",
+            status: sent.status,
+            details: sent.parsed,
+          },
+          502,
+        );
+      }
+      return jsonResponse(
+        { success: true, ok: true, provider: "resend", result: sent.parsed },
+        200,
+      );
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return jsonResponse({ error: "Unexpected server error", details: errMsg }, 500);
+    }
   }
 
   const { name, veids } = normalizeBody(rawBody);
@@ -146,35 +257,19 @@ Deno.serve(async (req: Request) => {
       emailBody.cc = ccList;
     }
 
-    const resendResp = await fetch(RESEND_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${resendApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(emailBody),
-    });
-
-    const raw = await resendResp.text();
-    let parsed: unknown = null;
-    try {
-      parsed = raw ? JSON.parse(raw) : null;
-    } catch {
-      parsed = raw;
-    }
-
-    if (!resendResp.ok) {
+    const sent = await sendViaResend(resendApiKey, emailBody);
+    if (!sent.ok) {
       return jsonResponse(
         {
           error: "Resend request failed",
-          status: resendResp.status,
-          details: parsed,
+          status: sent.status,
+          details: sent.parsed,
         },
         502,
       );
     }
 
-    return jsonResponse({ success: true, ok: true, provider: "resend", result: parsed }, 200);
+    return jsonResponse({ success: true, ok: true, provider: "resend", result: sent.parsed }, 200);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const debug = {

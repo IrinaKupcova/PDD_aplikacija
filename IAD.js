@@ -1979,6 +1979,21 @@
         return src.map((r) => (matcher(r) ? row : r));
       }
 
+      function triggerInformeshanaAfterSave() {
+        const api = globalThis.PDD_INFORMESHANA;
+        if (!api?.runAssignmentWelcomeEmails) return;
+        const sb = supabase ?? globalThis.__PDD_SUPABASE__ ?? null;
+        setTimeout(() => {
+          void api
+            .runAssignmentWelcomeEmails({ supabase: sb })
+            .then((out) => {
+              const fails = (out?.results || []).filter((r) => r && !r.ok && !r.skipped);
+              if (fails.length) console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", fails);
+            })
+            .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", e));
+        }, 400);
+      }
+
       async function onSave(ev) {
         ev?.preventDefault?.();
         setErr("");
@@ -2029,6 +2044,7 @@
             } catch (refreshErr) {
               setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
             }
+            triggerInformeshanaAfterSave();
           } else {
             const list = loadLocalRows();
             let savedRow = null;
@@ -2063,6 +2079,7 @@
             setRows(list);
             if (savedRow) handleStatusListMigration(savedRow);
             closeOverlay();
+            triggerInformeshanaAfterSave();
           }
         } catch (e) {
           setErr(String(e?.message || e || "Neizdevās saglabāt."));

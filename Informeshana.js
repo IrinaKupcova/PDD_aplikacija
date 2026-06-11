@@ -1040,22 +1040,38 @@
     return { welcome, monthly };
   }
 
+  function logInformeshanaTickResult(out, label) {
+    if (!out || typeof out !== "object") return;
+    const welcomeFails = (out.welcome?.results || []).filter((r) => r && !r.ok && !r.skipped);
+    const monthlyFails = (out.monthly?.results || []).filter((r) => r && r.ok === false);
+    if (welcomeFails.length || monthlyFails.length) {
+      console.warn("[PDD_INFORMESHANA]", label || "tick", { welcomeFails, monthlyFails, out });
+    }
+  }
+
   function initBrowserScheduler() {
     applyIadFocusFromUrl();
-    const tick = () => {
-      void runInformeshanaTick().catch((e) => {
-        console.warn("[PDD_INFORMESHANA]", e);
-      });
+    const tick = (label) => {
+      void runInformeshanaTick()
+        .then((out) => logInformeshanaTickResult(out, label))
+        .catch((e) => {
+          console.warn("[PDD_INFORMESHANA]", e);
+        });
     };
     if (typeof document !== "undefined") {
+      const start = () => {
+        tick("init");
+        setTimeout(() => tick("retry-3s"), 3000);
+        setTimeout(() => tick("retry-15s"), 15000);
+      };
       if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", tick, { once: true });
+        document.addEventListener("DOMContentLoaded", start, { once: true });
       } else {
-        tick();
+        start();
       }
       try {
         const dayMs = 24 * 60 * 60 * 1000;
-        setInterval(tick, dayMs);
+        setInterval(() => tick("daily"), dayMs);
       } catch {
         /* ignore */
       }
