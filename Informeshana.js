@@ -121,10 +121,48 @@
   }
 
   function collectRowRecipientEmails(row, teamUsers) {
+    const names = collectRowRecipientPersons(row, teamUsers);
+    return resolveEmailsForNames(names, teamUsers);
+  }
+
+  function collectRowRecipientPersons(row, teamUsers) {
     const atb = parseNameList(row?.Atbildigais).map((n) => resolvePersonName(n, teamUsers));
     const lidz = parseNameList(row?.Lidzatbildigais).map((n) => resolvePersonName(n, teamUsers));
-    const names = [...atb, ...lidz].filter(Boolean);
-    return resolveEmailsForNames(names, teamUsers);
+    return [...new Set([...atb, ...lidz].filter(Boolean))];
+  }
+
+  function personNameKey(name) {
+    return normalizeLookupText(String(name ?? ""));
+  }
+
+  function normalizeSnapshotPersons(list, teamUsers) {
+    return [
+      ...new Set(
+        (Array.isArray(list) ? list : [])
+          .map((item) => {
+            const s = String(item ?? "").trim();
+            if (!s) return "";
+            if (s.includes("@")) {
+              const hit = (Array.isArray(teamUsers) ? teamUsers : []).find(
+                (u) => normEmail(pickUserEmail(u)) === normEmail(s)
+              );
+              return hit ? teamUserDisplayName(hit) : "";
+            }
+            return resolvePersonName(s, teamUsers) || s;
+          })
+          .filter(Boolean)
+      ),
+    ];
+  }
+
+  function mergeSavedRowIntoList(rows, savedRow) {
+    if (!savedRow) return Array.isArray(rows) ? rows : [];
+    const list = Array.isArray(rows) ? [...rows] : [];
+    const key = rowStableId(savedRow);
+    const idx = list.findIndex((r) => rowStableId(r) === key);
+    if (idx >= 0) list[idx] = { ...list[idx], ...savedRow };
+    else list.unshift(savedRow);
+    return list;
   }
 
   function rowStableId(row) {
@@ -587,26 +625,57 @@
     }
   }
 
-  function readRecipientsSnapshot(rows) {
+  function readRecipientsSnapshot(rows, teamUsers) {
     const snap = { ...readLocalRecipientsSnapshot() };
     for (const row of Array.isArray(rows) ? rows : []) {
       const rowKey = rowStableId(row);
-      const dbEmails = readSanemtajiFromIadRow(row);
-      if (Array.isArray(dbEmails) && dbEmails.length) snap[rowKey] = dbEmails;
+      const dbList = readSanemtajiFromIadRow(row);
+      if (Array.isArray(dbList) && dbList.length) {
+        snap[rowKey] = normalizeSnapshotPersons(dbList, teamUsers);
+      }
+    }
+    for (const key of Object.keys(snap)) {
+      snap[key] = normalizeSnapshotPersons(snap[key], teamUsers);
     }
     return snap;
   }
 
-  function isInformeshanaBootstrap(rows, prevSnapshot) {
-    const localEmpty = !prevSnapshot || !Object.keys(prevSnapshot).length;
+  function isInformeshanaBootstrap(rows, prevSnapshot, teamUsers) {
+    const hasSnapshot = Object.values(prevSnapshot || {}).some(
+      (list) => normalizeSnapshotPersons(list, teamUsers).length > 0
+    );
+    if (hasSnapshot) return false;
     const active = filterActiveIadRows(rows);
-    const dbEmpty =
-      !active.length ||
-      active.every((row) => {
-        const emails = readSanemtajiFromIadRow(row);
-        return !Array.isArray(emails) || !emails.length;
+    if (!active.length) return true;
+    return active.every((row) => !normalizeSnapshotPersons(readSanemtajiFromIadRow(row), teamUsers).length);
+  }
+
+  function finalizeSnapshotAfterWelcome(prevSnapshot, rows, teamUsers, newAssignments, results) {
+    const snap = { ...(prevSnapshot && typeof prevSnapshot === "object" ? prevSnapshot : {}) };
+    const seenKeys = new Set();
+    for (const row of rows || []) {
+      const rowKey = rowStableId(row);
+      if (!rowKey) continue;
+      seenKeys.add(rowKey);
+      if (isInactiveStatus(row)) continue;
+      const currentPersons = collectRowRecipientPersons(row, teamUsers);
+      const rowNew = newAssignments.filter((x) => x.rowKey === rowKey);
+      if (!rowNew.length) {
+        snap[rowKey] = currentPersons;
+        continue;
+      }
+      const allSucceeded = rowNew.every((item) => {
+        if (!item.email) return false;
+        return results.some(
+          (r) => r.rowKey === item.rowKey && normEmail(r.email) === normEmail(item.email) && r.ok
+        );
       });
-    return localEmpty && dbEmpty;
+      if (allSucceeded) snap[rowKey] = currentPersons;
+    }
+    for (const key of Object.keys(snap)) {
+      if (!seenKeys.has(key)) delete snap[key];
+    }
+    return snap;
   }
 
   async function persistRecipientsSnapshot(sb, rows, snapshot) {
@@ -632,7 +701,7 @@
       if (!rowKey) continue;
       seenKeys.add(rowKey);
       if (isInactiveStatus(row)) continue;
-      snap[rowKey] = collectRowRecipientEmails(row, teamUsers);
+      snap[rowKey] = collectRowRecipientPersons(row, teamUsers);
     }
     for (const key of Object.keys(snap)) {
       if (!seenKeys.has(key)) delete snap[key];
@@ -642,19 +711,24 @@
 
   function detectNewAssignments(rows, teamUsers, prevSnapshot) {
     const newAssignments = [];
-    const nextSnapshot = buildRecipientsSnapshot(rows, teamUsers, prevSnapshot);
     for (const row of filterActiveIadRows(rows)) {
       const rowKey = rowStableId(row);
-      const current = collectRowRecipientEmails(row, teamUsers);
-      const prev = Array.isArray(prevSnapshot?.[rowKey]) ? prevSnapshot[rowKey] : [];
-      const prevSet = new Set(prev.map((em) => normEmail(em)));
-      for (const em of current) {
-        if (!prevSet.has(normEmail(em))) {
-          newAssignments.push({ row, email: em, rowKey });
+      const currentPersons = collectRowRecipientPersons(row, teamUsers);
+      const prev = normalizeSnapshotPersons(prevSnapshot?.[rowKey], teamUsers);
+      const prevSet = new Set(prev.map((name) => personNameKey(name)));
+      for (const name of currentPersons) {
+        if (prevSet.has(personNameKey(name))) continue;
+        const emails = resolveEmailsForNames([name], teamUsers);
+        if (emails.length) {
+          for (const em of emails) {
+            newAssignments.push({ row, email: em, name, rowKey });
+          }
+        } else {
+          newAssignments.push({ row, email: null, name, rowKey, reason: "no_email_for_name" });
         }
       }
     }
-    return { newAssignments, nextSnapshot };
+    return { newAssignments };
   }
 
   function applyIadFocusFromUrl() {
@@ -687,20 +761,30 @@
   }
 
   async function loadTeamUsers(sb) {
+    const seen = new Map();
+    const add = (u) => {
+      if (!u || typeof u !== "object") return;
+      const id = String(u?.id ?? u?.user_id ?? "").trim();
+      const name = personNameKey(teamUserDisplayName(u));
+      const em = normEmail(pickUserEmail(u));
+      const key = id || name || em;
+      if (!key) return;
+      if (!seen.has(key)) seen.set(key, u);
+    };
     try {
-      const fromKomanda = root.KOMANDA?.loadTeamUsers?.() ?? [];
-      if (Array.isArray(fromKomanda) && fromKomanda.length) return fromKomanda;
+      for (const u of root.KOMANDA?.loadTeamUsers?.() ?? []) add(u);
     } catch {
       /* ignore */
     }
-    if (!sb) return [];
-    try {
-      const pu = await sb.from("users").select("*").order("Vārds uzvārds", { ascending: true });
-      if (!pu.error && Array.isArray(pu.data) && pu.data.length) return pu.data;
-    } catch {
-      /* ignore */
+    if (sb) {
+      try {
+        const pu = await sb.from("users").select("*").order("Vārds uzvārds", { ascending: true });
+        if (!pu.error) for (const u of pu.data ?? []) add(u);
+      } catch {
+        /* ignore */
+      }
     }
-    return [];
+    return [...seen.values()];
   }
 
   async function loadIadRows(sb) {
@@ -962,30 +1046,50 @@
       opts?.supabase ||
       (typeof process !== "undefined" ? await getSupabaseClientForNode() : getSupabaseClientForBrowser());
 
-    const [rows, teamUsers] = await Promise.all([loadIadRows(sb), loadTeamUsers(sb)]);
-    const prevSnapshot = readRecipientsSnapshot(rows);
+    const teamUsers = await loadTeamUsers(sb);
+    let rows = await loadIadRows(sb);
+    if (opts?.savedRow) rows = mergeSavedRowIntoList(rows, opts.savedRow);
 
-    if (isInformeshanaBootstrap(rows, prevSnapshot) && !opts?.forceWelcome) {
+    const prevSnapshot = readRecipientsSnapshot(rows, teamUsers);
+
+    if (!opts?.afterSave && !opts?.forceWelcome && isInformeshanaBootstrap(rows, prevSnapshot, teamUsers)) {
       const nextSnapshot = buildRecipientsSnapshot(rows, teamUsers, prevSnapshot);
       await persistRecipientsSnapshot(sb, rows, nextSnapshot);
       return { ok: true, skipped: true, reason: "bootstrap_snapshot", count: 0, results: [] };
     }
 
-    const { newAssignments, nextSnapshot } = detectNewAssignments(rows, teamUsers, prevSnapshot);
+    const { newAssignments } = detectNewAssignments(rows, teamUsers, prevSnapshot);
     const results = [];
 
     for (const item of newAssignments) {
+      if (!item.email) {
+        results.push({
+          rowKey: item.rowKey,
+          name: item.name,
+          ok: false,
+          reason: item.reason || "no_email_for_name",
+        });
+        continue;
+      }
       const url = buildIadDeepLink(item.row);
       const r = await sendIadWelcomeEmail({ to: item.email, row: item.row, url, supabase: sb });
       results.push({
         rowKey: item.rowKey,
         email: item.email,
+        name: item.name,
         ...r,
       });
     }
 
+    const nextSnapshot = finalizeSnapshotAfterWelcome(
+      prevSnapshot,
+      rows,
+      teamUsers,
+      newAssignments,
+      results
+    );
     await persistRecipientsSnapshot(sb, rows, nextSnapshot);
-    return { ok: true, count: newAssignments.length, results };
+    return { ok: true, count: newAssignments.length, sent: results.filter((r) => r.ok).length, results };
   }
 
   async function runMonthlyIadReminders(opts) {

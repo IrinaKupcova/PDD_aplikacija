@@ -367,6 +367,33 @@ module.exports = async (req, res) => {
       return res.end(JSON.stringify({ ok: true, sent }));
     }
 
+    if (action === "iad_informesana") {
+      const to = String(body.to || "").trim();
+      const subject = String(body.subject || "").trim() || "PDD: IaD informēšana";
+      const html =
+        String(body.html || "").trim() ||
+        `<p>${String(body.text || "").replace(/</g, "&lt;")}</p>`;
+      const text = String(body.text || "").trim();
+      const cc = (Array.isArray(body.cc) ? body.cc : [])
+        .map((x) => String(x || "").trim())
+        .filter((x) => x.includes("@") && x.includes("."));
+      if (!to.includes("@")) {
+        res.statusCode = 400;
+        return res.end(JSON.stringify({ error: "Trūkst derīga to" }));
+      }
+      const emailBody = { from, to: [to], subject, html };
+      if (text) emailBody.text = text;
+      const ccFiltered = cc.filter((em) => em.toLowerCase() !== to.toLowerCase());
+      if (ccFiltered.length) emailBody.cc = ccFiltered;
+      const { error } = await resend.emails.send(emailBody);
+      if (error) {
+        res.statusCode = 502;
+        return res.end(JSON.stringify({ error: error.message || String(error) }));
+      }
+      res.statusCode = 200;
+      return res.end(JSON.stringify({ ok: true, success: true, sent: [to] }));
+    }
+
     if (action === "cits_token_approved_emails") {
       const token = String(body.token || "").trim();
       if (!token) {

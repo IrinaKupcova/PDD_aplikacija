@@ -1979,16 +1979,19 @@
         return src.map((r) => (matcher(r) ? row : r));
       }
 
-      function triggerInformeshanaAfterSave() {
+      function triggerInformeshanaAfterSave(savedRow) {
         const api = globalThis.PDD_INFORMESHANA;
-        if (!api?.runAssignmentWelcomeEmails) return;
+        if (!api?.runAssignmentWelcomeEmails || !savedRow) return;
         const sb = supabase ?? globalThis.__PDD_SUPABASE__ ?? null;
         setTimeout(() => {
           void api
-            .runAssignmentWelcomeEmails({ supabase: sb })
+            .runAssignmentWelcomeEmails({ supabase: sb, savedRow, afterSave: true })
             .then((out) => {
               const fails = (out?.results || []).filter((r) => r && !r.ok && !r.skipped);
               if (fails.length) console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", fails);
+              if (out?.count > 0 && !out?.sent) {
+                console.warn("[PDD_INFORMESHANA] jauni piešķīrumi, bet vēstules netika nosūtītas", out);
+              }
             })
             .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", e));
         }, 400);
@@ -2004,12 +2007,14 @@
         setBusy(true);
         try {
           const becameInactive = isInactiveStatus(draft.IAD_statuss);
+          let savedRowOut = null;
           if (useDb) {
             let savedRow = null;
             if (editingId != null) {
               savedRow = await updateIadRowInSupabase(supabase, editingId, draft);
               if (savedRow) {
                 const row = finalizeSavedRow(savedRow, draft);
+                savedRowOut = row;
                 setRows((prev) => replaceRowInList(prev, row, (r) => String(r?.id ?? "") === String(editingId)));
                 handleStatusListMigration(row);
               }
@@ -2017,6 +2022,7 @@
               savedRow = await updateIadRowByNaturalKeyInSupabase(supabase, editingSourceRow, draft);
               if (savedRow) {
                 const row = finalizeSavedRow(savedRow, draft);
+                savedRowOut = row;
                 setRows((prev) =>
                   replaceRowInList(prev, row, (r) => {
                     const sameNumurs = String(r?.IAD_numurs ?? "") === String(editingSourceRow?.IAD_numurs ?? "");
@@ -2030,6 +2036,7 @@
               savedRow = await insertIadRowToSupabase(supabase, draft);
               if (savedRow) {
                 const row = finalizeSavedRow(savedRow, draft);
+                savedRowOut = row;
                 setRows((prev) => [row, ...(Array.isArray(prev) ? prev : [])]);
                 handleStatusListMigration(row);
               }
@@ -2044,7 +2051,7 @@
             } catch (refreshErr) {
               setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
             }
-            triggerInformeshanaAfterSave();
+            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) triggerInformeshanaAfterSave(savedRowOut);
           } else {
             const list = loadLocalRows();
             let savedRow = null;
@@ -2077,9 +2084,12 @@
             }
             saveLocalRows(list);
             setRows(list);
-            if (savedRow) handleStatusListMigration(savedRow);
+            if (savedRow) {
+              savedRowOut = savedRow;
+              handleStatusListMigration(savedRow);
+            }
             closeOverlay();
-            triggerInformeshanaAfterSave();
+            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) triggerInformeshanaAfterSave(savedRowOut);
           }
         } catch (e) {
           setErr(String(e?.message || e || "Neizdevās saglabāt."));
