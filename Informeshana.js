@@ -26,7 +26,8 @@
   const FILE_SUPABASE_ANON_KEY = "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
   const FILE_PDD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendEmail";
   const FILE_PDD_IAD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendIadEmail";
-  const CONTROL_MONITOR_EMAIL = "irina.kupcova@vid.gov.lv";
+  /** CC uzraudzībai — kopijas uz abiem, lai var pārbaudīt sūtīšanu. */
+  const CONTROL_CC_EMAILS = ["irina.kupcova@vid.gov.lv", "pliada@inbox.lv"];
 
   function toStr(v, max) {
     const s = String(v ?? "").trim();
@@ -277,22 +278,35 @@
 </body></html>`;
   }
 
-  function getControlMonitorEmail() {
+  function parseControlCcCsv(raw) {
+    return uniqEmails(
+      String(raw ?? "")
+        .split(/[,;]+/)
+        .map((x) => x.trim())
+        .filter(Boolean),
+    );
+  }
+
+  function getControlCcEmails() {
     const fromEnv =
       typeof process !== "undefined" ? String(process.env.PDD_IAD_REMINDER_CONTROL_EMAIL || "").trim() : "";
     const fromGlobal = String(root.__PDD_IAD_REMINDER_CONTROL_EMAIL__ ?? "").trim();
-    return fromGlobal || fromEnv || CONTROL_MONITOR_EMAIL;
+    const raw = fromGlobal || fromEnv;
+    if (raw) return parseControlCcCsv(raw);
+    return [...CONTROL_CC_EMAILS];
+  }
+
+  function getControlMonitorEmail() {
+    return getControlCcEmails()[0] || CONTROL_CC_EMAILS[0];
   }
 
   function getControlCcFor(to) {
-    const control = getControlMonitorEmail();
-    if (!control || !isValidEmail(control)) return [];
-    if (normEmail(control) === normEmail(to)) return [];
-    return [control];
+    return getControlCcEmails().filter((em) => normEmail(em) !== normEmail(to));
   }
 
   function isControlMonitorRecipient(email) {
-    return normEmail(email) === normEmail(getControlMonitorEmail());
+    const em = normEmail(email);
+    return getControlCcEmails().some((c) => normEmail(c) === em);
   }
 
   function getRowDbId(row) {
@@ -859,6 +873,8 @@
       if (ls) urls.push(ls.replace(/\/+$/, ""));
     }
     urls.push(String(FILE_PDD_IAD_EMAIL_FN_URL).replace(/\/+$/, ""));
+    const base = String(FILE_SUPABASE_URL || "").replace(/\/+$/, "");
+    if (base) urls.push(`${base}/functions/v1/rapid-processor`);
     urls.push(getSendEmailFnUrl());
     return [...new Set(urls.filter(Boolean))];
   }
@@ -937,7 +953,7 @@
 
     let lastFail = { ok: false, reason: "edge_skipped" };
     for (const fnUrl of getIadEmailFnUrls()) {
-      const dedicated = /\/sendIadEmail$/i.test(fnUrl);
+      const dedicated = /\/(sendIadEmail|rapid-processor)$/i.test(fnUrl);
       const payload = dedicated ? iadPayload : legacyPayload;
       try {
         const res = await fetch(fnUrl, {
@@ -958,6 +974,12 @@
         }
         if (res.ok && body && (body.ok || body.success) && !body.skipped) {
           return { ok: true, via: dedicated ? "edge_sendIadEmail" : "edge_sendEmail", body, fnUrl };
+        }
+        if (body?.skipped && body?.reason === "not_cits" && typeof console !== "undefined" && console.warn) {
+          console.warn(
+            "[PDD_INFORMESHANA] sendEmail serverī nav IaD atbalsta (not_cits). Prombūtnes strādā ar type:cits, bet IaD vajag atjauninātu sendEmail kodu Supabase dashboard.",
+            fnUrl,
+          );
         }
         lastFail = {
           ok: false,

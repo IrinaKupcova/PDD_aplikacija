@@ -465,7 +465,7 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=2026051312"></script>
-      <script defer src="./Informeshana.js?v=202605199"></script>
+      <script defer src="./Informeshana.js?v=202605201"></script>
       <script defer src="./IAD.js?v=202605199"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
@@ -1405,6 +1405,7 @@
           const base = normalizeProjectUrl(cfg.url || "");
           if (base && isValidSupabaseProjectUrl(base)) {
             urls.push(`${base}/functions/v1/sendIadEmail`);
+            urls.push(`${base}/functions/v1/rapid-processor`);
             urls.push(`${base}/functions/v1/sendEmail`);
           } else {
             urls.push(getSendPddEmailFnUrl());
@@ -1617,7 +1618,7 @@
           if (accessToken && accessToken !== apiKey) bearerVariants.push(accessToken);
 
           for (const u of fetchUrls) {
-            const dedicated = /\/sendIadEmail$/i.test(u);
+            const dedicated = /\/(sendIadEmail|rapid-processor)$/i.test(u);
             const emailPayload = dedicated ? iadPayload : legacyPayload;
             for (const bearer of bearerVariants) {
               try {
@@ -1641,7 +1642,15 @@
                   return { ok: true, via: dedicated ? "edge_sendIadEmail" : "edge_sendEmail", body: j };
                 }
                 if (!out.ok || j?.skipped) {
-                  console.warn("[PDD_INFORMESHANA] edge atbilde", u, out.status, j);
+                  if (j?.reason === "not_cits") {
+                    console.warn(
+                      "[PDD_INFORMESHANA] sendEmail serverī nav IaD atbalsta (not_cits). Atjaunini sendEmail kodu Supabase dashboard.",
+                      u,
+                      j,
+                    );
+                  } else {
+                    console.warn("[PDD_INFORMESHANA] edge atbilde", u, out.status, j);
+                  }
                 }
               } catch (e) {
                 console.warn("[PDD_INFORMESHANA] edge", e);
