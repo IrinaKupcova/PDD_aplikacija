@@ -6,7 +6,9 @@
     "node": ">=18"
   },
   "scripts": {
-    "deploy:send-email": "supabase functions deploy sendEmail --no-verify-jwt",
+    "deploy:send-email": "supabase functions deploy sendEmail --project-ref fdnkvecgqetmwilwolgt --no-verify-jwt",
+    "deploy:send-iad-email": "supabase functions deploy sendIadEmail --project-ref fdnkvecgqetmwilwolgt --no-verify-jwt",
+    "deploy:all-email": "npm run deploy:send-iad-email && npm run deploy:send-email",
     "deploy:resend-email": "supabase functions deploy resend-email --no-verify-jwt"
   },
   "devDependencies": {

@@ -2001,7 +2001,7 @@
               const fails = (out?.results || []).filter((r) => r && !r.ok && !r.skipped);
               if (fails.length) console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", fails);
               if (out?.count > 0 && !out?.sent) {
-                console.warn("[PDD_INFORMESHANA] vēstules netika nosūtītas — pārbaudi Edge sendEmail deploy", out);
+                console.warn("[PDD_INFORMESHANA] vēstules netika nosūtītas — deploy Edge sendIadEmail (npm run deploy:send-iad-email)", out);
               }
               if (out?.sent > 0) console.info("[PDD_INFORMESHANA] nosūtītas vēstules:", out.sent);
             })

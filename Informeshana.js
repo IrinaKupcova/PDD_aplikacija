@@ -25,6 +25,7 @@
   const FILE_SUPABASE_URL = "https://fdnkvecgqetmwilwolgt.supabase.co";
   const FILE_SUPABASE_ANON_KEY = "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
   const FILE_PDD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendEmail";
+  const FILE_PDD_IAD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendIadEmail";
   const CONTROL_MONITOR_EMAIL = "irina.kupcova@vid.gov.lv";
 
   function toStr(v, max) {
@@ -849,6 +850,19 @@
     return String(FILE_PDD_EMAIL_FN_URL).replace(/\/+$/, "");
   }
 
+  function getIadEmailFnUrls() {
+    const urls = [];
+    const fromGlobal = String(root.__PDD_IAD_EMAIL_FN_URL__ ?? "").trim();
+    if (fromGlobal) urls.push(fromGlobal.replace(/\/+$/, ""));
+    if (typeof localStorage !== "undefined") {
+      const ls = String(localStorage.getItem("pdd_iad_email_fn_url") || "").trim();
+      if (ls) urls.push(ls.replace(/\/+$/, ""));
+    }
+    urls.push(String(FILE_PDD_IAD_EMAIL_FN_URL).replace(/\/+$/, ""));
+    urls.push(getSendEmailFnUrl());
+    return [...new Set(urls.filter(Boolean))];
+  }
+
   function getAnonApiKey() {
     if (typeof localStorage !== "undefined") {
       const ls = String(localStorage.getItem("pdd_supabase_anon_key") || "").trim();
@@ -897,12 +911,19 @@
   }
 
   async function sendEmailViaEdgeFunction({ to, subject, text, html, url, cc }) {
-    const fnUrl = getSendEmailFnUrl();
     const apiKey = sanitizeHttpHeaderValue(getAnonApiKey());
-    if (!fnUrl || !apiKey) return { ok: false, reason: "missing_fn_or_key" };
+    if (!apiKey) return { ok: false, reason: "missing_fn_or_key" };
 
     const ccList = uniqEmails(Array.isArray(cc) ? cc : cc ? [cc] : []).filter((em) => normEmail(em) !== normEmail(to));
-    const payload = {
+    const iadPayload = {
+      to,
+      subject,
+      text,
+      html,
+      url,
+      ...(ccList.length ? { cc: ccList } : {}),
+    };
+    const legacyPayload = {
       type: "iad_atgadinajums",
       to,
       subject,
@@ -914,26 +935,42 @@
       ...(ccList.length ? { cc: ccList } : {}),
     };
 
-    const res = await fetch(fnUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: apiKey,
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    const raw = await res.text();
-    let body = null;
-    try {
-      body = raw ? JSON.parse(raw) : null;
-    } catch {
-      body = { raw };
+    let lastFail = { ok: false, reason: "edge_skipped" };
+    for (const fnUrl of getIadEmailFnUrls()) {
+      const dedicated = /\/sendIadEmail$/i.test(fnUrl);
+      const payload = dedicated ? iadPayload : legacyPayload;
+      try {
+        const res = await fetch(fnUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: apiKey,
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        const raw = await res.text();
+        let body = null;
+        try {
+          body = raw ? JSON.parse(raw) : null;
+        } catch {
+          body = { raw };
+        }
+        if (res.ok && body && (body.ok || body.success) && !body.skipped) {
+          return { ok: true, via: dedicated ? "edge_sendIadEmail" : "edge_sendEmail", body, fnUrl };
+        }
+        lastFail = {
+          ok: false,
+          reason: body?.reason || body?.error || "edge_skipped",
+          status: res.status,
+          body,
+          fnUrl,
+        };
+      } catch (e) {
+        lastFail = { ok: false, reason: "edge_fetch_error", error: String(e?.message || e), fnUrl };
+      }
     }
-    if (res.ok && body && (body.ok || body.success) && !body.skipped) {
-      return { ok: true, via: "edge_sendEmail", body };
-    }
-    return { ok: false, reason: body?.reason || body?.error || "edge_skipped", status: res.status, body };
+    return lastFail;
   }
 
   async function dispatchIadInformEmail({ to, subject, text, html, url, row, cc, kind, messageText, supabase }) {

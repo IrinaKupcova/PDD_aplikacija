@@ -5,6 +5,9 @@ project_id = "fdnkvecgqetmwilwolgt"
 [functions.sendEmail]
 verify_jwt = false
 
+[functions.sendIadEmail]
+verify_jwt = false
+
 [functions."resend-email"]
 verify_jwt = false
 

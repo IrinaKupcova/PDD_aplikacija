@@ -39,6 +39,11 @@ jobs:
             supabase secrets set --project-ref "$REF" RESEND_API_KEY="$RESEND_API_KEY"
           fi
 
+      - name: Deploy sendIadEmail (--no-verify-jwt)
+        env:
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: supabase functions deploy sendIadEmail --project-ref "$REF" --no-verify-jwt
+
       - name: Deploy sendEmail (--no-verify-jwt)
         env:
           REF: ${{ secrets.SUPABASE_PROJECT_REF }}
