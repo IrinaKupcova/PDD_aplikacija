@@ -1003,6 +1003,61 @@
       .iad-pinned-item.is-active .iad-pinned-open-btn {
         color:#0284c7;
       }
+      .iad-inform-audit {
+        margin-top:.85rem;
+        padding-top:.7rem;
+        border-top:1px solid #cbd5e1;
+      }
+      .iad-inform-audit-title {
+        margin:0 0 .55rem;
+        font-size:.9rem;
+        color:#0c4a6e;
+      }
+      .iad-inform-audit-list {
+        display:grid;
+        gap:.5rem;
+      }
+      .iad-inform-audit-item {
+        border:1px solid #dbeafe;
+        border-radius:10px;
+        background:#f8fbff;
+        padding:.55rem .65rem;
+        font-size:.82rem;
+      }
+      .iad-inform-audit-meta {
+        display:flex;
+        flex-wrap:wrap;
+        gap:.35rem .65rem;
+        align-items:center;
+        margin-bottom:.35rem;
+      }
+      .iad-inform-audit-kind {
+        display:inline-block;
+        border-radius:999px;
+        padding:1px 8px;
+        font-size:.72rem;
+        border:1px solid #7dd3fc;
+        background:#ecfeff;
+        color:#0e7490;
+      }
+      .iad-inform-audit-time {
+        color:#64748b;
+        font-size:.76rem;
+      }
+      .iad-inform-audit-to {
+        margin-bottom:.3rem;
+        color:#0f172a;
+      }
+      .iad-inform-audit-text {
+        white-space:pre-wrap;
+        color:#334155;
+        line-height:1.4;
+      }
+      .iad-inform-audit-empty {
+        color:#64748b;
+        font-style:italic;
+        font-size:.82rem;
+      }
     `;
     document.head.appendChild(s);
   }
@@ -1033,6 +1088,8 @@
       const [teamUsers, setTeamUsers] = useState([]);
       const [teamOptions, setTeamOptions] = useState([]);
       const [attachmentLinkDraft, setAttachmentLinkDraft] = useState("");
+      const [informAudit, setInformAudit] = useState([]);
+      const [informAuditBusy, setInformAuditBusy] = useState(false);
       const focusRetryRef = useRef({ sig: "", retries: 0 });
       const focusHandledRef = useRef(false);
       const [pendingFocusTask, setPendingFocusTask] = useState(null);
@@ -1419,6 +1476,32 @@
       }, [pendingFocusTask, rows, onFocusHandled]);
 
       useEffect(() => {
+        if (!cardOpen) {
+          setInformAudit([]);
+          setInformAuditBusy(false);
+          return;
+        }
+        let cancelled = false;
+        setInformAuditBusy(true);
+        (async () => {
+          try {
+            const api = globalThis.PDD_INFORMESHANA;
+            const list = api?.fetchInformeshanaAuditForRow
+              ? await api.fetchInformeshanaAuditForRow(cardOpen, { supabase })
+              : [];
+            if (!cancelled) setInformAudit(Array.isArray(list) ? list : []);
+          } catch {
+            if (!cancelled) setInformAudit([]);
+          } finally {
+            if (!cancelled) setInformAuditBusy(false);
+          }
+        })();
+        return () => {
+          cancelled = true;
+        };
+      }, [cardOpen, supabase]);
+
+      useEffect(() => {
         if (!focusedRowKey) return;
         const safeId = `iad-row-${focusedRowKey.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
         let cancelled = false;
@@ -1758,6 +1841,59 @@
               ></textarea>
             </div>
           </div>
+        `;
+      }
+
+      function formatInformAuditWhen(iso) {
+        if (!iso) return "—";
+        try {
+          const d = new Date(iso);
+          if (Number.isNaN(d.getTime())) return String(iso);
+          return d.toLocaleString("lv-LV", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+        } catch {
+          return String(iso);
+        }
+      }
+
+      function informAuditKindLabel(kind) {
+        const api = globalThis.PDD_INFORMESHANA;
+        if (api?.informeshanaKindLabel) return api.informeshanaKindLabel(kind);
+        if (kind === "welcome") return "Pievienošanas informācija";
+        if (kind === "reminder") return "Mēneša atgādinājums";
+        return "Informēšana";
+      }
+
+      function renderInformeshanaAuditSection() {
+        return html`
+          <section class="iad-inform-audit">
+            <h4 class="iad-inform-audit-title">Informēšanas auditācijas vēsture</h4>
+            ${informAuditBusy
+              ? html`<div class="iad-inform-audit-empty">Ielādē...</div>`
+              : informAudit.length
+                ? html`
+                    <div class="iad-inform-audit-list">
+                      ${informAudit.map(
+                        (entry) => html`
+                          <article key=${entry.id} class="iad-inform-audit-item">
+                            <div class="iad-inform-audit-meta">
+                              <span class="iad-inform-audit-kind">${informAuditKindLabel(entry.kind)}</span>
+                              <time class="iad-inform-audit-time">${formatInformAuditWhen(entry.sentAt)}</time>
+                            </div>
+                            <div class="iad-inform-audit-to"><strong>Saņēmējs:</strong> ${entry.to}</div>
+                            <div class="iad-inform-audit-text">${entry.text || entry.subject || "—"}</div>
+                          </article>
+                        `
+                      )}
+                    </div>
+                  `
+                : html`<div class="iad-inform-audit-empty">Informējošās vēstules vēl nav nosūtītas.</div>`}
+          </section>
         `;
       }
 
@@ -2351,6 +2487,7 @@
                                 </div>
                               </div>
                             </div>
+                            ${editingId != null ? renderInformeshanaAuditSection() : null}
                             <div class="row" style=${{ gap: "0.4rem" }}>
                               <button type="submit" class="btn btn-primary btn-small" disabled=${busy}>
                                 ${busy ? "Saglabā..." : "Saglabāt"}
@@ -2377,6 +2514,7 @@
                               `
                             )}
                           </div>
+                          ${renderInformeshanaAuditSection()}
                           <div class="row" style=${{ gap: "0.4rem", marginTop: "0.75rem" }}>
                             <button type="button" class="btn btn-ghost btn-small" onClick=${() => startEdit(cardOpen)}>Labot</button>
                             <button type="button" class="btn btn-danger btn-small" onClick=${() => onDelete(cardOpen)}>Dzēst</button>
