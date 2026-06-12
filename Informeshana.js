@@ -310,7 +310,19 @@
   }
 
   function getRowDbId(row) {
-    return String(row?.id ?? row?.IAD_id ?? row?.iad_id ?? "").trim();
+    if (!row || typeof row !== "object") return "";
+    const idAliases = ["id", "ID", "Id", "iad_id", "IAD_id", "IAD_ID", "IAD.id"];
+    for (const k of idAliases) {
+      const v = String(row[k] ?? "").trim();
+      if (v) return v;
+    }
+    for (const k of Object.keys(row)) {
+      if (/^iad[\s._-]*id$/i.test(String(k).replace(/\s/g, ""))) {
+        const v = String(row[k] ?? "").trim();
+        if (v) return v;
+      }
+    }
+    return "";
   }
 
   function pickJsonField(row, aliases, fallback) {
@@ -420,6 +432,48 @@
     return null;
   }
 
+  async function patchIadInformesanasDirect(sb, row, patch) {
+    const rowId = getRowDbId(row);
+    if (!sb || !rowId) return { ok: false, reason: "missing_sb_or_row_id" };
+    const table = await resolveIadTableName(sb);
+    if (!table) return { ok: false, reason: "iad_table_not_found" };
+
+    let current = row;
+    try {
+      const fresh = await fetchIadInformeshanaFields(sb, row);
+      if (fresh) current = { ...row, ...fresh };
+    } catch {
+      /* ignore */
+    }
+
+    const payload = {};
+    if (patch?.appendAudit) {
+      payload[COL_INFORMESHANA_AUDIT] = [...readAuditFromIadRow(current), patch.appendAudit];
+    }
+    if (patch?.sanemtaji != null) payload[COL_INFORMESHANA_SANEMTAJI] = patch.sanemtaji;
+    if (patch?.atgadinajumi != null) payload[COL_INFORMESHANA_ATGADINAJUMI] = patch.atgadinajumi;
+    if (!Object.keys(payload).length) return { ok: false, reason: "empty_patch" };
+
+    const selectCols = `${COL_INFORMESHANA_AUDIT},${COL_INFORMESHANA_SANEMTAJI},${COL_INFORMESHANA_ATGADINAJUMI}`;
+    const idCols = ["id", "IAD.id", "iad_id", "IAD_id", "IAD_ID", "ID"];
+    for (const idCol of idCols) {
+      try {
+        const req =
+          idCol === "IAD.id"
+            ? sb.from(table).update(payload).filter('"IAD.id"', "eq", rowId).select(selectCols).maybeSingle()
+            : sb.from(table).update(payload).eq(idCol, rowId).select(selectCols).maybeSingle();
+        const { data, error } = await req;
+        if (!error && data) {
+          applyInformeshanaFieldsToRow(row, data);
+          return { ok: true, data, via: "direct_update" };
+        }
+      } catch {
+        /* try next id column */
+      }
+    }
+    return { ok: false, reason: "direct_update_failed" };
+  }
+
   async function patchIadInformesanas(sb, row, patch) {
     const rowId = getRowDbId(row);
     if (!sb || !rowId) return { ok: false, reason: "missing_sb_or_row_id" };
@@ -430,15 +484,23 @@
         p_sanemtaji: patch?.sanemtaji ?? null,
         p_atgadinajumi: patch?.atgadinajumi ?? null,
       });
-      if (error) return { ok: false, reason: "rpc_error", error };
-      if (data?.ok) {
+      if (!error && data?.ok) {
         applyInformeshanaFieldsToRow(row, data);
-        return { ok: true, data };
+        return { ok: true, data, via: "rpc" };
       }
-      return { ok: false, reason: data?.reason || "patch_failed", data };
+      if (error && typeof console !== "undefined" && console.warn) {
+        console.warn("[PDD_INFORMESHANA] RPC patch", error.message || error);
+      }
     } catch (e) {
-      return { ok: false, reason: "rpc_exception", error: String(e?.message || e) };
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("[PDD_INFORMESHANA] RPC patch exception", e);
+      }
     }
+    const direct = await patchIadInformesanasDirect(sb, row, patch);
+    if (!direct.ok && typeof console !== "undefined" && console.warn) {
+      console.warn("[PDD_INFORMESHANA] DB patch neizdevās", { rowId, reason: direct.reason });
+    }
+    return direct;
   }
 
   function makeInformeshanaAuditEntry({ row, to, subject, text, kind, via }) {
@@ -483,15 +545,14 @@
   }
 
   async function recordInformeshanaSend({ row, to, subject, text, kind, via, supabase }) {
-    if (!isValidEmail(to) || isControlMonitorRecipient(to)) return null;
+    if (!isValidEmail(to)) return null;
     const entry = makeInformeshanaAuditEntry({ row, to, subject, text, kind, via });
     appendLocalInformeshanaAudit(entry);
     const sb = supabase || getSupabaseClientForBrowser();
     if (sb && row) {
-      try {
-        await patchIadInformesanas(sb, row, { appendAudit: entry });
-      } catch {
-        /* ignore */
+      const patchResult = await patchIadInformesanas(sb, row, { appendAudit: entry });
+      if (!patchResult?.ok && typeof console !== "undefined" && console.warn) {
+        console.warn("[PDD_INFORMESHANA] auditācija nav saglabāta DB", patchResult);
       }
     }
     return entry;
@@ -512,7 +573,6 @@
     if (!raw || typeof raw !== "object") return null;
     const details = parseInformeshanaAuditDetails(raw.details);
     const merged = details ? { ...details, ...raw } : raw;
-    if (isControlMonitorRecipient(merged.to)) return null;
     const sentAt = merged.sentAt || merged.ts || merged.laiks || merged.created_at || null;
     const to = String(merged.to ?? "").trim();
     if (!sentAt || !to) return null;
@@ -563,6 +623,20 @@
       .map(normalizeInformeshanaAuditEntry)
       .filter(Boolean)
       .filter((e) => rowMatchesInformeshanaAudit(row, e));
+
+    if (sb && row && local.length) {
+      const dbIds = new Set(fromIad.map((e) => e.id));
+      for (const entry of local) {
+        if (dbIds.has(entry.id)) continue;
+        const raw = readLocalInformeshanaAudit().find((x) => x?.id === entry.id);
+        if (raw) {
+          await patchIadInformesanas(sb, row, { appendAudit: raw });
+          fromIad.push(entry);
+          dbIds.add(entry.id);
+        }
+      }
+    }
+
     const byId = new Map();
     for (const entry of [...fromIad, ...local]) byId.set(entry.id, entry);
     return Array.from(byId.values()).sort((a, b) => String(b.sentAt).localeCompare(String(a.sentAt)));
@@ -1265,6 +1339,13 @@
     return results;
   }
 
+  async function syncInformeshanaRowMeta(sb, row, teamUsers) {
+    if (!sb || !row) return;
+    const persons = collectRowRecipientPersons(row, teamUsers);
+    if (!persons.length) return;
+    await patchIadInformesanas(sb, row, { sanemtaji: persons });
+  }
+
   async function runWelcomeOnRowSave(opts) {
     const sb =
       opts?.supabase ||
@@ -1276,6 +1357,8 @@
     if (!savedRow || isInactiveStatus(savedRow?.IAD_statuss)) {
       return { ok: true, skipped: true, reason: "inactive_or_missing_row", count: 0, results: [] };
     }
+
+    await syncInformeshanaRowMeta(sb, savedRow, teamUsers);
 
     if (!assignmentFieldsChanged(previousRow, savedRow, teamUsers)) {
       return { ok: true, skipped: true, reason: "assignment_unchanged", count: 0, results: [] };
