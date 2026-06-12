@@ -7573,14 +7573,34 @@
             return who ? `${APP_CHANGES_SEEN_KEY}:${who}` : APP_CHANGES_SEEN_KEY;
           }
           function readAppChangesSeenId(storageKey) {
-            const scoped = appChangesStampId(localStorage.getItem(storageKey));
-            if (scoped) return scoped;
-            return appChangesStampId(localStorage.getItem(APP_CHANGES_SEEN_KEY));
+            const uid = String(
+              getStickyAuthValue(LS_LOCAL_USER_ID) || session?.user?.id || ""
+            ).trim();
+            const em = String(
+              getStickyAuthValue(LS_LOCAL_EMAIL) ||
+                session?.user?.email ||
+                profile?.email ||
+                ""
+            )
+              .trim()
+              .toLowerCase();
+            const keys = [
+              storageKey,
+              APP_CHANGES_SEEN_KEY,
+              uid ? `${APP_CHANGES_SEEN_KEY}:${uid}` : "",
+              em ? `${APP_CHANGES_SEEN_KEY}:${em}` : "",
+            ].filter(Boolean);
+            for (const k of [...new Set(keys)]) {
+              const id = appChangesStampId(localStorage.getItem(k));
+              if (id) return id;
+            }
+            return "";
           }
           function writeAppChangesSeenId(storageKey, stampOrId) {
             const id = appChangesStampId(stampOrId);
             if (!id) return;
             localStorage.setItem(storageKey, id);
+            localStorage.setItem(APP_CHANGES_SEEN_KEY, id);
           }
           function isAppChangesUnread(latestStamp, seenId) {
             const latest = appChangesStampId(latestStamp);
@@ -7841,6 +7861,13 @@
               const latest = String(M.latestStamp(rows) || "").trim();
               const latestId = appChangesStampId(latest);
               const seenKey = appChangesSeenStorageKey();
+              const who = seenKey.startsWith(`${APP_CHANGES_SEEN_KEY}:`)
+                ? seenKey.slice(APP_CHANGES_SEEN_KEY.length + 1)
+                : "";
+              if (!who) {
+                setShowPddAppChangesBadge(false);
+                return;
+              }
               const seen = readAppChangesSeenId(seenKey);
               appChangesLatestIdRef.current = latestId;
               setAppChangesLatestId(latestId);

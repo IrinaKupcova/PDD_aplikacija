@@ -302,3 +302,117 @@ window.PDD_CITS_PERIOD_HELPERS = {
 if (typeof window !== "undefined" && window.PDDPrombutnesVesture) {
   Object.assign(window.PDDPrombutnesVesture, PDD_PROMBUTNES_USER_HELPERS);
 }
+
+const PDD_PROM_REQUEST_CHANGE_LOG_KEY = "pdd_change_log_v1";
+const PDD_PROM_REQUEST_SUBMIT_SUCCESS_ACTIONS = new Set(["prombutne.cits_pieteikts", "prombutne.pievienota"]);
+
+function isPrombutnesRequestFormEl(form) {
+  if (!form || form.tagName !== "FORM") return false;
+  if (!form.classList.contains("stack")) return false;
+  const submitBtn = form.querySelector('button[type="submit"].btn-primary');
+  return Boolean(submitBtn && /iesniegt/i.test(String(submitBtn.textContent ?? "").trim()));
+}
+
+function closePrombutnesRequestCard() {
+  if (typeof document === "undefined") return false;
+  const now = Date.now();
+  if (now - (closePrombutnesRequestCard._lastAt || 0) < 400) return false;
+  closePrombutnesRequestCard._lastAt = now;
+  for (const form of document.querySelectorAll("form.stack")) {
+    if (!isPrombutnesRequestFormEl(form)) continue;
+    const submitBtn = form.querySelector('button[type="submit"].btn-primary');
+    const row = submitBtn?.closest(".row");
+    const closeBtn = row
+      ? Array.from(row.querySelectorAll('button[type="button"]')).find((b) =>
+          /aizvērt/i.test(String(b.textContent ?? "").trim())
+        )
+      : null;
+    if (closeBtn && !closeBtn.disabled) {
+      closeBtn.click();
+      return true;
+    }
+  }
+  const headerClose = Array.from(document.querySelectorAll("button.btn-ghost")).find(
+    (b) => /aizvērt/i.test(String(b.textContent ?? "").trim()) && !b.disabled
+  );
+  if (headerClose) {
+    headerClose.click();
+    return true;
+  }
+  return false;
+}
+
+function scheduleClosePrombutnesRequestCardAfterSubmit(form) {
+  const startInput = form.querySelector('input[type="date"]');
+  const hadStartDate = String(startInput?.value ?? "").trim();
+  if (!hadStartDate) return;
+
+  let attempts = 0;
+  const timer = setInterval(() => {
+    attempts += 1;
+    const submitBtn = form.querySelector('button[type="submit"].btn-primary');
+    const busy = /sūta/i.test(String(submitBtn?.textContent ?? "").trim());
+    const cleared = !String(startInput?.value ?? "").trim();
+    if (!busy && cleared) {
+      clearInterval(timer);
+      queueMicrotask(() => {
+        closePrombutnesRequestCard();
+      });
+      return;
+    }
+    if (attempts >= 160) clearInterval(timer);
+  }, 200);
+}
+
+function installPrombutnesRequestAutoCloseOnSubmit() {
+  if (typeof window === "undefined" || window.__PDD_PROM_REQUEST_AUTO_CLOSE__) return;
+  window.__PDD_PROM_REQUEST_AUTO_CLOSE__ = true;
+
+  document.addEventListener(
+    "submit",
+    (ev) => {
+      const form = ev.target;
+      if (!isPrombutnesRequestFormEl(form)) return;
+      scheduleClosePrombutnesRequestCardAfterSubmit(form);
+    },
+    true
+  );
+
+  const nativeSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function pddPromRequestSetItem(key, value) {
+    nativeSetItem.call(this, key, value);
+    if (key !== PDD_PROM_REQUEST_CHANGE_LOG_KEY || typeof value !== "string") return;
+    try {
+      const logs = JSON.parse(value);
+      const latest = Array.isArray(logs) ? logs[0] : null;
+      const action = String(latest?.action ?? "").trim();
+      if (!PDD_PROM_REQUEST_SUBMIT_SUCCESS_ACTIONS.has(action)) return;
+      queueMicrotask(() => {
+        closePrombutnesRequestCard();
+      });
+    } catch {
+      /* ignore */
+    }
+  };
+}
+
+const PDD_PROMBUTNES_PIETEIKUMS_UI = {
+  isPrombutnesRequestFormEl,
+  closePrombutnesRequestCard,
+  installPrombutnesRequestAutoCloseOnSubmit,
+};
+
+window.PDDPrombutnesPieteikums = {
+  ...(typeof window.PDDPrombutnesPieteikums === "object" && window.PDDPrombutnesPieteikums ? window.PDDPrombutnesPieteikums : {}),
+  ...PDD_PROMBUTNES_PIETEIKUMS_UI,
+};
+
+Object.assign(window.PDD_CITS_PERIOD_HELPERS, PDD_PROMBUTNES_PIETEIKUMS_UI);
+
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", installPrombutnesRequestAutoCloseOnSubmit, { once: true });
+  } else {
+    installPrombutnesRequestAutoCloseOnSubmit();
+  }
+}
