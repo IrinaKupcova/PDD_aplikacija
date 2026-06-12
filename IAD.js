@@ -2013,15 +2013,18 @@
               }
               if (out?.count > 0 && !out?.sent) {
                 console.warn(
-                  "[PDD_INFORMESHANA] vēstules netika nosūtītas — pārbaudi F12 konsoli. Ja prombūtnes strādā: localStorage.pdd_resend_api_url. Vai Supabase → Secrets → RESEND_API_KEY.",
+                  "[PDD_INFORMESHANA] vēstules netika nosūtītas — pārbaudi F12 konsoli.",
                   out,
                 );
               }
               const manual = (out?.results || []).filter((r) => r?.manual);
               if (manual.length) {
                 console.info(
-                  "[PDD_INFORMESHANA] automātiska sūtīšana neizdevās — atvērta e-pasta programma. Nospied Sūtīt.",
+                  "[PDD_INFORMESHANA] atvērta e-pasta programma — nospied Sūtīt.",
                   manual,
+                );
+                alert(
+                  "Atvērta e-pasta programma ar sagatavotu vēstuli. Lūdzu pārbaudi un nospied Sūtīt.",
                 );
               }
               if (out?.sent > 0) console.info("[PDD_INFORMESHANA] nosūtītas vēstules:", out.sent);

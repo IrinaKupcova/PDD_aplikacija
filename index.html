@@ -465,7 +465,7 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=2026051312"></script>
-      <script defer src="./Informeshana.js?v=202605205"></script>
+      <script defer src="./Informeshana.js?v=202605207"></script>
       <script defer src="./IAD.js?v=202605199"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
@@ -1235,6 +1235,12 @@
           return "";
         }
 
+        /** true tikai ja ir Vercel u.tml. API — citādi e-pasts caur mailto (bez Resend API atslēgas). */
+        function useAutomaticServerEmail() {
+          if (TIKAI_VIENKARSI_SKATS || isLocalMode()) return false;
+          return Boolean(getPddResendApiUrl());
+        }
+
         function getSendPddEmailFnUrl() {
           const f = String(FILE_PDD_EMAIL_FN_URL || "").trim().replace(/\/$/, "");
           if (f) return f;
@@ -1381,6 +1387,7 @@
 
         globalThis.__PDD_CALL_PDD_RESEND_API__ = callPddResendApi;
         globalThis.__PDD_GET_PDD_RESEND_API_URL__ = getPddResendApiUrl;
+        globalThis.__PDD_USE_AUTOMATIC_SERVER_EMAIL__ = useAutomaticServerEmail;
         globalThis.__PDD_CALL_SEND_PDD_EMAIL__ = callSendPddEmail;
 
         function isSendPddEmailResponseOk(body, httpOk) {
@@ -1563,6 +1570,9 @@
           if (TIKAI_VIENKARSI_SKATS || isLocalMode()) {
             return { ok: false, reason: "local_or_simple_view" };
           }
+          if (!useAutomaticServerEmail()) {
+            return { ok: false, reason: "mailto_mode" };
+          }
           const to = String(payload?.to ?? "").trim();
           const subject = String(payload?.subject ?? "").trim();
           const text = String(payload?.text ?? "").trim();
@@ -1570,29 +1580,6 @@
           const url = String(payload?.url ?? "").trim();
           const cc = Array.isArray(payload?.cc) ? payload.cc : [];
           if (!to.includes("@")) return { ok: false, reason: "invalid_to" };
-
-          const resendApiUrl = getPddResendApiUrl();
-          if (resendApiUrl && supabase) {
-            try {
-              await getAccessTokenForFunctions();
-              const r = await callPddResendApi({
-                action: "iad_informesana",
-                to,
-                subject,
-                text,
-                html,
-                url,
-                cc,
-              });
-              if (r?.ok) return { ok: true, via: "pdd-resend-api", body: r.body };
-              if (!r?.skipped) {
-                console.warn("[PDD_INFORMESHANA] pdd-resend-api neizdevās", getPddResendApiUrl(), r);
-              }
-            } catch (e) {
-              console.warn("[PDD_INFORMESHANA] pdd-resend-api", e);
-            }
-          }
-
           if (!supabase) return { ok: false, reason: "no_supabase" };
 
           const iadInvokePayload = {
@@ -1609,31 +1596,10 @@
             name: text,
             veids: payload?.kind === "welcome" ? "IaD pievienošana" : "IaD atgādinājums",
           };
-          for (const [fnName, body] of [
-            ["sendIadEmail", iadInvokePayload],
-            ["sendEmail", legacyInvokePayload],
-          ]) {
-            try {
-              const { data, error } = await supabase.functions.invoke(fnName, { body });
-              if (!error && isSendPddEmailResponseOk(data, true)) {
-                return { ok: true, via: `invoke_${fnName}`, body: data };
-              }
-            } catch (e) {
-              console.warn("[PDD_INFORMESHANA] invoke", fnName, e);
-            }
-          }
           const cfg = loadConfig();
           const apiKey = sanitizeHttpHeaderValue(cfg.key || "");
           if (!apiKey) return { ok: false, reason: "missing_fn_or_key" };
 
-          const iadPayload = {
-            to,
-            subject,
-            text,
-            html,
-            url,
-            ...(cc.length ? { cc } : {}),
-          };
           const legacyPayload = {
             type: "iad_atgadinajums",
             to,
@@ -1653,7 +1619,7 @@
 
           for (const u of fetchUrls) {
             const dedicated = /\/sendIadEmail$/i.test(u);
-            const emailPayload = dedicated ? iadPayload : legacyPayload;
+            const emailPayload = dedicated ? iadInvokePayload : legacyPayload;
             for (const bearer of bearerVariants) {
               try {
                 const out = await fetch(u, {
@@ -1682,6 +1648,16 @@
                       u,
                       j,
                     );
+                  } else if (
+                    String(j?.details?.message || j?.error || "")
+                      .toLowerCase()
+                      .includes("api key is invalid")
+                  ) {
+                    console.warn(
+                      "[PDD_INFORMESHANA] Supabase Edge RESEND_API_KEY nav derīga — atjaunini GitHub secret RESEND_API_KEY un palaid workflow „Supabase Edge — sendEmail + Resend”.",
+                      u,
+                      j,
+                    );
                   } else {
                     console.warn("[PDD_INFORMESHANA] edge atbilde", u, out.status, j);
                   }
@@ -1690,16 +1666,44 @@
                 console.warn("[PDD_INFORMESHANA] edge", e);
               }
             }
+          }
+
+          for (const [fnName, body] of [
+            ["sendIadEmail", iadInvokePayload],
+            ["sendEmail", legacyInvokePayload],
+          ]) {
             try {
-              const fnName = String(u).match(/\/functions\/v1\/([^/?#]+)/i)?.[1] || "sendIadEmail";
-              const { data, error } = await supabase.functions.invoke(fnName, { body: emailPayload });
+              const { data, error } = await supabase.functions.invoke(fnName, { body });
               if (!error && isSendPddEmailResponseOk(data, true)) {
-                return { ok: true, via: "edge_invoke", body: data };
+                return { ok: true, via: `invoke_${fnName}`, body: data };
               }
             } catch (e) {
-              console.warn("[PDD_INFORMESHANA] edge invoke", e);
+              console.warn("[PDD_INFORMESHANA] invoke", fnName, e);
             }
           }
+
+          const resendApiUrl = getPddResendApiUrl();
+          if (resendApiUrl) {
+            try {
+              await getAccessTokenForFunctions();
+              const r = await callPddResendApi({
+                action: "iad_informesana",
+                to,
+                subject,
+                text,
+                html,
+                url,
+                cc,
+              });
+              if (r?.ok) return { ok: true, via: "pdd-resend-api", body: r.body };
+              if (!r?.skipped) {
+                console.warn("[PDD_INFORMESHANA] pdd-resend-api neizdevās", getPddResendApiUrl(), r);
+              }
+            } catch (e) {
+              console.warn("[PDD_INFORMESHANA] pdd-resend-api", e);
+            }
+          }
+
           return { ok: false, reason: "all_channels_failed" };
         };
 
@@ -3921,22 +3925,8 @@
                 );
                 const selectedUser = usersForSelect.find((u) => String(u?.id ?? "") === String(finalUserId)) || null;
                 const employeeNameForEmail = String(userDisplayName(selectedUser) || finalUserId).trim();
-                await ensureDbReadableSession();
-                const emailResult = await callSendPddEmail({
-                  name: employeeNameForEmail,
-                  veids: String(typeObj?.name || "Cits"),
-                  type: "cits",
-                });
-                const resendResult = emailResult?.ok
-                  ? { skipped: true, reason: "edge_ok" }
-                  : await callPddResendApi({
-                      action: "cits_absence_created",
-                      absence_id: rowId,
-                      notify_manager_email: to,
-                      notify_phone: FILE_PDD_SMS_NOTIFY_PHONE,
-                    });
-                if (!emailResult?.ok && !resendResult?.ok) {
-                  const manualLink = `${window.location.href.split("?")[0]}?citsRow=${encodeURIComponent(rowId)}`;
+                const manualLink = `${window.location.href.split("?")[0]}?citsRow=${encodeURIComponent(rowId)}`;
+                if (!useAutomaticServerEmail()) {
                   openManualCitsEmailFallback({
                     name: employeeNameForEmail,
                     veids: String(typeObj?.name || "Cits"),
@@ -3944,98 +3934,122 @@
                     endDate,
                     link: manualLink,
                   });
-
-                  let edgeErr =
-                    String(
-                      emailResult?.body?.error ||
-                        emailResult?.raw ||
-                        emailResult?.error?.message ||
-                        emailResult?.error ||
-                        emailResult?.reason ||
-                        "",
-                    ).trim() || "Nezināma kļūda";
-                  const edgeResDet = emailResult?.body?.details;
-                  if (edgeResDet != null) {
-                    edgeErr +=
-                      "\nResend: " +
-                      (typeof edgeResDet === "string" ? edgeResDet : JSON.stringify(edgeResDet));
-                  }
-                  const edgeFailures = Array.isArray(emailResult?.body?.failures) ? emailResult.body.failures : [];
-                  const edgeFailuresText = edgeFailures.length
-                    ? "\nMēģinājumi:\n" +
-                      edgeFailures
-                        .map((f, i) => {
-                          const via = String(f?.via || "?");
-                          const target = String(f?.target || "?");
-                          const st = f?.status != null ? ` HTTP ${f.status}` : "";
-                          const er = String(f?.error || f?.body?.error || "").trim();
-                          return `${i + 1}) ${via} → ${target}${st}${er ? ` :: ${er}` : ""}`;
-                        })
-                        .join("\n")
-                    : "";
-                  const edgeWhere = String(emailResult?.fnUrl || "").trim();
-                  const edgeStatus = Number.isFinite(Number(emailResult?.status))
-                    ? ` (HTTP ${emailResult.status})`
-                    : "";
-
-                  const apiErr = (() => {
-                    const fromBody = String(
-                      resendResult?.body?.error ||
-                        resendResult?.error?.message ||
-                        resendResult?.error ||
-                        "",
-                    ).trim();
-                    if (fromBody) return fromBody;
-                    const r = String(resendResult?.reason || "").trim();
-                    if (resendResult?.skipped && r === "no_resend_api_url") {
-                      return (
-                        "nav ieslēgts (tikai papildu ceļš uz Vercel u.tml.; GitHub Pages to nelieto). " +
-                        "Galvenā e-pasta sūtīšana ir caur Supabase Edge Function — salabo to (Secrets, deploy, projekta URL atbilstība)."
-                      );
-                    }
-                    if (resendResult?.skipped && r === "no_session") {
-                      return "nav izsaukts — nav sesijas JWT Resend API pieprasījumam.";
-                    }
-                    if (resendResult?.skipped && r === "edge_ok") return "";
-                    if (resendResult?.skipped) return "netika izmantots (skat. iemeslu augšā Edge daļā).";
-                    return "Nezināma kļūda";
-                  })();
-                  const apiStatus = Number.isFinite(Number(resendResult?.status))
-                    ? ` (HTTP ${resendResult.status})`
-                    : "";
-
-                  const has401 = edgeFailures.some(
-                    (f) =>
-                      Number(f?.status) === 401 ||
-                      String(f?.error || f?.body?.error || "").includes("401"),
-                  );
-                  const hint401 = has401
-                    ? "\n\nĀtri: Edge „sendEmail” → Settings → izslēdz „Verify JWT with legacy secret”, vai repo darbplūsma supabase-edge-email.yml (automātisks deploy)."
-                    : "";
-
-                  const techBlock =
-                    `Edge Function: ${edgeErr}${edgeStatus}${edgeWhere ? `\nURL: ${edgeWhere}` : ""}${edgeFailuresText}\n` +
-                    `API fallback: ${apiErr}${apiStatus}` +
-                    hint401;
-                  try {
-                    console.error("[PDD Cits e-pasts]", techBlock);
-                  } catch {
-                    /* ignore */
-                  }
-                  const resendShort =
-                    edgeResDet != null
-                      ? "\n\n" +
-                        (typeof edgeResDet === "object" && edgeResDet && "message" in edgeResDet
-                          ? String(edgeResDet.message)
-                          : String(typeof edgeResDet === "string" ? edgeResDet : JSON.stringify(edgeResDet)))
-                      : "";
                   alert(
-                    "Pieteikums saglabāts. E-pasta programmā ir sagatavota vēstule vadītājam — lūdzu nosūti to.\n\n" +
-                      "Automātiskais sūtīšanas mēģinājums šoreiz nesanāca." +
-                      resendShort +
-                      (resendShort ? "" : " Tehnisko tekstu meklē F12 → Console „[PDD Cits e-pasts]”.") +
-                      hint401,
+                    "Pieteikums saglabāts. E-pasta programmā ir sagatavota vēstule vadītājam — lūdzu nosūti to.",
                   );
+                } else {
+                  await ensureDbReadableSession();
+                  const emailResult = await callSendPddEmail({
+                    name: employeeNameForEmail,
+                    veids: String(typeObj?.name || "Cits"),
+                    type: "cits",
+                  });
+                  const resendResult = emailResult?.ok
+                    ? { skipped: true, reason: "edge_ok" }
+                    : await callPddResendApi({
+                        action: "cits_absence_created",
+                        absence_id: rowId,
+                        notify_manager_email: to,
+                        notify_phone: FILE_PDD_SMS_NOTIFY_PHONE,
+                      });
+                  if (!emailResult?.ok && !resendResult?.ok) {
+                    openManualCitsEmailFallback({
+                      name: employeeNameForEmail,
+                      veids: String(typeObj?.name || "Cits"),
+                      startDate,
+                      endDate,
+                      link: manualLink,
+                    });
+
+                    let edgeErr =
+                      String(
+                        emailResult?.body?.error ||
+                          emailResult?.raw ||
+                          emailResult?.error?.message ||
+                          emailResult?.error ||
+                          emailResult?.reason ||
+                          "",
+                      ).trim() || "Nezināma kļūda";
+                    const edgeResDet = emailResult?.body?.details;
+                    if (edgeResDet != null) {
+                      edgeErr +=
+                        "\nResend: " +
+                        (typeof edgeResDet === "string" ? edgeResDet : JSON.stringify(edgeResDet));
+                    }
+                    const edgeFailures = Array.isArray(emailResult?.body?.failures) ? emailResult.body.failures : [];
+                    const edgeFailuresText = edgeFailures.length
+                      ? "\nMēģinājumi:\n" +
+                        edgeFailures
+                          .map((f, i) => {
+                            const via = String(f?.via || "?");
+                            const target = String(f?.target || "?");
+                            const st = f?.status != null ? ` HTTP ${f.status}` : "";
+                            const er = String(f?.error || f?.body?.error || "").trim();
+                            return `${i + 1}) ${via} → ${target}${st}${er ? ` :: ${er}` : ""}`;
+                          })
+                          .join("\n")
+                      : "";
+                    const edgeWhere = String(emailResult?.fnUrl || "").trim();
+                    const edgeStatus = Number.isFinite(Number(emailResult?.status))
+                      ? ` (HTTP ${emailResult.status})`
+                      : "";
+
+                    const apiErr = (() => {
+                      const fromBody = String(
+                        resendResult?.body?.error ||
+                          resendResult?.error?.message ||
+                          resendResult?.error ||
+                          "",
+                      ).trim();
+                      if (fromBody) return fromBody;
+                      const r = String(resendResult?.reason || "").trim();
+                      if (resendResult?.skipped && r === "no_resend_api_url") {
+                        return "nav ieslēgts (Vercel API URL nav konfigurēts).";
+                      }
+                      if (resendResult?.skipped && r === "no_session") {
+                        return "nav izsaukts — nav sesijas JWT.";
+                      }
+                      if (resendResult?.skipped && r === "edge_ok") return "";
+                      if (resendResult?.skipped) return "netika izmantots.";
+                      return "Nezināma kļūda";
+                    })();
+                    const apiStatus = Number.isFinite(Number(resendResult?.status))
+                      ? ` (HTTP ${resendResult.status})`
+                      : "";
+
+                    const has401 = edgeFailures.some(
+                      (f) =>
+                        Number(f?.status) === 401 ||
+                        String(f?.error || f?.body?.error || "").includes("401"),
+                    );
+                    const hint401 = has401
+                      ? "\n\nPārbaudi Edge Function JWT iestatījumus."
+                      : "";
+
+                    const techBlock =
+                      `Edge Function: ${edgeErr}${edgeStatus}${edgeWhere ? `\nURL: ${edgeWhere}` : ""}${edgeFailuresText}\n` +
+                      `API fallback: ${apiErr}${apiStatus}` +
+                      hint401;
+                    try {
+                      console.error("[PDD Cits e-pasts]", techBlock);
+                    } catch {
+                      /* ignore */
+                    }
+                    const resendShort =
+                      edgeResDet != null
+                        ? "\n\n" +
+                          (typeof edgeResDet === "object" && edgeResDet && "message" in edgeResDet
+                            ? String(edgeResDet.message)
+                            : String(typeof edgeResDet === "string" ? edgeResDet : JSON.stringify(edgeResDet)))
+                        : "";
+                    alert(
+                      "Pieteikums saglabāts. E-pasta programmā ir sagatavota vēstule vadītājam — lūdzu nosūti to.\n\n" +
+                        "Automātiskais sūtīšanas mēģinājums šoreiz nesanāca." +
+                        resendShort +
+                        (resendShort ? "" : " Tehnisko tekstu meklē F12 → Console „[PDD Cits e-pasts]”.") +
+                        hint401,
+                    );
+                  }
                 }
                 const base = window.location.href.split("?")[0];
                 const link = `${base}?citsRow=${encodeURIComponent(rowId)}`;
@@ -7546,6 +7560,7 @@
             return name;
           }, [session?.user, profile]);
           const [view, setView] = useState("home");
+          const viewRef = useRef("home");
           const [promSub, setPromSub] = useState("calendar");
           const [navPast, setNavPast] = useState([]);
           const [darbaUzdevumiFocus, setDarbaUzdevumiFocus] = useState(null);
@@ -7572,7 +7587,7 @@
             const who = uid || em;
             return who ? `${APP_CHANGES_SEEN_KEY}:${who}` : APP_CHANGES_SEEN_KEY;
           }
-          function readAppChangesSeenId(storageKey) {
+          function appChangesSeenStorageKeys(storageKey) {
             const uid = String(
               getStickyAuthValue(LS_LOCAL_USER_ID) || session?.user?.id || ""
             ).trim();
@@ -7584,28 +7599,29 @@
             )
               .trim()
               .toLowerCase();
-            const keys = [
-              storageKey,
-              APP_CHANGES_SEEN_KEY,
-              uid ? `${APP_CHANGES_SEEN_KEY}:${uid}` : "",
-              em ? `${APP_CHANGES_SEEN_KEY}:${em}` : "",
-            ].filter(Boolean);
-            for (const k of [...new Set(keys)]) {
-              const id = appChangesStampId(localStorage.getItem(k));
-              if (id) return id;
-            }
-            return "";
+            const keys = new Set([APP_CHANGES_SEEN_KEY, String(storageKey ?? "").trim()]);
+            if (uid) keys.add(`${APP_CHANGES_SEEN_KEY}:${uid}`);
+            if (em) keys.add(`${APP_CHANGES_SEEN_KEY}:${em}`);
+            return [...keys].filter(Boolean);
           }
           function writeAppChangesSeenId(storageKey, stampOrId) {
             const id = appChangesStampId(stampOrId);
             if (!id) return;
-            localStorage.setItem(storageKey, id);
-            localStorage.setItem(APP_CHANGES_SEEN_KEY, id);
+            for (const k of appChangesSeenStorageKeys(storageKey)) {
+              try {
+                localStorage.setItem(k, id);
+              } catch {
+                /* ignore */
+              }
+            }
           }
-          function isAppChangesUnread(latestStamp, seenId) {
+          function isAppChangesUnread(latestStamp, storageKey) {
             const latest = appChangesStampId(latestStamp);
-            const seen = appChangesStampId(seenId);
-            return Boolean(latest && latest !== seen);
+            if (!latest) return false;
+            for (const k of appChangesSeenStorageKeys(storageKey)) {
+              if (appChangesStampId(localStorage.getItem(k)) === latest) return false;
+            }
+            return true;
           }
           const [showPddAppChangesBadge, setShowPddAppChangesBadge] = useState(false);
           const [appChangesLatestId, setAppChangesLatestId] = useState("");
@@ -7861,17 +7877,14 @@
               const latest = String(M.latestStamp(rows) || "").trim();
               const latestId = appChangesStampId(latest);
               const seenKey = appChangesSeenStorageKey();
-              const who = seenKey.startsWith(`${APP_CHANGES_SEEN_KEY}:`)
-                ? seenKey.slice(APP_CHANGES_SEEN_KEY.length + 1)
-                : "";
-              if (!who) {
+              appChangesLatestIdRef.current = latestId;
+              setAppChangesLatestId(latestId);
+              if (viewRef.current === "pddAppChanges") {
+                if (latestId) writeAppChangesSeenId(seenKey, latestId);
                 setShowPddAppChangesBadge(false);
                 return;
               }
-              const seen = readAppChangesSeenId(seenKey);
-              appChangesLatestIdRef.current = latestId;
-              setAppChangesLatestId(latestId);
-              setShowPddAppChangesBadge(isAppChangesUnread(latest, seen));
+              setShowPddAppChangesBadge(isAppChangesUnread(latest, seenKey));
             } catch {
               setShowPddAppChangesBadge(false);
             }
@@ -7938,6 +7951,9 @@
             };
           }, [session?.user, homeAbsencesSnapshot.length]);
           useEffect(() => {
+            viewRef.current = view;
+          }, [view]);
+          useEffect(() => {
             deferNonCritical(() => refreshAppChangesBadge());
           }, [refreshAppChangesBadge]);
           useEffect(() => {
@@ -7957,10 +7973,9 @@
                 const rows = await M.fetchRows(sb);
                 const latest = String(M.latestStamp(rows) || "").trim();
                 const latestId = appChangesStampId(latest);
-                const seen = readAppChangesSeenId(seenKey);
                 appChangesLatestIdRef.current = latestId;
                 setAppChangesLatestId(latestId);
-                if (isAppChangesUnread(latest, seen)) setAppChangesHighlightId(latestId);
+                if (isAppChangesUnread(latest, seenKey)) setAppChangesHighlightId(latestId);
                 if (latestId) writeAppChangesSeenId(seenKey, latestId);
                 setShowPddAppChangesBadge(false);
               } catch {

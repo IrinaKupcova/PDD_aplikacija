@@ -38,6 +38,13 @@ function jsonResponse(payload: unknown, status = 200): Response {
   });
 }
 
+function readResendApiKey(): string {
+  let k = sanitizeHeaderValue(Deno.env.get("RESEND_API_KEY"));
+  if (k.startsWith("re_")) return k;
+  k = k.replace(/^["']+|["']+$/g, "").trim();
+  return sanitizeHeaderValue(k);
+}
+
 function escapeHtml(input: unknown): string {
   return String(input ?? "")
     .replace(/&/g, "&amp;")
@@ -66,7 +73,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
 
-  const resendApiKey = sanitizeHeaderValue(Deno.env.get("RESEND_API_KEY"));
+  const resendApiKey = readResendApiKey();
   if (!resendApiKey) return jsonResponse({ error: "Missing RESEND_API_KEY" }, 500);
 
   const from =

@@ -885,6 +885,17 @@
     return FILE_SUPABASE_ANON_KEY;
   }
 
+  /** true tikai ja ir servera API (Vercel) — citādi pārlūkā e-pasts caur mailto. */
+  function hasServerEmailChannel() {
+    if (typeof process !== "undefined") {
+      return Boolean(String(process.env?.RESEND_API_KEY || "").trim());
+    }
+    const useAuto = root.__PDD_USE_AUTOMATIC_SERVER_EMAIL__;
+    if (typeof useAuto === "function") return Boolean(useAuto());
+    const getUrl = root.__PDD_GET_PDD_RESEND_API_URL__;
+    return Boolean(getUrl && String(getUrl() || "").trim());
+  }
+
   function openIadMailtoFallback({ to, subject, text, url, cc }) {
     if (typeof window === "undefined") return false;
     const addr = String(to ?? "").trim();
@@ -1087,26 +1098,37 @@
     if (!isValidEmail(email)) return { ok: false, reason: "invalid_email" };
     const ccList = uniqEmails([...(Array.isArray(cc) ? cc : []), ...getControlCcFor(email)]);
 
-    const viaPddApi = await sendEmailViaPddResendApi({
-      to: email,
-      subject,
-      text,
-      html,
-      url,
-      cc: ccList,
-    });
-    if (viaPddApi.ok) {
+    async function recordOk(viaResult, viaLabel) {
       await recordInformeshanaSend({
         row,
         to: email,
         subject,
         text: messageText || text,
         kind,
-        via: viaPddApi.via || "pdd-resend-api",
+        via: viaLabel || viaResult.via || "unknown",
         supabase,
       });
-      return viaPddApi;
+      return viaResult;
     }
+
+    if (typeof window !== "undefined" && !hasServerEmailChannel()) {
+      if (
+        openIadMailtoFallback({
+          to: email,
+          subject,
+          text: messageText || text,
+          url,
+          cc: ccList,
+        })
+      ) {
+        return recordOk({ ok: true, via: "mailto", manual: true }, "mailto");
+      }
+      return { ok: false, reason: "mailto_blocked" };
+    }
+
+    const viaEdge = await sendEmailViaEdgeFunction({ to: email, subject, text, html, url, cc: ccList });
+    if (viaEdge.ok) return recordOk(viaEdge, viaEdge.via || "edge_sendEmail");
+
     const sbClient = supabase || getSupabaseClientForBrowser();
     const viaInvoke = await sendEmailViaSupabaseInvoke({
       to: email,
@@ -1117,18 +1139,7 @@
       cc: ccList,
       supabase: sbClient,
     });
-    if (viaInvoke.ok) {
-      await recordInformeshanaSend({
-        row,
-        to: email,
-        subject,
-        text: messageText || text,
-        kind,
-        via: viaInvoke.via || "invoke",
-        supabase,
-      });
-      return viaInvoke;
-    }
+    if (viaInvoke.ok) return recordOk(viaInvoke, viaInvoke.via || "invoke");
 
     if (typeof root.PDD_INFORMESHANA_SEND_EMAIL__ === "function") {
       try {
@@ -1142,50 +1153,24 @@
           cc: ccList,
           kind: kind || "inform",
         });
-        if (custom?.ok) {
-          await recordInformeshanaSend({
-            row,
-            to: email,
-            subject,
-            text: messageText || text,
-            kind,
-            via: custom.via || "custom",
-            supabase,
-          });
-          return custom;
-        }
+        if (custom?.ok) return recordOk(custom, custom.via || "custom");
       } catch (e) {
         console.warn("[PDD_INFORMESHANA] custom hook error", e);
       }
     }
 
-    const viaResend = await sendEmailViaResendHttp({ to: email, subject, text, html, cc: ccList });
-    if (viaResend.ok) {
-      await recordInformeshanaSend({
-        row,
-        to: email,
-        subject,
-        text: messageText || text,
-        kind,
-        via: viaResend.via || "resend_http",
-        supabase,
-      });
-      return viaResend;
-    }
+    const viaPddApi = await sendEmailViaPddResendApi({
+      to: email,
+      subject,
+      text,
+      html,
+      url,
+      cc: ccList,
+    });
+    if (viaPddApi.ok) return recordOk(viaPddApi, viaPddApi.via || "pdd-resend-api");
 
-    const viaEdge = await sendEmailViaEdgeFunction({ to: email, subject, text, html, url, cc: ccList });
-    if (viaEdge.ok) {
-      await recordInformeshanaSend({
-        row,
-        to: email,
-        subject,
-        text: messageText || text,
-        kind,
-        via: viaEdge.via || "edge_sendEmail",
-        supabase,
-      });
-      return viaEdge;
-    }
+    const viaResend = await sendEmailViaResendHttp({ to: email, subject, text, html, cc: ccList });
+    if (viaResend.ok) return recordOk(viaResend, viaResend.via || "resend_http");
 
     if (
       openIadMailtoFallback({
@@ -1201,12 +1186,12 @@
         via: "mailto_fallback",
         manual: true,
         note: "Serveris nevarēja nosūtīt automātiski — atvērta e-pasta programma. Nospied Sūtīt.",
-        pddApi: viaPddApi,
         edge: viaEdge,
+        pddApi: viaPddApi,
       };
     }
 
-    return { ok: false, reason: "all_channels_failed", pddApi: viaPddApi, resend: viaResend, edge: viaEdge };
+    return { ok: false, reason: "all_channels_failed", edge: viaEdge, pddApi: viaPddApi, resend: viaResend };
   }
 
   async function sendIadReminderEmail({ to, row, url, supabase }) {
@@ -1391,6 +1376,9 @@
     const stamp = monthStamp(now);
     if (!force && !isFirstCalendarDay(now)) {
       return { ok: true, skipped: true, reason: "not_first_day", stamp };
+    }
+    if (typeof window !== "undefined" && !hasServerEmailChannel()) {
+      return { ok: true, skipped: true, reason: "mailto_mode_no_auto_reminders", stamp };
     }
 
     const sb =

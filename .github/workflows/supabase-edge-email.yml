@@ -1,5 +1,5 @@
 # Automātiski: Resend secrets + Edge Functions deploy uz Supabase.
-# Secrets (GitHub → Settings → Secrets → Actions):
+# Secrets (GitHub → Settings → Secrets → Actions) — opcionāli, ja vēlies automātisku sūtīšanu:
 #   SUPABASE_ACCESS_TOKEN, SUPABASE_PROJECT_REF, RESEND_API_KEY, RESEND_FROM
 name: Supabase Edge — sendEmail + Resend
 
@@ -35,18 +35,20 @@ jobs:
             echo "skip_deploy=false" >> "$GITHUB_ENV"
           fi
 
-      - name: Resend secrets uz Supabase Edge
+      - name: Resend secrets uz Supabase Edge (opcionāli)
         if: env.skip_deploy == 'false'
         continue-on-error: true
         run: |
           if [ -z "$RESEND_API_KEY" ]; then
-            echo "::warning::RESEND_API_KEY nav — Resend secret netiek atjaunināts."
+            echo "::notice::RESEND_API_KEY nav — e-pasti pārlūkā iet caur mailto (API atslēga nav vajadzīga)."
             exit 0
           fi
+          KEY="$(printf '%s' "$RESEND_API_KEY" | tr -d '\r\n\uFEFF' | sed 's/^[[:space:]"]*//;s/[[:space:]"]*$//')"
           if [ -n "$RESEND_FROM" ]; then
-            supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" RESEND_API_KEY="$RESEND_API_KEY" RESEND_FROM="$RESEND_FROM"
+            FROM="$(printf '%s' "$RESEND_FROM" | tr -d '\r\n\uFEFF' | sed 's/^[[:space:]"]*//;s/[[:space:]"]*$//')"
+            supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" RESEND_API_KEY="$KEY" RESEND_FROM="$FROM"
           else
-            supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" RESEND_API_KEY="$RESEND_API_KEY"
+            supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" RESEND_API_KEY="$KEY"
           fi
 
       - name: Deploy sendIadEmail (--no-verify-jwt)
