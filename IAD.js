@@ -2001,20 +2001,30 @@
               if (out?.skipped) console.info("[PDD_INFORMESHANA] pēc saglabāšanas", out.reason || out);
               const fails = (out?.results || []).filter((r) => r && !r.ok && !r.skipped);
               if (fails.length) {
-                console.error(
-                  "[PDD_INFORMESHANA] pievienošanas vēstules NETIKA nosūtītas:",
-                  fails.map((f) => ({
-                    email: f.email,
-                    name: f.name,
-                    reason: f.reason,
-                    pddApi: f.pddApi?.reason,
-                    edge: f.edge?.reason,
-                  })),
-                );
+                const detail = fails
+                  .map((f) => {
+                    const edgeMsg = String(
+                      f?.edge?.body?.details?.message ||
+                        f?.edge?.body?.error ||
+                        f?.reason ||
+                        "",
+                    ).trim();
+                    return [f?.email, f?.name, edgeMsg].filter(Boolean).join(" — ");
+                  })
+                  .filter(Boolean)
+                  .join("\n");
+                console.error("[PDD_INFORMESHANA] pievienošanas vēstules NETIKA nosūtītas:", fails);
+                const isInvalidKey = /api key is invalid/i.test(detail);
                 alert(
-                  "IaD saglabāts, bet automātiskais paziņojums jaunajam atbildīgajam/līdzatbildīgajam netika nosūtīts.\n\n" +
-                    "Pārbaudi RESEND_API_KEY (GitHub + Supabase Edge) un RESEND_FROM.\n" +
-                    "Tehnisko info skaties F12 → Console.",
+                  "IaD saglabāts, bet automātiskais paziņojums netika nosūtīts.\n\n" +
+                    (isInvalidKey
+                      ? "RESEND_API_KEY Supabase Edge ir nederīga.\n\n" +
+                        "1) Resend.com → API Keys → jauna atslēga\n" +
+                        "2) GitHub Secrets → RESEND_API_KEY\n" +
+                        "3) Supabase → Edge Functions → Secrets → RESEND_API_KEY\n" +
+                        "4) Actions → „Supabase Edge — sendEmail + Resend” → Run workflow"
+                      : "Pārbaudi RESEND_API_KEY un RESEND_FROM.") +
+                    (detail ? `\n\n${detail}` : "\n\nSkaties F12 → Console."),
                 );
               } else if (out?.sent > 0) {
                 const sentTo = (out?.results || [])
