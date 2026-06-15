@@ -963,12 +963,15 @@
     return FILE_SUPABASE_ANON_KEY;
   }
 
-  /** Supabase Edge / Vercel — automātiska sūtīšana, ja serveris konfigurēts. */
+  /** Pārlūkā: Edge ar anon atslēgu. Node: RESEND_API_KEY. */
   function hasServerEmailChannel() {
-    if (typeof process !== "undefined") {
-      return Boolean(String(process.env?.RESEND_API_KEY || "").trim());
+    if (typeof window !== "undefined" && typeof document !== "undefined") {
+      return Boolean(getAnonApiKey() && getIadEmailFnUrls().length > 0);
     }
-    return Boolean(getSupabaseClientForBrowser());
+    if (typeof process !== "undefined" && process.env) {
+      return Boolean(String(process.env.RESEND_API_KEY || "").trim());
+    }
+    return Boolean(getAnonApiKey() && getIadEmailFnUrls().length > 0);
   }
 
   function ensureEmailDraftStyles() {
@@ -1391,10 +1394,6 @@
       return viaResult;
     }
 
-    if (typeof window !== "undefined" && !hasServerEmailChannel()) {
-      return { ok: false, reason: "no_server_email_channel" };
-    }
-
     const viaEdge = await sendEmailViaEdgeFunction({ to: email, subject, text, html, url, cc: ccList });
     if (viaEdge.ok) return recordOk(viaEdge, viaEdge.via || "edge_sendEmail");
 
@@ -1783,6 +1782,14 @@
     isControlMonitorRecipient,
     openEmailDraftPanel,
     closeEmailDraftPanel,
+    hasServerEmailChannel,
+    debugEmailChannel: () => ({
+      hasChannel: hasServerEmailChannel(),
+      anonKey: Boolean(getAnonApiKey()),
+      fnUrls: getIadEmailFnUrls(),
+      inBrowser: typeof window !== "undefined",
+      hasProcess: typeof process !== "undefined",
+    }),
   };
 });
 
