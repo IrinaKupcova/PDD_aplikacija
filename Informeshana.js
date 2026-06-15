@@ -959,35 +959,206 @@
     return FILE_SUPABASE_ANON_KEY;
   }
 
-  /** true tikai ja ir servera API (Vercel) — citādi pārlūkā e-pasts caur mailto. */
+  /** Supabase Edge / Vercel — automātiska sūtīšana, ja serveris konfigurēts. */
   function hasServerEmailChannel() {
     if (typeof process !== "undefined") {
       return Boolean(String(process.env?.RESEND_API_KEY || "").trim());
     }
-    const useAuto = root.__PDD_USE_AUTOMATIC_SERVER_EMAIL__;
-    if (typeof useAuto === "function") return Boolean(useAuto());
-    const getUrl = root.__PDD_GET_PDD_RESEND_API_URL__;
-    return Boolean(getUrl && String(getUrl() || "").trim());
+    return Boolean(getSupabaseClientForBrowser());
   }
 
-  function openIadMailtoFallback({ to, subject, text, url, cc }) {
-    if (typeof window === "undefined") return false;
-    const addr = String(to ?? "").trim();
-    if (!isValidEmail(addr)) return false;
-    const ccList = uniqEmails(Array.isArray(cc) ? cc : []).filter((em) => normEmail(em) !== normEmail(addr));
-    const body = `${String(text ?? "").trim()}\n\nAtvērt aplikācijā: ${String(url ?? "").trim()}`;
-    const params = new URLSearchParams();
-    params.set("subject", String(subject ?? "").trim() || "PDD: IaD informēšana");
-    params.set("body", body);
-    if (ccList.length) params.set("cc", ccList.join(","));
-    const href = `mailto:${encodeURIComponent(addr)}?${params.toString()}`;
+  function ensureEmailDraftStyles() {
+    if (typeof document === "undefined" || document.getElementById("pdd-email-draft-styles")) return;
+    const el = document.createElement("style");
+    el.id = "pdd-email-draft-styles";
+    el.textContent = `
+      .pdd-email-draft-overlay {
+        position: fixed; inset: 0; z-index: 12000;
+        background: rgba(15, 23, 42, 0.55);
+        display: flex; align-items: center; justify-content: center;
+        padding: 1rem;
+      }
+      .pdd-email-draft-card {
+        width: min(560px, 100%); max-height: 90vh; overflow: auto;
+        background: var(--card, #fff); color: var(--text, #0f172a);
+        border-radius: 12px; border: 1px solid var(--border, #e2e8f0);
+        box-shadow: 0 20px 50px rgba(0,0,0,0.2); padding: 1rem 1.1rem;
+      }
+      .pdd-email-draft-card h3 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+      .pdd-email-draft-hint {
+        margin: 0 0 0.85rem; font-size: 0.88rem; color: var(--muted, #64748b); line-height: 1.45;
+      }
+      .pdd-email-draft-field { margin-bottom: 0.65rem; }
+      .pdd-email-draft-field label {
+        display: block; font-size: 0.78rem; font-weight: 600;
+        color: var(--muted, #64748b); margin-bottom: 0.2rem;
+      }
+      .pdd-email-draft-field .val {
+        font-size: 0.9rem; word-break: break-word;
+      }
+      .pdd-email-draft-textarea {
+        width: 100%; min-height: 140px; resize: vertical;
+        font-family: inherit; font-size: 0.88rem; line-height: 1.45;
+        border: 1px solid var(--border, #e2e8f0); border-radius: 8px;
+        padding: 0.5rem 0.6rem; box-sizing: border-box;
+      }
+      .pdd-email-draft-actions {
+        display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.85rem;
+      }
+      .pdd-email-draft-actions button {
+        font: inherit; cursor: pointer; border-radius: 8px;
+        padding: 0.45rem 0.75rem; border: 1px solid var(--border, #e2e8f0);
+        background: var(--bg, #f8fafc);
+      }
+      .pdd-email-draft-actions button.primary {
+        background: #1d4ed8; color: #fff; border-color: #1d4ed8;
+      }
+    `;
+    document.head.appendChild(el);
+  }
+
+  async function copyTextToClipboard(text) {
+    const s = String(text ?? "");
     try {
-      const popup = window.open(href, "_blank");
-      if (!popup) window.location.href = href;
+      await navigator.clipboard.writeText(s);
       return true;
     } catch {
-      return false;
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = s;
+        ta.style.cssText = "position:fixed;left:-9999px;top:0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        return ok;
+      } catch {
+        return false;
+      }
     }
+  }
+
+  function openEmailDraftPanel({ to, cc, subject, text, title, url }) {
+    if (typeof document === "undefined") return false;
+    const addr = String(to ?? "").trim();
+    if (!addr.includes("@")) return false;
+    ensureEmailDraftStyles();
+
+    const ccList = uniqEmails(Array.isArray(cc) ? cc : cc ? [cc] : []);
+    const subj = String(subject ?? "").trim() || "PDD informēšana";
+    const urlLine = String(url ?? "").trim();
+    const body =
+      String(text ?? "").trim() +
+      (urlLine ? `\n\nAtvērt aplikācijā: ${urlLine}` : "");
+    const fullForCopy = [
+      `Kam: ${addr}`,
+      ccList.length ? `Kopija: ${ccList.join(", ")}` : "",
+      `Temats: ${subj}`,
+      "",
+      body,
+    ]
+      .filter((line, i, arr) => line || (i > 0 && arr[i - 1]))
+      .join("\n");
+
+    document.getElementById("pdd-email-draft-overlay")?.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "pdd-email-draft-overlay";
+    overlay.className = "pdd-email-draft-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+
+    const card = document.createElement("div");
+    card.className = "pdd-email-draft-card";
+
+    const h = document.createElement("h3");
+    h.textContent = String(title ?? "").trim() || "E-pasta vēstule";
+    card.appendChild(h);
+
+    const hint = document.createElement("p");
+    hint.className = "pdd-email-draft-hint";
+    hint.textContent =
+      "Automātiskā sūtīšana šoreiz neizdevās. Teksts ir sagatavots — nokopē un ielīmē savā e-pastā (Outlook, Copilot u.c.), tad nosūti.";
+    card.appendChild(hint);
+
+    function addField(label, value) {
+      const wrap = document.createElement("div");
+      wrap.className = "pdd-email-draft-field";
+      const lb = document.createElement("label");
+      lb.textContent = label;
+      const val = document.createElement("div");
+      val.className = "val";
+      val.textContent = value;
+      wrap.appendChild(lb);
+      wrap.appendChild(val);
+      card.appendChild(wrap);
+    }
+
+    addField("Kam", addr);
+    if (ccList.length) addField("Kopija", ccList.join(", "));
+    addField("Temats", subj);
+
+    const taWrap = document.createElement("div");
+    taWrap.className = "pdd-email-draft-field";
+    const taLb = document.createElement("label");
+    taLb.textContent = "Teksts";
+    const ta = document.createElement("textarea");
+    ta.className = "pdd-email-draft-textarea";
+    ta.readOnly = true;
+    ta.value = body;
+    taWrap.appendChild(taLb);
+    taWrap.appendChild(ta);
+    card.appendChild(taWrap);
+
+    const actions = document.createElement("div");
+    actions.className = "pdd-email-draft-actions";
+
+    const copyAllBtn = document.createElement("button");
+    copyAllBtn.type = "button";
+    copyAllBtn.className = "primary";
+    copyAllBtn.textContent = "Kopēt visu";
+    copyAllBtn.addEventListener("click", async () => {
+      const ok = await copyTextToClipboard(fullForCopy);
+      copyAllBtn.textContent = ok ? "Nokopēts!" : "Neizdevās kopēt";
+      setTimeout(() => {
+        copyAllBtn.textContent = "Kopēt visu";
+      }, 1800);
+    });
+
+    const copyBodyBtn = document.createElement("button");
+    copyBodyBtn.type = "button";
+    copyBodyBtn.textContent = "Kopēt tekstu";
+    copyBodyBtn.addEventListener("click", async () => {
+      const ok = await copyTextToClipboard(body);
+      copyBodyBtn.textContent = ok ? "Nokopēts!" : "Neizdevās";
+      setTimeout(() => {
+        copyBodyBtn.textContent = "Kopēt tekstu";
+      }, 1800);
+    });
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.textContent = "Aizvērt";
+    closeBtn.addEventListener("click", () => overlay.remove());
+
+    actions.appendChild(copyAllBtn);
+    actions.appendChild(copyBodyBtn);
+    actions.appendChild(closeBtn);
+    card.appendChild(actions);
+
+    overlay.appendChild(card);
+    overlay.addEventListener("click", (ev) => {
+      if (ev.target === overlay) overlay.remove();
+    });
+    document.body.appendChild(overlay);
+    return true;
+  }
+
+  function openIadMailtoFallback(opts) {
+    return openEmailDraftPanel({
+      ...opts,
+      title: "IaD informēšana — nosūti e-pastu",
+    });
   }
 
   async function sendEmailViaPddResendApi({ to, subject, text, html, url, cc }) {
@@ -1187,17 +1358,18 @@
 
     if (typeof window !== "undefined" && !hasServerEmailChannel()) {
       if (
-        openIadMailtoFallback({
+        openEmailDraftPanel({
           to: email,
           subject,
           text: messageText || text,
           url,
           cc: ccList,
+          title: "IaD informēšana — nosūti e-pastu",
         })
       ) {
-        return recordOk({ ok: true, via: "mailto", manual: true }, "mailto");
+        return recordOk({ ok: true, via: "email_draft", manual: true }, "email_draft");
       }
-      return { ok: false, reason: "mailto_blocked" };
+      return { ok: false, reason: "draft_blocked" };
     }
 
     const viaEdge = await sendEmailViaEdgeFunction({ to: email, subject, text, html, url, cc: ccList });
@@ -1247,19 +1419,20 @@
     if (viaResend.ok) return recordOk(viaResend, viaResend.via || "resend_http");
 
     if (
-      openIadMailtoFallback({
+      openEmailDraftPanel({
         to: email,
         subject,
         text: messageText || text,
         url,
         cc: ccList,
+        title: "IaD informēšana — nosūti e-pastu",
       })
     ) {
       return {
         ok: true,
-        via: "mailto_fallback",
+        via: "email_draft",
         manual: true,
-        note: "Serveris nevarēja nosūtīt automātiski — atvērta e-pasta programma. Nospied Sūtīt.",
+        note: "Teksts sagatavots kartītē — nokopē un ielīmē savā e-pastā (Outlook/Copilot).",
         edge: viaEdge,
         pddApi: viaPddApi,
       };
@@ -1460,8 +1633,8 @@
     if (!force && !isFirstCalendarDay(now)) {
       return { ok: true, skipped: true, reason: "not_first_day", stamp };
     }
-    if (typeof window !== "undefined" && !hasServerEmailChannel()) {
-      return { ok: true, skipped: true, reason: "mailto_mode_no_auto_reminders", stamp };
+    if (typeof window !== "undefined" && !getSupabaseClientForBrowser()) {
+      return { ok: true, skipped: true, reason: "no_supabase_for_reminders", stamp };
     }
 
     const sb =
@@ -1581,5 +1754,10 @@
     fetchInformeshanaAuditForRow,
     informeshanaKindLabel,
     isControlMonitorRecipient,
+    openEmailDraftPanel,
   };
 });
+
+if (typeof globalThis !== "undefined") {
+  globalThis.PDD_OPEN_EMAIL_DRAFT__ = globalThis.PDD_INFORMESHANA?.openEmailDraftPanel;
+}

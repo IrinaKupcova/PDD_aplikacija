@@ -465,7 +465,7 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=2026051312"></script>
-      <script defer src="./Informeshana.js?v=202605208"></script>
+      <script defer src="./Informeshana.js?v=202605209"></script>
       <script defer src="./IAD.js?v=202605199"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
@@ -1235,10 +1235,10 @@
           return "";
         }
 
-        /** true tikai ja ir Vercel u.tml. API — citādi e-pasts caur mailto (bez Resend API atslēgas). */
+        /** true, ja Supabase ir konfigurēts — mēģina automātisko sūtīšanu caur Edge (ne mailto). */
         function useAutomaticServerEmail() {
           if (TIKAI_VIENKARSI_SKATS || isLocalMode()) return false;
-          return Boolean(getPddResendApiUrl());
+          return Boolean(supabase && configured());
         }
 
         function getSendPddEmailFnUrl() {
@@ -1570,9 +1570,6 @@
           if (TIKAI_VIENKARSI_SKATS || isLocalMode()) {
             return { ok: false, reason: "local_or_simple_view" };
           }
-          if (!useAutomaticServerEmail()) {
-            return { ok: false, reason: "mailto_mode" };
-          }
           const to = String(payload?.to ?? "").trim();
           const subject = String(payload?.subject ?? "").trim();
           const text = String(payload?.text ?? "").trim();
@@ -1723,7 +1720,8 @@
         };
 
         function openManualCitsEmailFallback({ name, veids, startDate, endDate, link }) {
-          const to = ["katrina.jirgensone@vid.gov.lv", "irina.kupcova@vid.gov.lv"].join("; ");
+          const to = "katrina.jirgensone@vid.gov.lv";
+          const cc = ["irina.kupcova@vid.gov.lv"];
           const subject = "Jauns pieteikums";
           const lines = [
             `Vārds: ${String(name || "").trim() || "-"}`,
@@ -1732,12 +1730,19 @@
             `Links: ${String(link || "").trim() || "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture"}`,
           ];
           const body = lines.join("\n");
-          const href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-          try {
-            window.location.href = href;
-          } catch {
-            /* ignore */
+          const open =
+            globalThis.PDD_OPEN_EMAIL_DRAFT__ || globalThis.PDD_INFORMESHANA?.openEmailDraftPanel;
+          if (typeof open === "function") {
+            open({
+              to,
+              cc,
+              subject,
+              text: body,
+              title: "Cits pieteikums — nosūti e-pastu",
+            });
+            return true;
           }
+          return false;
         }
 
         async function ensureDbReadableSession() {
@@ -3926,7 +3931,21 @@
                 const selectedUser = usersForSelect.find((u) => String(u?.id ?? "") === String(finalUserId)) || null;
                 const employeeNameForEmail = String(userDisplayName(selectedUser) || finalUserId).trim();
                 const manualLink = `${window.location.href.split("?")[0]}?citsRow=${encodeURIComponent(rowId)}`;
-                if (!useAutomaticServerEmail()) {
+                await ensureDbReadableSession();
+                const emailResult = await callSendPddEmail({
+                  name: employeeNameForEmail,
+                  veids: String(typeObj?.name || "Cits"),
+                  type: "cits",
+                });
+                const resendResult = emailResult?.ok
+                  ? { skipped: true, reason: "edge_ok" }
+                  : await callPddResendApi({
+                      action: "cits_absence_created",
+                      absence_id: rowId,
+                      notify_manager_email: to,
+                      notify_phone: FILE_PDD_SMS_NOTIFY_PHONE,
+                    });
+                if (!emailResult?.ok && !resendResult?.ok) {
                   openManualCitsEmailFallback({
                     name: employeeNameForEmail,
                     veids: String(typeObj?.name || "Cits"),
@@ -3934,34 +3953,8 @@
                     endDate,
                     link: manualLink,
                   });
-                  alert(
-                    "Pieteikums saglabāts. E-pasta programmā ir sagatavota vēstule vadītājam — lūdzu nosūti to.",
-                  );
-                } else {
-                  await ensureDbReadableSession();
-                  const emailResult = await callSendPddEmail({
-                    name: employeeNameForEmail,
-                    veids: String(typeObj?.name || "Cits"),
-                    type: "cits",
-                  });
-                  const resendResult = emailResult?.ok
-                    ? { skipped: true, reason: "edge_ok" }
-                    : await callPddResendApi({
-                        action: "cits_absence_created",
-                        absence_id: rowId,
-                        notify_manager_email: to,
-                        notify_phone: FILE_PDD_SMS_NOTIFY_PHONE,
-                      });
-                  if (!emailResult?.ok && !resendResult?.ok) {
-                    openManualCitsEmailFallback({
-                      name: employeeNameForEmail,
-                      veids: String(typeObj?.name || "Cits"),
-                      startDate,
-                      endDate,
-                      link: manualLink,
-                    });
 
-                    let edgeErr =
+                  let edgeErr =
                       String(
                         emailResult?.body?.error ||
                           emailResult?.raw ||
@@ -4043,13 +4036,12 @@
                             : String(typeof edgeResDet === "string" ? edgeResDet : JSON.stringify(edgeResDet)))
                         : "";
                     alert(
-                      "Pieteikums saglabāts. E-pasta programmā ir sagatavota vēstule vadītājam — lūdzu nosūti to.\n\n" +
+                      "Pieteikums saglabāts. Atvērta kartīte ar e-pasta tekstu — nokopē un ielīmē savā e-pastā (Outlook/Copilot).\n\n" +
                         "Automātiskais sūtīšanas mēģinājums šoreiz nesanāca." +
                         resendShort +
                         (resendShort ? "" : " Tehnisko tekstu meklē F12 → Console „[PDD Cits e-pasts]”.") +
                         hint401,
                     );
-                  }
                 }
                 const base = window.location.href.split("?")[0];
                 const link = `${base}?citsRow=${encodeURIComponent(rowId)}`;

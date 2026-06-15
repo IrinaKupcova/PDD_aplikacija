@@ -2020,11 +2020,11 @@
               const manual = (out?.results || []).filter((r) => r?.manual);
               if (manual.length) {
                 console.info(
-                  "[PDD_INFORMESHANA] atvērta e-pasta programma — nospied Sūtīt.",
+                  "[PDD_INFORMESHANA] atvērta e-pasta sagataves kartīte — nokopē un nosūti.",
                   manual,
                 );
                 alert(
-                  "Atvērta e-pasta programma ar sagatavotu vēstuli. Lūdzu pārbaudi un nospied Sūtīt.",
+                  "E-pasta teksts sagatavots kartītē. Nokopē un ielīmē savā e-pastā (Outlook/Copilot), tad nosūti.",
                 );
               }
               if (out?.sent > 0) console.info("[PDD_INFORMESHANA] nosūtītas vēstules:", out.sent);
