@@ -22,9 +22,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: supabase/setup-cli@v1
+      # Fiksēta versija — "latest" bieži krīt ar Gateway Time-out.
+      - name: Instalē Supabase CLI
+        uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.20.12
+        continue-on-error: true
+        id: supabase_cli_setup
+
+      - name: Instalē Supabase CLI (rezerves ceļš)
+        if: steps.supabase_cli_setup.outcome != 'success'
+        run: npm install -g supabase@2.20.12
+
+      - name: Pārbauda Supabase CLI
+        run: supabase --version
 
       - name: Pārbauda deploy priekšnosacījumus
         run: |
@@ -40,7 +51,7 @@ jobs:
         continue-on-error: true
         run: |
           if [ -z "$RESEND_API_KEY" ]; then
-            echo "::notice::RESEND_API_KEY nav — e-pasti pārlūkā iet caur mailto (API atslēga nav vajadzīga)."
+            echo "::notice::RESEND_API_KEY nav — automātiskie e-pasti nestrādās."
             exit 0
           fi
           KEY="$(printf '%s' "$RESEND_API_KEY" | tr -d '\r\n\uFEFF' | sed 's/^[[:space:]"]*//;s/[[:space:]"]*$//')"
