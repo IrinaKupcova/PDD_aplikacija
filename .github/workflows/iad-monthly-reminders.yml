@@ -1,0 +1,54 @@
+# IaD mēneša atgādinājumi — automātiski katru mēneša 1. datumu (servera cron).
+# Secrets: SUPABASE_URL (vai VITE_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY, RESEND_API_KEY, RESEND_FROM
+name: IaD monthly reminders
+
+on:
+  schedule:
+    # 1. datums 05:00 UTC (~07:00 Latvijā)
+    - cron: "0 5 1 * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Piespiedu sūtīšana (neatkarīgi no datuma)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      RESEND_FROM: ${{ secrets.RESEND_FROM }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Pārbauda priekšnosacījumus
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::Trūkst SUPABASE_URL vai SUPABASE_SERVICE_ROLE_KEY GitHub Secrets."
+            exit 1
+          fi
+          if [ -z "$RESEND_API_KEY" ]; then
+            echo "::warning::Trūkst RESEND_API_KEY — e-pasti var neiziet caur Resend."
+          fi
+
+      - name: Sūta IaD mēneša atgādinājumus
+        run: |
+          ARGS=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
+            ARGS="--force"
+          fi
+          node Informeshana.js $ARGS

@@ -756,7 +756,11 @@
       const allSucceeded = rowNew.every((item) => {
         if (!item.email) return false;
         return results.some(
-          (r) => r.rowKey === item.rowKey && normEmail(r.email) === normEmail(item.email) && r.ok
+          (r) =>
+            r.rowKey === item.rowKey &&
+            normEmail(r.email) === normEmail(item.email) &&
+            r.ok &&
+            !r.manual
         );
       });
       if (allSucceeded) snap[rowKey] = currentPersons;
@@ -973,16 +977,19 @@
     el.id = "pdd-email-draft-styles";
     el.textContent = `
       .pdd-email-draft-overlay {
-        position: fixed; inset: 0; z-index: 12000;
+        position: fixed; inset: 0; z-index: 2147483000;
         background: rgba(15, 23, 42, 0.55);
         display: flex; align-items: center; justify-content: center;
         padding: 1rem;
+        pointer-events: auto;
       }
       .pdd-email-draft-card {
+        position: relative; z-index: 2147483001;
         width: min(560px, 100%); max-height: 90vh; overflow: auto;
         background: var(--card, #fff); color: var(--text, #0f172a);
         border-radius: 12px; border: 1px solid var(--border, #e2e8f0);
         box-shadow: 0 20px 50px rgba(0,0,0,0.2); padding: 1rem 1.1rem;
+        pointer-events: auto;
       }
       .pdd-email-draft-card h3 { margin: 0 0 0.5rem; font-size: 1.05rem; }
       .pdd-email-draft-hint {
@@ -1038,6 +1045,11 @@
     }
   }
 
+  function closeEmailDraftPanel() {
+    if (typeof document === "undefined") return;
+    document.getElementById("pdd-email-draft-overlay")?.remove();
+  }
+
   function openEmailDraftPanel({ to, cc, subject, text, title, url }) {
     if (typeof document === "undefined") return false;
     const addr = String(to ?? "").trim();
@@ -1070,6 +1082,7 @@
 
     const card = document.createElement("div");
     card.className = "pdd-email-draft-card";
+    card.addEventListener("click", (ev) => ev.stopPropagation());
 
     const h = document.createElement("h3");
     h.textContent = String(title ?? "").trim() || "E-pasta vēstule";
@@ -1139,7 +1152,11 @@
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.textContent = "Aizvērt";
-    closeBtn.addEventListener("click", () => overlay.remove());
+    closeBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeEmailDraftPanel();
+    });
 
     actions.appendChild(copyAllBtn);
     actions.appendChild(copyBodyBtn);
@@ -1148,8 +1165,15 @@
 
     overlay.appendChild(card);
     overlay.addEventListener("click", (ev) => {
-      if (ev.target === overlay) overlay.remove();
+      if (ev.target === overlay) closeEmailDraftPanel();
     });
+    const onEscape = (ev) => {
+      if (ev.key === "Escape") {
+        closeEmailDraftPanel();
+        document.removeEventListener("keydown", onEscape);
+      }
+    };
+    document.addEventListener("keydown", onEscape);
     document.body.appendChild(overlay);
     return true;
   }
@@ -1338,6 +1362,17 @@
     return lastFail;
   }
 
+  function formatIadEmailFailure(viaEdge, viaPddApi, viaResend) {
+    const parts = [];
+    const edgeMsg = String(viaEdge?.body?.details?.message || viaEdge?.body?.error || viaEdge?.reason || "").trim();
+    if (edgeMsg) parts.push(`Edge: ${edgeMsg}`);
+    const pddMsg = String(viaPddApi?.body?.error || viaPddApi?.reason || "").trim();
+    if (pddMsg) parts.push(`API: ${pddMsg}`);
+    const resendMsg = String(viaResend?.body?.message || viaResend?.reason || "").trim();
+    if (resendMsg) parts.push(`Resend: ${resendMsg}`);
+    return parts.join(" · ") || "Nezināma kļūda";
+  }
+
   async function dispatchIadInformEmail({ to, subject, text, html, url, row, cc, kind, messageText, supabase }) {
     const email = String(to ?? "").trim();
     if (!isValidEmail(email)) return { ok: false, reason: "invalid_email" };
@@ -1357,19 +1392,7 @@
     }
 
     if (typeof window !== "undefined" && !hasServerEmailChannel()) {
-      if (
-        openEmailDraftPanel({
-          to: email,
-          subject,
-          text: messageText || text,
-          url,
-          cc: ccList,
-          title: "IaD informēšana — nosūti e-pastu",
-        })
-      ) {
-        return recordOk({ ok: true, via: "email_draft", manual: true }, "email_draft");
-      }
-      return { ok: false, reason: "draft_blocked" };
+      return { ok: false, reason: "no_server_email_channel" };
     }
 
     const viaEdge = await sendEmailViaEdgeFunction({ to: email, subject, text, html, url, cc: ccList });
@@ -1418,27 +1441,23 @@
     const viaResend = await sendEmailViaResendHttp({ to: email, subject, text, html, cc: ccList });
     if (viaResend.ok) return recordOk(viaResend, viaResend.via || "resend_http");
 
-    if (
-      openEmailDraftPanel({
+    const failReason = formatIadEmailFailure(viaEdge, viaPddApi, viaResend);
+    if (typeof console !== "undefined" && console.error) {
+      console.error("[PDD_INFORMESHANA] automātiskā sūtīšana neizdevās:", failReason, {
         to: email,
-        subject,
-        text: messageText || text,
-        url,
-        cc: ccList,
-        title: "IaD informēšana — nosūti e-pastu",
-      })
-    ) {
-      return {
-        ok: true,
-        via: "email_draft",
-        manual: true,
-        note: "Teksts sagatavots kartītē — nokopē un ielīmē savā e-pastā (Outlook/Copilot).",
         edge: viaEdge,
         pddApi: viaPddApi,
-      };
+        resend: viaResend,
+      });
     }
 
-    return { ok: false, reason: "all_channels_failed", edge: viaEdge, pddApi: viaPddApi, resend: viaResend };
+    return {
+      ok: false,
+      reason: failReason,
+      edge: viaEdge,
+      pddApi: viaPddApi,
+      resend: viaResend,
+    };
   }
 
   async function sendIadReminderEmail({ to, row, url, supabase }) {
@@ -1466,6 +1485,13 @@
       .map((name) => personNameKey(name))
       .sort()
       .join("|");
+  }
+
+  function collectNewAssignmentPersons(previousRow, savedRow, teamUsers) {
+    const prev = collectRowRecipientPersons(previousRow, teamUsers);
+    const next = collectRowRecipientPersons(savedRow, teamUsers);
+    const prevSet = new Set(prev.map((name) => personNameKey(name)));
+    return next.filter((name) => !prevSet.has(personNameKey(name)));
   }
 
   function assignmentFieldsChanged(previousRow, savedRow, teamUsers) {
@@ -1537,16 +1563,16 @@
       return { ok: true, skipped: true, reason: "assignment_unchanged", count: 0, results: [] };
     }
 
-    const targets = collectRowRecipientPersons(savedRow, teamUsers);
-    if (!targets.length) {
-      return { ok: true, skipped: true, reason: "no_assignment_persons", count: 0, results: [] };
+    const newPersons = collectNewAssignmentPersons(previousRow, savedRow, teamUsers);
+    if (!newPersons.length) {
+      return { ok: true, skipped: true, reason: "no_new_assignment_persons", count: 0, results: [] };
     }
 
-    const newAssignments = buildWelcomeAssignmentsForPersons(savedRow, targets, teamUsers);
+    const newAssignments = buildWelcomeAssignmentsForPersons(savedRow, newPersons, teamUsers);
     if (typeof console !== "undefined" && console.info) {
-      console.info("[PDD_INFORMESHANA] atbildīgo izmaiņa — sūta pievienošanas vēstules", {
+      console.info("[PDD_INFORMESHANA] jauns atbildīgais/līdzatbildīgais — automātiska pievienošanas vēstule", {
         rowKey: rowStableId(savedRow),
-        persons: targets,
+        persons: newPersons,
       });
     }
 
@@ -1749,12 +1775,14 @@
     buildIadDeepLink,
     applyIadFocusFromUrl,
     collectRowRecipientEmails,
+    collectNewAssignmentPersons,
     isInactiveStatus,
     initBrowserScheduler,
     fetchInformeshanaAuditForRow,
     informeshanaKindLabel,
     isControlMonitorRecipient,
     openEmailDraftPanel,
+    closeEmailDraftPanel,
   };
 });
 

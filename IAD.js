@@ -1980,10 +1980,10 @@
       }
 
       function capturePreviousRowForInformeshana() {
-        if (editingSourceRow) return { ...editingSourceRow };
+        if (editingSourceRow) return normalizeIadRow({ ...editingSourceRow });
         if (editingId != null) {
           const hit = rows.find((r) => String(r?.id ?? "") === String(editingId));
-          if (hit) return { ...hit };
+          if (hit) return normalizeIadRow({ ...hit });
         }
         return null;
       }
@@ -1997,11 +1997,12 @@
             .runAssignmentWelcomeEmails({ supabase: sb, savedRow, previousRow, afterSave: true })
             .then((out) => {
               if (out?.skipped && out?.reason === "assignment_unchanged") return;
+              if (out?.skipped && out?.reason === "no_new_assignment_persons") return;
               if (out?.skipped) console.info("[PDD_INFORMESHANA] pēc saglabāšanas", out.reason || out);
               const fails = (out?.results || []).filter((r) => r && !r.ok && !r.skipped);
               if (fails.length) {
                 console.error(
-                  "[PDD_INFORMESHANA] vēstules NETIKA nosūtītas:",
+                  "[PDD_INFORMESHANA] pievienošanas vēstules NETIKA nosūtītas:",
                   fails.map((f) => ({
                     email: f.email,
                     name: f.name,
@@ -2010,24 +2011,18 @@
                     edge: f.edge?.reason,
                   })),
                 );
-              }
-              if (out?.count > 0 && !out?.sent) {
-                console.warn(
-                  "[PDD_INFORMESHANA] vēstules netika nosūtītas — pārbaudi F12 konsoli.",
-                  out,
-                );
-              }
-              const manual = (out?.results || []).filter((r) => r?.manual);
-              if (manual.length) {
-                console.info(
-                  "[PDD_INFORMESHANA] atvērta e-pasta sagataves kartīte — nokopē un nosūti.",
-                  manual,
-                );
                 alert(
-                  "E-pasta teksts sagatavots kartītē. Nokopē un ielīmē savā e-pastā (Outlook/Copilot), tad nosūti.",
+                  "IaD saglabāts, bet automātiskais paziņojums jaunajam atbildīgajam/līdzatbildīgajam netika nosūtīts.\n\n" +
+                    "Pārbaudi RESEND_API_KEY (GitHub + Supabase Edge) un RESEND_FROM.\n" +
+                    "Tehnisko info skaties F12 → Console.",
                 );
+              } else if (out?.sent > 0) {
+                const sentTo = (out?.results || [])
+                  .filter((r) => r?.ok && r?.email)
+                  .map((r) => String(r.email))
+                  .join(", ");
+                console.info("[PDD_INFORMESHANA] automātiski nosūtītas pievienošanas vēstules:", out.sent, sentTo);
               }
-              if (out?.sent > 0) console.info("[PDD_INFORMESHANA] nosūtītas vēstules:", out.sent);
             })
             .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", e));
         };
