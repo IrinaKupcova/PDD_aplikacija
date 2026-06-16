@@ -25,6 +25,7 @@
     planotasAktivitates: ["Planotas_aktivitates", "Plānotās_aktivitātes", "Planotās_aktivitātes", "Planotas aktivitates"],
     piezimes: ["Piezimes", "Piezīmes", "piezimes", "piezīmes"],
     pielikumi: ["Pielikumi", "pielikumi", "Pielikumi_json", "pielikumi_json"],
+    auditaKomentars: ["Audita_komentars", "Audita komentārs", "Audita komentars", "audita_komentars"],
   };
 
   const WRITE_DEFAULT = {
@@ -43,6 +44,7 @@
     planotasAktivitates: "Planotas_aktivitates",
     piezimes: "Piezimes",
     pielikumi: "Pielikumi",
+    auditaKomentars: "Audita_komentars",
   };
 
   let runtimeCols = { ...WRITE_DEFAULT };
@@ -50,8 +52,8 @@
   const ID_COLUMN_CANDIDATES = ["id", "ID", "Id", "iad_id", "IAD_id", "IAD_ID", "IAD.id"];
   let resolvedIadTable = null;
   let runtimeColsProbed = false;
-  const OPTIONAL_PAYLOAD_COL_KEYS = new Set(["ieteikumaNr", "nodotsIzpildei"]);
-  const runtimeOptionalColExists = { ieteikumaNr: false, nodotsIzpildei: false };
+  const OPTIONAL_PAYLOAD_COL_KEYS = new Set(["ieteikumaNr", "nodotsIzpildei", "auditaKomentars"]);
+  const runtimeOptionalColExists = { ieteikumaNr: false, nodotsIzpildei: false, auditaKomentars: false };
 
   function idColumnsToTry() {
     return Array.from(
@@ -119,6 +121,7 @@
       ["planotasAktivitates", [...IAD_ALIAS.planotasAktivitates, WRITE_DEFAULT.planotasAktivitates]],
       ["piezimes", [...IAD_ALIAS.piezimes, WRITE_DEFAULT.piezimes]],
       ["pielikumi", [...IAD_ALIAS.pielikumi, WRITE_DEFAULT.pielikumi]],
+      ["auditaKomentars", [...IAD_ALIAS.auditaKomentars, WRITE_DEFAULT.auditaKomentars]],
     ];
     for (const [key, aliases] of probes) {
       const found = await probeExistingColumn(sb, table, aliases);
@@ -404,6 +407,8 @@
       "Planotas aktivitates": "Plānotās aktivitātes",
       Piezimes: "Izpildes informācija",
       "Piezīmes": "Izpildes informācija",
+      Audita_komentars: "Audita komentārs",
+      "Audita komentārs": "Audita komentārs",
       Pielikumi: "Pielikumi",
       Pielikumi_json: "Pielikumi",
       created_at: "Izveidots",
@@ -444,6 +449,7 @@
     resolve("planotasAktivitates", IAD_ALIAS.planotasAktivitates);
     resolve("piezimes", IAD_ALIAS.piezimes);
     resolve("pielikumi", IAD_ALIAS.pielikumi);
+    resolve("auditaKomentars", IAD_ALIAS.auditaKomentars);
     const idAliases = ["id", "ID", "Id", "iad_id", "IAD_id", "IAD_ID", "IAD.id"];
     const idFound = keys.find((k) => idAliases.some((a) => String(a).toLowerCase() === String(k).toLowerCase()));
     if (idFound && !String(idFound).includes(".")) runtimeIdCol = idFound;
@@ -472,6 +478,7 @@
       Planotas_aktivitates: normalizeTextBlock(pickByAliases(r, IAD_ALIAS.planotasAktivitates)),
       Piezimes: normalizeTextBlock(pickByAliases(r, IAD_ALIAS.piezimes)),
       Pielikumi: parseAttachments(pickByAliases(r, IAD_ALIAS.pielikumi)),
+      Audita_komentars: normalizeTextBlock(pickByAliases(r, IAD_ALIAS.auditaKomentars)),
       created_at: r?.created_at ?? null,
     };
   }
@@ -493,6 +500,7 @@
       Planotas_aktivitates: "",
       Piezimes: "",
       Pielikumi: [],
+      Audita_komentars: "",
     };
   }
 
@@ -531,6 +539,7 @@
     setPayloadField(p, "planotasAktivitates", normalizeTextBlock(d?.Planotas_aktivitates) || null);
     setPayloadField(p, "piezimes", normalizeTextBlock(d?.Piezimes) || null);
     setPayloadField(p, "pielikumi", serializeAttachments(d?.Pielikumi));
+    setPayloadField(p, "auditaKomentars", normalizeTextBlock(d?.Audita_komentars) || null);
     return p;
   }
 
@@ -1105,6 +1114,16 @@
         font-style:italic;
         font-size:.82rem;
       }
+      .iad-card-section {
+        margin-top:.75rem;
+        padding-top:.7rem;
+        border-top:1px solid #cbd5e1;
+      }
+      .iad-card-section-title {
+        margin:0 0 .55rem;
+        font-size:.9rem;
+        color:#0c4a6e;
+      }
     `;
     document.head.appendChild(s);
   }
@@ -1183,6 +1202,7 @@
             row?.IAD_PDD_komp_uzdevums,
             row?.Planotas_aktivitates,
             row?.Piezimes,
+            row?.Audita_komentars,
           ]
             .filter(Boolean)
             .join(" | ")
@@ -1610,6 +1630,7 @@
           Starptermins: toDateInputValue(row.Starptermins),
           Planotas_aktivitates: row.Planotas_aktivitates || "",
           Piezimes: row.Piezimes || "",
+          Audita_komentars: row.Audita_komentars || "",
           Pielikumi: parseAttachments(row.Pielikumi),
         });
         setAttachmentLinkDraft("");
@@ -1813,6 +1834,7 @@
           ["Starptermins", "Starptermiņš"],
           ["Planotas_aktivitates", "Plānotās aktivitātes"],
           ["Piezimes", "Izpildes informācija"],
+          ["Audita_komentars", "Audita komentārs"],
           ["Pielikumi", "Pielikumi"],
         ];
         const header = cols.map(([, label]) => csvCell(label)).join(";");
@@ -1922,6 +1944,27 @@
         `;
       }
 
+      function renderAuditaKomentarsSection(row, editable = false) {
+        const value = String(row?.Audita_komentars ?? "").trim();
+        return html`
+          <section class="iad-card-section">
+            <h4 class="iad-card-section-title">Audita komentārs</h4>
+            <div class="iad-kv iad-kv-wide">
+              ${editable
+                ? html`<div class="iad-kv-value editable">
+                    <textarea
+                      class="iad-kv-textarea"
+                      placeholder="Ievadi audita komentāru..."
+                      value=${draft?.Audita_komentars || ""}
+                      onChange=${(e) => setDraft((prev) => ({ ...prev, Audita_komentars: e.target.value }))}
+                    ></textarea>
+                  </div>`
+                : html`<div class="iad-kv-value">${value || "—"}</div>`}
+            </div>
+          </section>
+        `;
+      }
+
       function formatInformAuditWhen(iso) {
         if (!iso) return "—";
         try {
@@ -1993,11 +2036,15 @@
           "Starptermins",
           "Planotas_aktivitates",
           "Piezimes",
+          "Audita_komentars",
           "Pielikumi",
         ];
+        const hideInCardView = new Set(["Audita_komentars"]);
         const allKeys = Object.keys(row).filter((k) => !["__proto__"].includes(k));
         const ordered = [...priority.filter((k) => allKeys.includes(k)), ...allKeys.filter((k) => !priority.includes(k))];
-        return ordered.map((key) => {
+        return ordered
+          .filter((key) => !hideInCardView.has(key))
+          .map((key) => {
           const raw = row[key];
           let value = raw;
               if (key === "IAD_termins" || key === "IAD_datums" || key === "Nodots_izpildei" || /termin|datums/i.test(key)) value = displayDate(raw);
@@ -2619,6 +2666,7 @@
                           <form class="stack" onSubmit=${onSave}>
                             <div class="iad-card-grid">
                               ${renderCardInput("IAD numurs", "IAD_numurs")}
+                              ${renderCardInput("Ieteikuma Nr.", "Ieteikuma_Nr")}
                               <div class="iad-kv">
                                 <strong>IAD nosaukums</strong>
                                 <div class="iad-kv-value editable">
@@ -2631,6 +2679,7 @@
                                 </div>
                               </div>
                               ${renderCardTextarea("IAD ieteikuma tēma (īss apraksts)", "IAD_ieteikuma_tema", "", { wide: true })}
+                              ${renderCardInput("Nodots izpildei", "Nodots_izpildei", { type: "date" })}
                               ${renderCardInput("IAD ieteikuma termiņš", "IAD_termins", { type: "date" })}
                               <div class="iad-kv">
                                 <strong>IAD ieteikuma statuss</strong>
@@ -2655,6 +2704,7 @@
                               ${renderCardInput("Starptermiņš", "Starptermins", { type: "date" })}
                               ${renderCardTextarea("Plānotās aktivitātes", "Planotas_aktivitates", "Var ievadīt neierobežotu teksta apjomu")}
                               ${renderCardTextarea("Izpildes informācija", "Piezimes", "Var ievadīt neierobežotu teksta apjomu")}
+                              ${renderAuditaKomentarsSection(draft, true)}
                               <div class="iad-kv">
                                 <strong>Pielikumi${draftAttachmentList(draft).length ? renderAttachmentClip(html) : null}</strong>
                                 <div class="iad-kv-value editable">
@@ -2721,6 +2771,7 @@
                               `
                             )}
                           </div>
+                          ${renderAuditaKomentarsSection(cardOpen, false)}
                           ${renderInformeshanaAuditSection()}
                           <div class="row" style=${{ gap: "0.4rem", marginTop: "0.75rem" }}>
                             <button type="button" class="btn btn-ghost btn-small" onClick=${() => startEdit(cardOpen)}>Labot</button>
