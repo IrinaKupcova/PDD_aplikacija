@@ -1,5 +1,5 @@
 /**
- * Darba uzdevumi → IaD ieteikumi
+ * Darba uzdevumi → IAD ieteikumi
  * Viss atrodas šajā failā.
  */
 (function () {
@@ -11,12 +11,14 @@
 
   const IAD_ALIAS = {
     numurs: ["IAD_numurs", "iad_numurs", "IAD numurs", "numurs", "Nr", "nr"],
+    ieteikumaNr: ["Ieteikuma_Nr", "Ieteikuma Nr.", "Ieteikuma Nr", "ieteikuma_nr", "IAD_ieteikuma_nr"],
     nosaukums: ["IAD_nosaukums", "iad_nosaukums", "IAD nosaukums", "nosaukums"],
     tema: ["IAD_ieteikuma_tema", "IAD ieteikuma tēma", "IAD ieteikuma tema", "IAD_tema", "tema", "tēma"],
+    nodotsIzpildei: ["Nodots_izpildei", "Nodots izpildei", "nodots_izpildei"],
     termins: ["IAD_termins", "iad_termins", "IAD_ieteikuma_termins", "Termins", "termins"],
     atbildigais: ["Atbildīgais", "Atbildigais", "atbildīgais", "atbildigais"],
     statuss: ["IAD_statuss", "iad_statuss", "Statuss", "statuss", "IAD statuss", "Izpildes_statuss", "Izpildes statuss"],
-    datums: ["IAD_datums", "iad_datums", "IaD datums", "datums"],
+    datums: ["IAD_datums", "iad_datums", "IAD datums", "datums"],
     lidzatbildigais: ["Līdzatbildīgais", "Lidzatbildigais", "līdzatbildīgais", "lidzatbildigais"],
     kompetencesUzdevums: ["IAD_PDD_komp_uzdevums", "iad_pdd_komp_uzdevums", "IAD_PDD_kompetences_uzdevums", "IAD PDD komp uzdevums"],
     starptermins: ["Starptermins", "starptermins", "Starptermiņš", "starptermiņš"],
@@ -27,8 +29,10 @@
 
   const WRITE_DEFAULT = {
     numurs: "IAD_numurs",
+    ieteikumaNr: "Ieteikuma_Nr",
     nosaukums: "IAD_nosaukums",
     tema: "IAD_ieteikuma_tema",
+    nodotsIzpildei: "Nodots_izpildei",
     termins: "Termins",
     atbildigais: "Atbildigais",
     statuss: "IAD_statuss",
@@ -99,8 +103,10 @@
     const next = { ...runtimeCols };
     const probes = [
       ["numurs", [...IAD_ALIAS.numurs, WRITE_DEFAULT.numurs]],
+      ["ieteikumaNr", [...IAD_ALIAS.ieteikumaNr, WRITE_DEFAULT.ieteikumaNr]],
       ["nosaukums", [...IAD_ALIAS.nosaukums, WRITE_DEFAULT.nosaukums]],
       ["tema", [...IAD_ALIAS.tema, WRITE_DEFAULT.tema]],
+      ["nodotsIzpildei", [...IAD_ALIAS.nodotsIzpildei, WRITE_DEFAULT.nodotsIzpildei]],
       ["termins", [...IAD_ALIAS.termins, WRITE_DEFAULT.termins]],
       ["atbildigais", [...IAD_ALIAS.atbildigais, WRITE_DEFAULT.atbildigais]],
       ["statuss", [...IAD_ALIAS.statuss, WRITE_DEFAULT.statuss]],
@@ -357,25 +363,30 @@
   function prettyDbLabel(key) {
     const k = String(key ?? "");
     const known = {
-      IAD_numurs: "IaD numurs",
-      iad_numurs: "IaD numurs",
-      IAD_nosaukums: "IaD nosaukums",
-      iad_nosaukums: "IaD nosaukums",
-      IAD_ieteikuma_tema: "IaD ieteikuma tēma (īss apraksts)",
-      "IAD ieteikuma tēma": "IaD ieteikuma tēma (īss apraksts)",
-      "IAD ieteikuma tema": "IaD ieteikuma tēma (īss apraksts)",
-      IAD_tema: "IaD ieteikuma tēma (īss apraksts)",
-      tema: "IaD ieteikuma tēma (īss apraksts)",
-      "tēma": "IaD ieteikuma tēma (īss apraksts)",
-      IAD_termins: "IaD ieteikuma termiņš",
-      IAD_ieteikuma_termins: "IaD ieteikuma termiņš",
-      Termins: "IaD ieteikuma termiņš",
+      IAD_numurs: "IAD numurs",
+      iad_numurs: "IAD numurs",
+      Ieteikuma_Nr: "Ieteikuma Nr.",
+      "Ieteikuma Nr.": "Ieteikuma Nr.",
+      "Ieteikuma Nr": "Ieteikuma Nr.",
+      IAD_nosaukums: "IAD nosaukums",
+      iad_nosaukums: "IAD nosaukums",
+      IAD_ieteikuma_tema: "IAD ieteikuma tēma (īss apraksts)",
+      "IAD ieteikuma tēma": "IAD ieteikuma tēma (īss apraksts)",
+      "IAD ieteikuma tema": "IAD ieteikuma tēma (īss apraksts)",
+      IAD_tema: "IAD ieteikuma tēma (īss apraksts)",
+      tema: "IAD ieteikuma tēma (īss apraksts)",
+      "tēma": "IAD ieteikuma tēma (īss apraksts)",
+      Nodots_izpildei: "Nodots izpildei",
+      "Nodots izpildei": "Nodots izpildei",
+      IAD_termins: "IAD ieteikuma termiņš",
+      IAD_ieteikuma_termins: "IAD ieteikuma termiņš",
+      Termins: "IAD ieteikuma termiņš",
       Atbildigais: "Atbildīgais",
       "Atbildīgais": "Atbildīgais",
-      IAD_statuss: "IaD ieteikuma statuss",
-      Statuss: "IaD ieteikuma statuss",
-      IAD_datums: "IaD datums",
-      datums: "IaD datums",
+      IAD_statuss: "IAD ieteikuma statuss",
+      Statuss: "IAD ieteikuma statuss",
+      IAD_datums: "IAD datums",
+      datums: "IAD datums",
       Lidzatbildigais: "Līdzatbildīgais",
       "Līdzatbildīgais": "Līdzatbildīgais",
       IAD_PDD_komp_uzdevums: "PDD kompetences uzdevums",
@@ -414,8 +425,10 @@
       if (found) runtimeCols[name] = found;
     }
     resolve("numurs", IAD_ALIAS.numurs);
+    resolve("ieteikumaNr", IAD_ALIAS.ieteikumaNr);
     resolve("nosaukums", IAD_ALIAS.nosaukums);
     resolve("tema", IAD_ALIAS.tema);
+    resolve("nodotsIzpildei", IAD_ALIAS.nodotsIzpildei);
     resolve("termins", IAD_ALIAS.termins);
     resolve("atbildigais", IAD_ALIAS.atbildigais);
     resolve("statuss", IAD_ALIAS.statuss);
@@ -440,8 +453,10 @@
       ...r,
       id: rowIdValue(r),
       IAD_numurs: toStr(pickByAliases(r, IAD_ALIAS.numurs), 160),
+      Ieteikuma_Nr: toStr(pickByAliases(r, IAD_ALIAS.ieteikumaNr), 160),
       IAD_nosaukums: toStr(pickByAliases(r, IAD_ALIAS.nosaukums), 600),
       IAD_ieteikuma_tema: toStr(pickByAliases(r, IAD_ALIAS.tema), 280),
+      Nodots_izpildei: toDateInputValue(pickByAliases(r, IAD_ALIAS.nodotsIzpildei)) || toStr(pickByAliases(r, IAD_ALIAS.nodotsIzpildei), 160),
       IAD_termins: toDateInputValue(pickByAliases(r, IAD_ALIAS.termins)),
       Atbildigais: joinNameList(parseNameList(pickByAliases(r, IAD_ALIAS.atbildigais))),
       IAD_statuss: statusLabel(pickByAliases(r, IAD_ALIAS.statuss, "Aktīvs")),
@@ -459,8 +474,10 @@
   function emptyDraft() {
     return {
       IAD_numurs: "",
+      Ieteikuma_Nr: "",
       IAD_nosaukums: "",
       IAD_ieteikuma_tema: "",
+      Nodots_izpildei: "",
       IAD_termins: "",
       Atbildigais: "",
       IAD_statuss: "Aktīvs",
@@ -484,8 +501,10 @@
       p.iad_id = newId;
     }
     p[runtimeCols.numurs] = toStr(d?.IAD_numurs, 160) || null;
+    p[runtimeCols.ieteikumaNr] = toStr(d?.Ieteikuma_Nr, 160) || null;
     p[runtimeCols.nosaukums] = toStr(d?.IAD_nosaukums, 600) || null;
     p[runtimeCols.tema] = toStr(d?.IAD_ieteikuma_tema, 280) || null;
+    p[runtimeCols.nodotsIzpildei] = toDateInputValue(d?.Nodots_izpildei) || toStr(d?.Nodots_izpildei, 160) || null;
     p[runtimeCols.termins] = toDateInputValue(d?.IAD_termins) || null;
     p[runtimeCols.atbildigais] = joinNameList(parseNameList(d?.Atbildigais)) || null;
     p[runtimeCols.statuss] = statusLabel(d?.IAD_statuss) || "Aktīvs";
@@ -705,7 +724,7 @@
       const missing = missingColumnFromError(error);
       if (missing) continue;
     }
-    throw lastErr || new Error("Neizdevās dzēst IaD ierakstu.");
+    throw lastErr || new Error("Neizdevās dzēst IAD ierakstu.");
   }
 
   async function deleteIadRowByNaturalKeyInSupabase(sb, rowLike) {
@@ -740,8 +759,8 @@
       .filter((r) => isTodayInTaskRange(r, todayIso))
       .map((r) => ({
         key: `iad:${String(r?.id ?? r?.IAD_numurs ?? r?.IAD_nosaukums ?? "")}`,
-        module: "IaD ieteikumi",
-        title: String(r?.IAD_nosaukums || "IaD ieteikums"),
+        module: "IAD ieteikumi",
+        title: String(r?.IAD_nosaukums || "IAD ieteikums"),
         topic: String(r?.IAD_ieteikuma_tema || "").trim(),
         subtitle: String(r?.IAD_numurs || "").trim(),
         dueDate: toDateInputValue(r?.IAD_termins) || toDateInputValue(r?.IAD_datums) || "",
@@ -1095,8 +1114,8 @@
       const [pendingFocusTask, setPendingFocusTask] = useState(null);
       const hasFocusRequest = Boolean(pendingFocusTask || focusTask || globalThis.__PDD_IAD_OPEN_TARGET__);
       const [listFilters, setListFilters] = useState({
-        current: { numurs: "", nosaukums: "", tema: "", termins: "", atbildigais: "", statuss: "" },
-        done: { numurs: "", nosaukums: "", tema: "", termins: "", atbildigais: "", statuss: "" },
+        current: { numurs: "", ieteikumaNr: "", nosaukums: "", tema: "", nodotsIzpildei: "", termins: "", atbildigais: "", statuss: "" },
+        done: { numurs: "", ieteikumaNr: "", nosaukums: "", tema: "", nodotsIzpildei: "", termins: "", atbildigais: "", statuss: "" },
       });
       const [sectionSearch, setSectionSearch] = useState({ current: "", done: "" });
       const [searchBoxOpen, setSearchBoxOpen] = useState({ current: false, done: false });
@@ -1125,8 +1144,10 @@
         const hay = normalizeLookupText(
           [
             row?.IAD_numurs,
+            row?.Ieteikuma_Nr,
             row?.IAD_nosaukums,
             row?.IAD_ieteikuma_tema,
+            displayDate(row?.Nodots_izpildei),
             displayDate(row?.IAD_termins),
             row?.Atbildigais,
             row?.Lidzatbildigais,
@@ -1143,8 +1164,10 @@
 
       function listRowFilterValue(row, colKey) {
         if (colKey === "numurs") return String(row?.IAD_numurs ?? "").trim();
+        if (colKey === "ieteikumaNr") return String(row?.Ieteikuma_Nr ?? "").trim();
         if (colKey === "nosaukums") return String(row?.IAD_nosaukums ?? "").trim();
         if (colKey === "tema") return String(row?.IAD_ieteikuma_tema ?? "").trim();
+        if (colKey === "nodotsIzpildei") return displayDate(row?.Nodots_izpildei);
         if (colKey === "atbildigais") return formatPersonField(row?.Atbildigais);
         if (colKey === "statuss") return statusLabel(row?.IAD_statuss);
         return "";
@@ -1172,8 +1195,10 @@
         const sectionNeedle = sectionSearch?.[sectionKey] || "";
         return src.filter((row) => {
           if (f.numurs && listRowFilterValue(row, "numurs") !== String(f.numurs).trim()) return false;
+          if (f.ieteikumaNr && listRowFilterValue(row, "ieteikumaNr") !== String(f.ieteikumaNr).trim()) return false;
           if (f.nosaukums && listRowFilterValue(row, "nosaukums") !== String(f.nosaukums).trim()) return false;
           if (f.tema && listRowFilterValue(row, "tema") !== String(f.tema).trim()) return false;
+          if (f.nodotsIzpildei && toDateInputValue(row?.Nodots_izpildei) !== toDateInputValue(f.nodotsIzpildei)) return false;
           if (f.termins && toDateInputValue(row?.IAD_termins) !== toDateInputValue(f.termins)) return false;
           if (f.atbildigais && listRowFilterValue(row, "atbildigais") !== String(f.atbildigais).trim()) return false;
           if (f.statuss && listRowFilterValue(row, "statuss") !== String(f.statuss).trim()) return false;
@@ -1314,7 +1339,7 @@
           const list = useDb ? await fetchIadRowsFromSupabase(supabase) : loadLocalRows();
           setRows(list);
         } catch (e) {
-          setErr(String(e?.message || e || "Neizdevās ielādēt IaD ieteikumus."));
+          setErr(String(e?.message || e || "Neizdevās ielādēt IAD ieteikumus."));
         }
       }
 
@@ -1457,7 +1482,7 @@
           setSubmod("iad");
           setOpenCurrent(true);
           setOpenDone(true);
-          setErr("Uzdevumu nevarēja automātiski atrast tabulā. Pārbaudi, vai DB ierakstam ir IaD numurs un nosaukums.");
+          setErr("Uzdevumu nevarēja automātiski atrast tabulā. Pārbaudi, vai DB ierakstam ir IAD numurs un nosaukums.");
           setPendingFocusTask(null);
           globalThis.__PDD_IAD_OPEN_TARGET__ = null;
           finishTableFocusHandled(true);
@@ -1544,8 +1569,10 @@
         setEditingSourceRow(row ?? null);
         setDraft({
           IAD_numurs: row.IAD_numurs || "",
+          Ieteikuma_Nr: row.Ieteikuma_Nr || "",
           IAD_nosaukums: row.IAD_nosaukums || "",
           IAD_ieteikuma_tema: row.IAD_ieteikuma_tema || "",
+          Nodots_izpildei: toDateInputValue(row.Nodots_izpildei) || String(row.Nodots_izpildei || "").trim(),
           IAD_termins: toDateInputValue(row.IAD_termins),
           Atbildigais: formatPersonField(row.Atbildigais),
           IAD_statuss: statusLabel(row.IAD_statuss || "Aktīvs"),
@@ -1744,14 +1771,16 @@
 
       function exportRowsToExcel(rowsList, exportTag = "visi") {
         const cols = [
-          ["IAD_numurs", "IaD numurs"],
-          ["IAD_nosaukums", "IaD nosaukums"],
-          ["IAD_ieteikuma_tema", "IaD ieteikuma tēma (īss apraksts)"],
-          ["IAD_termins", "IaD ieteikuma termiņš"],
+          ["IAD_numurs", "IAD numurs"],
+          ["Ieteikuma_Nr", "Ieteikuma Nr."],
+          ["IAD_nosaukums", "IAD nosaukums"],
+          ["IAD_ieteikuma_tema", "IAD ieteikuma tēma (īss apraksts)"],
+          ["Nodots_izpildei", "Nodots izpildei"],
+          ["IAD_termins", "IAD ieteikuma termiņš"],
           ["Atbildigais", "Atbildīgais"],
           ["Lidzatbildigais", "Līdzatbildīgais"],
-          ["IAD_statuss", "IaD ieteikuma statuss"],
-          ["IAD_datums", "IaD datums"],
+          ["IAD_statuss", "IAD ieteikuma statuss"],
+          ["IAD_datums", "IAD datums"],
           ["IAD_PDD_komp_uzdevums", "PDD kompetences uzdevums"],
           ["Starptermins", "Starptermiņš"],
           ["Planotas_aktivitates", "Plānotās aktivitātes"],
@@ -1764,7 +1793,7 @@
           cols
             .map(([key]) => {
               let value = row?.[key];
-              if (key === "IAD_termins" || key === "IAD_datums" || key === "Starptermins") value = toDateInputValue(value);
+              if (key === "IAD_termins" || key === "IAD_datums" || key === "Starptermins" || key === "Nodots_izpildei") value = toDateInputValue(value);
               if (key === "Pielikumi") value = parseAttachments(value).map((item) => item.name).join(", ");
               if (key === "Atbildigais" || key === "Lidzatbildigais") value = joinNameList(parseNameList(value));
               return csvCell(value);
@@ -1922,8 +1951,10 @@
         const priority = [
           "id",
           "IAD_numurs",
+          "Ieteikuma_Nr",
           "IAD_nosaukums",
           "IAD_ieteikuma_tema",
+          "Nodots_izpildei",
           "IAD_termins",
           "Atbildigais",
           "Lidzatbildigais",
@@ -1940,7 +1971,7 @@
         return ordered.map((key) => {
           const raw = row[key];
           let value = raw;
-          if (key === "IAD_termins" || key === "IAD_datums" || /termin|datums/i.test(key)) value = displayDate(raw);
+              if (key === "IAD_termins" || key === "IAD_datums" || key === "Nodots_izpildei" || /termin|datums/i.test(key)) value = displayDate(raw);
           if (key === "Atbildigais" || key === "Lidzatbildigais" || /atbild/i.test(key)) value = formatPersonField(raw);
           if (key === "Pielikumi") value = parseAttachments(raw).map((item) => item.name).join(", ");
           const hasAttach = key === "Pielikumi" && parseAttachments(raw).length > 0;
@@ -2016,7 +2047,7 @@
                 console.error("[PDD_INFORMESHANA] pievienošanas vēstules NETIKA nosūtītas:", fails);
                 const isInvalidKey = /api key is invalid/i.test(detail);
                 alert(
-                  "IaD saglabāts, bet automātiskais paziņojums netika nosūtīts.\n\n" +
+                  "IAD saglabāts, bet automātiskais paziņojums netika nosūtīts.\n\n" +
                     (isInvalidKey
                       ? "RESEND_API_KEY Supabase Edge ir nederīga.\n\n" +
                         "1) Resend.com → API Keys → jauna atslēga\n" +
@@ -2034,7 +2065,7 @@
                 console.info("[PDD_INFORMESHANA] automātiski nosūtītas pievienošanas vēstules:", out.sent, sentTo);
               }
             })
-            .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IaD saglabāšanas", e));
+            .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IAD saglabāšanas", e));
         };
         setTimeout(run, 150);
       }
@@ -2043,7 +2074,7 @@
         ev?.preventDefault?.();
         setErr("");
         if (!toStr(draft.IAD_nosaukums)) {
-          setErr("IaD nosaukums ir obligāts.");
+          setErr("IAD nosaukums ir obligāts.");
           return;
         }
         setBusy(true);
@@ -2146,7 +2177,7 @@
       }
 
       async function onDelete(row) {
-        if (!confirm("Dzēst šo IaD ieteikumu?")) return;
+        if (!confirm("Dzēst šo IAD ieteikumu?")) return;
         setErr("");
         setBusy(true);
         try {
@@ -2185,8 +2216,10 @@
         const filtersOpen = Boolean(filterRowOpen?.[sectionKey]);
         const filterOptions = {
           numurs: buildListFilterOptions(rowsList, "numurs"),
+          ieteikumaNr: buildListFilterOptions(rowsList, "ieteikumaNr"),
           nosaukums: buildListFilterOptions(rowsList, "nosaukums"),
           tema: buildListFilterOptions(rowsList, "tema"),
+          nodotsIzpildei: buildListFilterOptions(rowsList, "nodotsIzpildei"),
           atbildigais: buildListFilterOptions(rowsList, "atbildigais"),
           statuss: buildListFilterOptions(rowsList, "statuss"),
         };
@@ -2225,25 +2258,37 @@
                 <tr>
                   <th>
                     <div class="iad-th-filter">
-                      <span>IaD numurs</span>
+                      <span>IAD numurs</span>
                       ${filterBtn("numurs")}
                     </div>
                   </th>
                   <th>
                     <div class="iad-th-filter">
-                      <span>IaD nosaukums</span>
+                      <span>Ieteikuma Nr.</span>
+                      ${filterBtn("ieteikumaNr")}
+                    </div>
+                  </th>
+                  <th>
+                    <div class="iad-th-filter">
+                      <span>IAD nosaukums</span>
                       ${filterBtn("nosaukums")}
                     </div>
                   </th>
                   <th>
                     <div class="iad-th-filter">
-                      <span>IaD ieteikuma tēma (īss apraksts)</span>
+                      <span>IAD ieteikuma tēma (īss apraksts)</span>
                       ${filterBtn("tema")}
                     </div>
                   </th>
                   <th>
                     <div class="iad-th-filter">
-                      <span>IaD ieteikuma termiņš</span>
+                      <span>Nodots izpildei</span>
+                      ${filterBtn("nodotsIzpildei")}
+                    </div>
+                  </th>
+                  <th>
+                    <div class="iad-th-filter">
+                      <span>IAD ieteikuma termiņš</span>
                       ${filterBtn("termins")}
                     </div>
                   </th>
@@ -2255,17 +2300,19 @@
                   </th>
                   <th>
                     <div class="iad-th-filter">
-                      <span>IaD ieteikuma statuss</span>
+                      <span>IAD ieteikuma statuss</span>
                       ${filterBtn("statuss")}
                     </div>
                   </th>
-                  <th>IaD ieteikuma kartiņa</th>
+                  <th>IAD ieteikuma kartiņa</th>
                 </tr>
                 ${filtersOpen
                   ? html`<tr class="iad-filter-row">
                       <th>${filterSelect("numurs")}</th>
+                      <th>${filterSelect("ieteikumaNr")}</th>
                       <th>${filterSelect("nosaukums")}</th>
                       <th>${filterSelect("tema")}</th>
+                      <th>${filterSelect("nodotsIzpildei")}</th>
                       <th>
                         <input
                           type="date"
@@ -2292,11 +2339,13 @@
                       return html`
                         <tr id=${rowId} key=${String(r?.id ?? `${r.IAD_numurs}-${r.IAD_nosaukums}`)} class=${isFocused ? "iad-row-focus" : ""}>
                           <td>${r.IAD_numurs || "—"}</td>
+                          <td>${r.Ieteikuma_Nr || "—"}</td>
                           <td>
                             ${r.IAD_nosaukums || "—"}
                             ${rowHasAttachments(r) ? renderAttachmentClip(html) : null}
                           </td>
                           <td>${r.IAD_ieteikuma_tema || "—"}</td>
+                          <td>${displayDate(r.Nodots_izpildei)}</td>
                           <td>
                             ${displayDate(r.IAD_termins)}
                             ${deadlineBadge
@@ -2317,7 +2366,7 @@
                         </tr>
                       `;
                     })
-                  : html`<tr><td colspan="7" class="iad-empty">${emptyText}</td></tr>`}
+                  : html`<tr><td colspan="9" class="iad-empty">${emptyText}</td></tr>`}
               </tbody>
             </table>
           </div>
@@ -2332,7 +2381,7 @@
               ? html`
                   <div class="iad-module-grid">
                     <button type="button" class="iad-module-card" onClick=${openIadModule}>
-                      <h3>IaD ieteikumi</h3>
+                      <h3>IAD ieteikumi</h3>
                       <p>Aktuālie un neaktuālie ieteikumi ar kartiņām.</p>
                     </button>
                     <button type="button" class="iad-module-card" disabled>
@@ -2347,7 +2396,7 @@
                 `
               : html`
                   <div class="iad-subtabs">
-                    <button type="button" class=${`iad-subtab ${submod === "iad" ? "active" : ""}`} onClick=${() => setSubmod("iad")}>IaD ieteikumi</button>
+                    <button type="button" class=${`iad-subtab ${submod === "iad" ? "active" : ""}`} onClick=${() => setSubmod("iad")}>IAD ieteikumi</button>
                     <button type="button" class="iad-subtab" onClick=${() => setSubmod("home")}>Atpakaļ uz moduļiem</button>
                   </div>
                 `}
@@ -2357,10 +2406,10 @@
             ? html`
                 <section class="iad-panel stack" style=${{ gap: "0.75rem" }}>
                   <div class="row" style=${{ justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
-                    <h3 style=${{ margin: 0, color: "#075985", fontSize: "0.98rem" }}>IaD ieteikumi</h3>
+                    <h3 style=${{ margin: 0, color: "#075985", fontSize: "0.98rem" }}>IAD ieteikumi</h3>
                     <div class="row" style=${{ gap: "0.45rem", flexWrap: "wrap" }}>
                       <button type="button" class="btn btn-ghost btn-small" disabled=${busy} onClick=${exportToExcel}>Eksportēt uz Excel</button>
-                      <button type="button" class="btn btn-primary btn-small" disabled=${busy} onClick=${startCreate}>Pievienot IaD ieteikumu</button>
+                      <button type="button" class="btn btn-primary btn-small" disabled=${busy} onClick=${startCreate}>Pievienot IAD ieteikumu</button>
                     </div>
                   </div>
 
@@ -2368,7 +2417,7 @@
 
                   <section class="iad-list-block">
                     <div class="iad-list-head">
-                      <p class="iad-list-title">Aktuālie IaD ieteikumi (${activeRows.length})</p>
+                      <p class="iad-list-title">Aktuālie IAD ieteikumi (${activeRows.length})</p>
                       <div class="iad-list-head-actions">
                         <button type="button" class=${`iad-list-icon-btn ${searchBoxOpen.current ? "is-active" : ""}`} title="Meklēt saturā" onClick=${() => toggleSectionSearchBox("current")}>🔎</button>
                         <button type="button" class=${`iad-list-pin-btn ${pinCurrent ? "is-pinned" : ""}`} onClick=${togglePinCurrent} title=${pinCurrent ? "Noņemt piespraudi" : "Piespraust sarakstu"}>📌</button>
@@ -2406,7 +2455,7 @@
                                 Eksportēt šo sarakstu uz Excel
                               </button>
                             </div>
-                            ${renderList(activeRows, "Nav aktuālu IaD ieteikumu.", "current")}
+                            ${renderList(activeRows, "Nav aktuālu IAD ieteikumu.", "current")}
                           </div>
                         `
                       : null}
@@ -2414,7 +2463,7 @@
 
                   <section class="iad-list-block">
                     <div class="iad-list-head">
-                      <p class="iad-list-title">Neaktuālie IaD ieteikumi (${inactiveRows.length})</p>
+                      <p class="iad-list-title">Neaktuālie IAD ieteikumi (${inactiveRows.length})</p>
                       <div class="iad-list-head-actions">
                         <button type="button" class=${`iad-list-icon-btn ${searchBoxOpen.done ? "is-active" : ""}`} title="Meklēt saturā" onClick=${() => toggleSectionSearchBox("done")}>🔎</button>
                         <button type="button" class=${`iad-list-pin-btn ${pinDone ? "is-pinned" : ""}`} onClick=${togglePinDone} title=${pinDone ? "Noņemt piespraudi" : "Piespraust sarakstu"}>📌</button>
@@ -2452,14 +2501,14 @@
                                 Eksportēt šo sarakstu uz Excel
                               </button>
                             </div>
-                            ${renderList(inactiveRows, "Nav neaktuālu IaD ieteikumu.", "done")}
+                            ${renderList(inactiveRows, "Nav neaktuālu IAD ieteikumu.", "done")}
                           </div>
                         `
                       : null}
                   </section>
                   ${pinCurrent || pinDone
                     ? html`
-                        <section class="iad-pinned-bar" aria-label="Piespraustie IaD saraksti">
+                        <section class="iad-pinned-bar" aria-label="Piespraustie IAD saraksti">
                           <p class="iad-pinned-title">Piespraustie saraksti</p>
                           <div class="iad-pinned-list">
                             ${pinCurrent
@@ -2501,13 +2550,13 @@
                     ${editMode
                       ? html`
                           <h3 style=${{ margin: "0 0 0.7rem" }}>
-                            ${editingId != null ? "Labot IaD ieteikuma kartiņu" : "Jauna IaD ieteikuma kartiņa"}
+                            ${editingId != null ? "Labot IAD ieteikuma kartiņu" : "Jauna IAD ieteikuma kartiņa"}
                           </h3>
                           <form class="stack" onSubmit=${onSave}>
                             <div class="iad-card-grid">
-                              ${renderCardInput("IaD numurs", "IAD_numurs")}
+                              ${renderCardInput("IAD numurs", "IAD_numurs")}
                               <div class="iad-kv">
-                                <strong>IaD nosaukums</strong>
+                                <strong>IAD nosaukums</strong>
                                 <div class="iad-kv-value editable">
                                   <input
                                     class="iad-kv-input"
@@ -2517,10 +2566,10 @@
                                   />
                                 </div>
                               </div>
-                              ${renderCardInput("IaD ieteikuma tēma (īss apraksts)", "IAD_ieteikuma_tema")}
-                              ${renderCardInput("IaD ieteikuma termiņš", "IAD_termins", { type: "date" })}
+                              ${renderCardInput("IAD ieteikuma tēma (īss apraksts)", "IAD_ieteikuma_tema")}
+                              ${renderCardInput("IAD ieteikuma termiņš", "IAD_termins", { type: "date" })}
                               <div class="iad-kv">
-                                <strong>IaD ieteikuma statuss</strong>
+                                <strong>IAD ieteikuma statuss</strong>
                                 <div class="iad-kv-value editable">
                                   <select class="iad-kv-select" value=${draft.IAD_statuss} onChange=${(e) => setDraft((d) => ({ ...d, IAD_statuss: e.target.value }))}>
                                     <option value="Aktīvs">Aktīvs</option>
@@ -2533,7 +2582,7 @@
                                 <strong>Atbildīgais</strong>
                                 <div class="iad-kv-value editable">${renderPersonSelect("Atbildigais")}</div>
                               </div>
-                              ${renderCardInput("IaD datums", "IAD_datums", { type: "date" })}
+                              ${renderCardInput("IAD datums", "IAD_datums", { type: "date" })}
                               <div class="iad-kv">
                                 <strong>Līdzatbildīgais</strong>
                                 <div class="iad-kv-value editable">${renderPersonSelect("Lidzatbildigais")}</div>
@@ -2595,7 +2644,7 @@
                         `
                       : html`
                           <h3 style=${{ margin: "0 0 0.45rem" }}>
-                            ${cardOpen?.IAD_nosaukums || "IaD ieteikuma kartiņa"}
+                            ${cardOpen?.IAD_nosaukums || "IAD ieteikuma kartiņa"}
                             ${rowHasAttachments(cardOpen) ? renderAttachmentClip(html) : null}
                           </h3>
                           <div class="iad-card-grid">
