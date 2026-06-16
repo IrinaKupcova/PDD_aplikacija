@@ -14,7 +14,7 @@
     ieteikumaNr: ["Ieteikuma_Nr", "Ieteikuma Nr.", "Ieteikuma Nr", "ieteikuma_nr", "IAD_ieteikuma_nr"],
     nosaukums: ["IAD_nosaukums", "iad_nosaukums", "IAD nosaukums", "nosaukums"],
     tema: ["IAD_ieteikuma_tema", "IAD ieteikuma tēma", "IAD ieteikuma tema", "IAD_tema", "tema", "tēma"],
-    nodotsIzpildei: ["Nodots_izpildei", "Nodots izpildei", "nodots_izpildei"],
+    nodotsIzpildei: ["Nodots_izpildei", "Nodots izpildei", "nodots_izpildei", "Kam nodots izpildei", "Kam_nodots_izpildei", "kam_nodots_izpildei"],
     termins: ["IAD_termins", "iad_termins", "IAD_ieteikuma_termins", "Termins", "termins"],
     atbildigais: ["Atbildīgais", "Atbildigais", "atbildīgais", "atbildigais"],
     statuss: ["IAD_statuss", "iad_statuss", "Statuss", "statuss", "IAD statuss", "Izpildes_statuss", "Izpildes statuss"],
@@ -384,8 +384,9 @@
       IAD_tema: "IAD ieteikuma tēma (īss apraksts)",
       tema: "IAD ieteikuma tēma (īss apraksts)",
       "tēma": "IAD ieteikuma tēma (īss apraksts)",
-      Nodots_izpildei: "Nodots izpildei",
-      "Nodots izpildei": "Nodots izpildei",
+      Nodots_izpildei: "Kam nodots izpildei",
+      "Nodots izpildei": "Kam nodots izpildei",
+      "Kam nodots izpildei": "Kam nodots izpildei",
       IAD_termins: "IAD ieteikuma termiņš",
       IAD_ieteikuma_termins: "IAD ieteikuma termiņš",
       Termins: "IAD ieteikuma termiņš",
@@ -467,7 +468,7 @@
       Ieteikuma_Nr: toStr(pickByAliases(r, IAD_ALIAS.ieteikumaNr), 160),
       IAD_nosaukums: toStr(pickByAliases(r, IAD_ALIAS.nosaukums), 600),
       IAD_ieteikuma_tema: toStr(pickByAliases(r, IAD_ALIAS.tema), 280),
-      Nodots_izpildei: toDateInputValue(pickByAliases(r, IAD_ALIAS.nodotsIzpildei)) || toStr(pickByAliases(r, IAD_ALIAS.nodotsIzpildei), 160),
+      Nodots_izpildei: toStr(pickByAliases(r, IAD_ALIAS.nodotsIzpildei), 280),
       IAD_termins: toDateInputValue(pickByAliases(r, IAD_ALIAS.termins)),
       Atbildigais: joinNameList(parseNameList(pickByAliases(r, IAD_ALIAS.atbildigais))),
       IAD_statuss: statusLabel(pickByAliases(r, IAD_ALIAS.statuss, "Aktīvs")),
@@ -524,11 +525,7 @@
     setPayloadField(p, "ieteikumaNr", toStr(d?.Ieteikuma_Nr, 160) || null);
     setPayloadField(p, "nosaukums", toStr(d?.IAD_nosaukums, 600) || null);
     setPayloadField(p, "tema", toStr(d?.IAD_ieteikuma_tema, 280) || null);
-    setPayloadField(
-      p,
-      "nodotsIzpildei",
-      toDateInputValue(d?.Nodots_izpildei) || toStr(d?.Nodots_izpildei, 160) || null
-    );
+    setPayloadField(p, "nodotsIzpildei", toStr(d?.Nodots_izpildei, 280) || null);
     setPayloadField(p, "termins", toDateInputValue(d?.IAD_termins) || null);
     setPayloadField(p, "atbildigais", joinNameList(parseNameList(d?.Atbildigais)) || null);
     setPayloadField(p, "statuss", statusLabel(d?.IAD_statuss) || "Aktīvs");
@@ -562,9 +559,10 @@
         openDone: Boolean(parsed?.openDone),
         pinCurrent: Boolean(parsed?.pinCurrent),
         pinDone: Boolean(parsed?.pinDone),
+        quickEditEnabled: Boolean(parsed?.quickEditEnabled),
       };
     } catch {
-      return { openCurrent: false, openDone: false, pinCurrent: false, pinDone: false };
+      return { openCurrent: false, openDone: false, pinCurrent: false, pinDone: false, quickEditEnabled: false };
     }
   }
 
@@ -577,6 +575,7 @@
           openDone: Boolean(nextState?.openDone),
           pinCurrent: Boolean(nextState?.pinCurrent),
           pinDone: Boolean(nextState?.pinDone),
+          quickEditEnabled: Boolean(nextState?.quickEditEnabled),
         })
       );
     } catch {
@@ -949,7 +948,45 @@
       .iad-list-block { border:1px solid #dbeafe; border-radius:12px; background:#f8fbff; padding:.55rem; }
       .iad-list-head { display:flex; align-items:center; justify-content:space-between; gap:.5rem; flex-wrap:wrap; margin-bottom:.45rem; }
       .iad-list-title { margin:0; font-size:.86rem; color:#0f3f68; }
-      .iad-list-head-actions { display:flex; align-items:center; gap:.35rem; }
+      .iad-list-head-actions { display:flex; align-items:center; gap:.35rem; flex-wrap:wrap; }
+      .iad-quick-edit-toggle {
+        border:1px solid #93c5fd;
+        background:#fff;
+        color:#0c4a6e;
+        border-radius:999px;
+        font-size:.78rem;
+        padding:.32rem .72rem;
+        cursor:pointer;
+      }
+      .iad-quick-edit-toggle.is-active {
+        background:#0ea5e9;
+        border-color:#0ea5e9;
+        color:#fff;
+      }
+      .iad-table tr.iad-row-inline-edit {
+        background:#f0f9ff;
+      }
+      .iad-table .iad-inline-input,
+      .iad-table .iad-inline-select {
+        width:100%;
+        min-width:72px;
+        font-size:.8rem;
+        padding:.22rem .32rem;
+        border:1px solid #bfdbfe;
+        border-radius:6px;
+        background:#fff;
+      }
+      .iad-table .iad-inline-textarea {
+        width:100%;
+        min-width:120px;
+        min-height:2.4rem;
+        font-size:.8rem;
+        padding:.22rem .32rem;
+        border:1px solid #bfdbfe;
+        border-radius:6px;
+        background:#fff;
+        resize:vertical;
+      }
       .iad-list-icon-btn {
         border:1px solid #bfdbfe;
         background:#fff;
@@ -1167,6 +1204,8 @@
       const [sectionSearch, setSectionSearch] = useState({ current: "", done: "" });
       const [searchBoxOpen, setSearchBoxOpen] = useState({ current: false, done: false });
       const [filterRowOpen, setFilterRowOpen] = useState({ current: false, done: false });
+      const [quickEditEnabled, setQuickEditEnabled] = useState(false);
+      const [inlineEdit, setInlineEdit] = useState(null);
 
       const activeRows = rows.filter((r) => !isInactiveStatus(r.IAD_statuss));
       const inactiveRows = rows.filter((r) => isInactiveStatus(r.IAD_statuss));
@@ -1194,7 +1233,7 @@
             row?.Ieteikuma_Nr,
             row?.IAD_nosaukums,
             row?.IAD_ieteikuma_tema,
-            displayDate(row?.Nodots_izpildei),
+            row?.Nodots_izpildei,
             displayDate(row?.IAD_termins),
             row?.Atbildigais,
             row?.Lidzatbildigais,
@@ -1215,7 +1254,7 @@
         if (colKey === "ieteikumaNr") return String(row?.Ieteikuma_Nr ?? "").trim();
         if (colKey === "nosaukums") return String(row?.IAD_nosaukums ?? "").trim();
         if (colKey === "tema") return String(row?.IAD_ieteikuma_tema ?? "").trim();
-        if (colKey === "nodotsIzpildei") return displayDate(row?.Nodots_izpildei);
+        if (colKey === "nodotsIzpildei") return String(row?.Nodots_izpildei ?? "").trim();
         if (colKey === "atbildigais") return formatPersonField(row?.Atbildigais);
         if (colKey === "statuss") return statusLabel(row?.IAD_statuss);
         return "";
@@ -1246,7 +1285,7 @@
           if (f.ieteikumaNr && listRowFilterValue(row, "ieteikumaNr") !== String(f.ieteikumaNr).trim()) return false;
           if (f.nosaukums && listRowFilterValue(row, "nosaukums") !== String(f.nosaukums).trim()) return false;
           if (f.tema && listRowFilterValue(row, "tema") !== String(f.tema).trim()) return false;
-          if (f.nodotsIzpildei && toDateInputValue(row?.Nodots_izpildei) !== toDateInputValue(f.nodotsIzpildei)) return false;
+          if (f.nodotsIzpildei && listRowFilterValue(row, "nodotsIzpildei") !== String(f.nodotsIzpildei).trim()) return false;
           if (f.termins && toDateInputValue(row?.IAD_termins) !== toDateInputValue(f.termins)) return false;
           if (f.atbildigais && listRowFilterValue(row, "atbildigais") !== String(f.atbildigais).trim()) return false;
           if (f.statuss && listRowFilterValue(row, "statuss") !== String(f.statuss).trim()) return false;
@@ -1285,6 +1324,69 @@
           return;
         }
         setFilterRowOpen((prev) => ({ ...prev, [sectionKey]: !Boolean(prev?.[sectionKey]) }));
+      }
+
+      function defaultInlineDraftForSection(sectionKey) {
+        const d = emptyDraft();
+        if (sectionKey === "done") d.IAD_statuss = "Pabeigts";
+        return d;
+      }
+
+      function rowToDraft(row) {
+        return {
+          IAD_numurs: row.IAD_numurs || "",
+          Ieteikuma_Nr: row.Ieteikuma_Nr || "",
+          IAD_nosaukums: row.IAD_nosaukums || "",
+          IAD_ieteikuma_tema: row.IAD_ieteikuma_tema || "",
+          Nodots_izpildei: String(row.Nodots_izpildei || "").trim(),
+          IAD_termins: toDateInputValue(row.IAD_termins),
+          Atbildigais: formatPersonField(row.Atbildigais),
+          IAD_statuss: statusLabel(row.IAD_statuss || "Aktīvs"),
+          IAD_datums: toDateInputValue(row.IAD_datums),
+          Lidzatbildigais: formatPersonField(row.Lidzatbildigais),
+          IAD_PDD_komp_uzdevums: row.IAD_PDD_komp_uzdevums || "",
+          Starptermins: toDateInputValue(row.Starptermins),
+          Planotas_aktivitates: row.Planotas_aktivitates || "",
+          Piezimes: row.Piezimes || "",
+          Audita_komentars: row.Audita_komentars || "",
+          Pielikumi: parseAttachments(row.Pielikumi),
+        };
+      }
+
+      function startInlineEdit(row, sectionKey) {
+        setInlineEdit({
+          sectionKey,
+          rowKey: rowFocusKey(row),
+          draft: rowToDraft(row),
+          sourceRow: row,
+          isNew: false,
+        });
+      }
+
+      function startInlineCreate(sectionKey) {
+        setInlineEdit({
+          sectionKey,
+          rowKey: `__new__${sectionKey}`,
+          draft: defaultInlineDraftForSection(sectionKey),
+          sourceRow: null,
+          isNew: true,
+        });
+      }
+
+      function cancelInlineEdit() {
+        setInlineEdit(null);
+      }
+
+      function setInlineDraftField(field, value) {
+        setInlineEdit((prev) => (prev ? { ...prev, draft: { ...prev.draft, [field]: value } } : null));
+      }
+
+      function toggleQuickEditEnabled() {
+        setQuickEditEnabled((prev) => {
+          const next = !prev;
+          if (!next) setInlineEdit(null);
+          return next;
+        });
       }
 
       function findRowForTableFocus(ft, list) {
@@ -1340,11 +1442,24 @@
         const rowsDom = Array.from(document.querySelectorAll(".iad-table tbody tr"));
         let match = null;
         for (const tr of rowsDom) {
-          const tds = Array.from(tr.querySelectorAll("td"));
-          if (!tds.length) continue;
-          const rowNum = normalizeLookupText(tds[0]?.textContent ?? "");
-          const rowTitle = normalizeLookupText(tds[1]?.textContent ?? "");
-          const rowTema = normalizeLookupText(tds[2]?.textContent ?? "");
+          const data = (() => {
+            if (tr.dataset?.rowTitle || tr.dataset?.rowNum || tr.dataset?.rowTema) {
+              return {
+                rowNum: normalizeLookupText(tr.dataset.rowNum ?? ""),
+                rowTitle: normalizeLookupText(tr.dataset.rowTitle ?? ""),
+                rowTema: normalizeLookupText(tr.dataset.rowTema ?? ""),
+              };
+            }
+            const tds = Array.from(tr.querySelectorAll("td"));
+            if (!tds.length) return null;
+            return {
+              rowNum: normalizeLookupText(tds[0]?.textContent ?? ""),
+              rowTitle: normalizeLookupText(tds[2]?.textContent ?? ""),
+              rowTema: normalizeLookupText(tds[3]?.textContent ?? ""),
+            };
+          })();
+          if (!data) continue;
+          const { rowNum, rowTitle, rowTema } = data;
           const titleOk = !targetTitle || rowTitle === targetTitle;
           const numOk = !targetNum || rowNum === targetNum;
           const temaOk = !targetTema || rowTema === targetTema;
@@ -1401,13 +1516,14 @@
         setOpenDone(ui.pinDone ? true : ui.openDone);
         setPinCurrent(ui.pinCurrent);
         setPinDone(ui.pinDone);
+        setQuickEditEnabled(ui.quickEditEnabled);
         setUiHydrated(true);
       }, []);
 
       useEffect(() => {
         if (!uiHydrated) return;
-        saveIadUiState({ openCurrent, openDone, pinCurrent, pinDone });
-      }, [openCurrent, openDone, pinCurrent, pinDone, uiHydrated]);
+        saveIadUiState({ openCurrent, openDone, pinCurrent, pinDone, quickEditEnabled });
+      }, [openCurrent, openDone, pinCurrent, pinDone, quickEditEnabled, uiHydrated]);
 
       useEffect(() => {
         if (!pinnedListKeys) return;
@@ -1615,24 +1731,7 @@
       function startEdit(row) {
         setEditingId(row?.id ?? null);
         setEditingSourceRow(row ?? null);
-        setDraft({
-          IAD_numurs: row.IAD_numurs || "",
-          Ieteikuma_Nr: row.Ieteikuma_Nr || "",
-          IAD_nosaukums: row.IAD_nosaukums || "",
-          IAD_ieteikuma_tema: row.IAD_ieteikuma_tema || "",
-          Nodots_izpildei: toDateInputValue(row.Nodots_izpildei) || String(row.Nodots_izpildei || "").trim(),
-          IAD_termins: toDateInputValue(row.IAD_termins),
-          Atbildigais: formatPersonField(row.Atbildigais),
-          IAD_statuss: statusLabel(row.IAD_statuss || "Aktīvs"),
-          IAD_datums: toDateInputValue(row.IAD_datums),
-          Lidzatbildigais: formatPersonField(row.Lidzatbildigais),
-          IAD_PDD_komp_uzdevums: row.IAD_PDD_komp_uzdevums || "",
-          Starptermins: toDateInputValue(row.Starptermins),
-          Planotas_aktivitates: row.Planotas_aktivitates || "",
-          Piezimes: row.Piezimes || "",
-          Audita_komentars: row.Audita_komentars || "",
-          Pielikumi: parseAttachments(row.Pielikumi),
-        });
+        setDraft(rowToDraft(row));
         setAttachmentLinkDraft("");
         setEditMode(true);
         setCardOpen(row ?? null);
@@ -1824,7 +1923,7 @@
           ["Ieteikuma_Nr", "Ieteikuma Nr."],
           ["IAD_nosaukums", "IAD nosaukums"],
           ["IAD_ieteikuma_tema", "IAD ieteikuma tēma (īss apraksts)"],
-          ["Nodots_izpildei", "Nodots izpildei"],
+          ["Nodots_izpildei", "Kam nodots izpildei"],
           ["IAD_termins", "IAD ieteikuma termiņš"],
           ["Atbildigais", "Atbildīgais"],
           ["Lidzatbildigais", "Līdzatbildīgais"],
@@ -1843,7 +1942,7 @@
           cols
             .map(([key]) => {
               let value = row?.[key];
-              if (key === "IAD_termins" || key === "IAD_datums" || key === "Starptermins" || key === "Nodots_izpildei") value = toDateInputValue(value);
+              if (key === "IAD_termins" || key === "IAD_datums" || key === "Starptermins") value = toDateInputValue(value);
               if (key === "Pielikumi") value = parseAttachments(value).map((item) => item.name).join(", ");
               if (key === "Atbildigais" || key === "Lidzatbildigais") value = joinNameList(parseNameList(value));
               return csvCell(value);
@@ -2047,7 +2146,7 @@
           .map((key) => {
           const raw = row[key];
           let value = raw;
-              if (key === "IAD_termins" || key === "IAD_datums" || key === "Nodots_izpildei" || /termin|datums/i.test(key)) value = displayDate(raw);
+              if (key === "IAD_termins" || key === "IAD_datums" || /termin|datums/i.test(key)) value = displayDate(raw);
           if (key === "Atbildigais" || key === "Lidzatbildigais" || /atbild/i.test(key)) value = formatPersonField(raw);
           if (key === "Pielikumi") value = parseAttachments(raw).map((item) => item.name).join(", ");
           const hasAttach = key === "Pielikumi" && parseAttachments(raw).length > 0;
@@ -2287,6 +2386,113 @@
         }
       }
 
+      async function saveInlineEdit() {
+        if (!inlineEdit) return;
+        const draftLike = { ...inlineEdit.draft };
+        const sourceRow = inlineEdit.sourceRow;
+        const isNew = Boolean(inlineEdit.isNew);
+        setErr("");
+        if (!toStr(draftLike.IAD_nosaukums)) {
+          setErr("IAD nosaukums ir obligāts.");
+          return;
+        }
+        setBusy(true);
+        try {
+          const editingId = sourceRow?.id ?? null;
+          const previousRowForInform = isNew ? null : sourceRow ? normalizeIadRow({ ...sourceRow }) : null;
+          let savedRowOut = null;
+          if (useDb) {
+            let savedRow = null;
+            if (!isNew && editingId != null) {
+              savedRow = await updateIadRowInSupabase(supabase, editingId, draftLike);
+              if (savedRow) {
+                const row = finalizeSavedRow(savedRow, draftLike);
+                savedRowOut = row;
+                setRows((prev) => replaceRowInList(prev, row, (r) => String(r?.id ?? "") === String(editingId)));
+                handleStatusListMigration(row);
+              }
+            } else if (!isNew && sourceRow) {
+              savedRow = await updateIadRowByNaturalKeyInSupabase(supabase, sourceRow, draftLike);
+              if (savedRow) {
+                const row = finalizeSavedRow(savedRow, draftLike);
+                savedRowOut = row;
+                setRows((prev) =>
+                  replaceRowInList(prev, row, (r) => {
+                    const sameNumurs = String(r?.IAD_numurs ?? "") === String(sourceRow?.IAD_numurs ?? "");
+                    const sameNosaukums = String(r?.IAD_nosaukums ?? "") === String(sourceRow?.IAD_nosaukums ?? "");
+                    return sameNumurs && sameNosaukums;
+                  })
+                );
+                handleStatusListMigration(row);
+              }
+            } else {
+              savedRow = await insertIadRowToSupabase(supabase, draftLike);
+              if (savedRow) {
+                const row = finalizeSavedRow(savedRow, draftLike);
+                savedRowOut = row;
+                setRows((prev) => [row, ...(Array.isArray(prev) ? prev : [])]);
+                handleStatusListMigration(row);
+              }
+            }
+            if (!savedRowOut) savedRowOut = buildInformeshanaSavedRow(null, draftLike, editingId);
+            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) {
+              triggerInformeshanaAfterSave(savedRowOut, previousRowForInform, draftLike);
+            }
+            setInlineEdit(null);
+            try {
+              await refresh();
+            } catch (refreshErr) {
+              setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
+            }
+          } else {
+            const list = loadLocalRows();
+            let savedRow = null;
+            if (!isNew && editingId != null) {
+              const i = list.findIndex((x) => String(x.id) === String(editingId));
+              if (i >= 0) {
+                savedRow = finalizeSavedRow({ ...list[i], ...payloadFromDraft(draftLike) }, draftLike);
+                list[i] = savedRow;
+              }
+            } else if (!isNew && sourceRow) {
+              const i = list.findIndex((x) => {
+                const sameNumurs = String(x?.IAD_numurs ?? "") === String(sourceRow?.IAD_numurs ?? "");
+                const sameNosaukums = String(x?.IAD_nosaukums ?? "") === String(sourceRow?.IAD_nosaukums ?? "");
+                return sameNumurs && sameNosaukums;
+              });
+              if (i >= 0) {
+                savedRow = finalizeSavedRow({ ...list[i], ...payloadFromDraft(draftLike) }, draftLike);
+                list[i] = savedRow;
+              }
+            } else {
+              savedRow = finalizeSavedRow(
+                {
+                  id: localId(),
+                  ...payloadFromDraft(draftLike),
+                  created_at: new Date().toISOString(),
+                },
+                draftLike
+              );
+              list.unshift(savedRow);
+            }
+            saveLocalRows(list);
+            setRows(list);
+            if (savedRow) {
+              savedRowOut = savedRow;
+              handleStatusListMigration(savedRow);
+            }
+            if (!savedRowOut) savedRowOut = buildInformeshanaSavedRow(null, draftLike, editingId);
+            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) {
+              triggerInformeshanaAfterSave(savedRowOut, previousRowForInform, draftLike);
+            }
+            setInlineEdit(null);
+          }
+        } catch (e) {
+          setErr(String(e?.message || e || "Neizdevās saglabāt."));
+        } finally {
+          setBusy(false);
+        }
+      }
+
       async function onDelete(row) {
         if (!confirm("Dzēst šo IAD ieteikumu?")) return;
         setErr("");
@@ -2362,6 +2568,171 @@
             onClick=${() => onColumnFilterBtnClick(sectionKey, colKey)}
           >${filterFunnel}</button>`;
         }
+        function rowDataAttrs(r) {
+          return {
+            "data-row-num": String(r?.IAD_numurs ?? ""),
+            "data-row-title": String(r?.IAD_nosaukums ?? ""),
+            "data-row-tema": String(r?.IAD_ieteikuma_tema ?? ""),
+          };
+        }
+        function renderInlineActions(isNew = false) {
+          return html`
+            <div class="row" style=${{ gap: "0.3rem", flexWrap: "wrap" }}>
+              <button type="button" class="btn btn-primary btn-small" disabled=${busy} onClick=${() => saveInlineEdit()}>
+                Saglabāt
+              </button>
+              <button type="button" class="btn btn-ghost btn-small" disabled=${busy} onClick=${cancelInlineEdit}>Atcelt</button>
+            </div>
+          `;
+        }
+        function renderRowActions(r) {
+          const focusKey = rowFocusKey(r);
+          const isInline =
+            inlineEdit &&
+            inlineEdit.sectionKey === sectionKey &&
+            inlineEdit.rowKey === focusKey &&
+            !inlineEdit.isNew;
+          if (isInline) return renderInlineActions(false);
+          return html`
+            <div class="row" style=${{ gap: "0.3rem", flexWrap: "wrap" }}>
+              <button type="button" class="btn btn-ghost btn-small" onClick=${() => openCard(r)}>Atvērt</button>
+              <button
+                type="button"
+                class="btn btn-ghost btn-small"
+                onClick=${() => (quickEditEnabled ? startInlineEdit(r, sectionKey) : startEdit(r))}
+              >
+                ${quickEditEnabled ? "Ātri labot" : "Labot"}
+              </button>
+              <button type="button" class="btn btn-danger btn-small" onClick=${() => onDelete(r)}>Dzēst</button>
+            </div>
+          `;
+        }
+        function renderTableRow(r) {
+          const focusKey = rowFocusKey(r);
+          const isInline =
+            inlineEdit &&
+            inlineEdit.sectionKey === sectionKey &&
+            inlineEdit.rowKey === focusKey &&
+            !inlineEdit.isNew;
+          const d = isInline ? inlineEdit.draft : null;
+          const st = statusLabel(isInline ? d?.IAD_statuss : r.IAD_statuss);
+          const done = isInactiveStatus(st);
+          const deadlineBadge = isInline ? null : deadlineBadgeInfo(r);
+          const rowId = `iad-row-${focusKey.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+          const isFocused = focusedRowKey && focusedRowKey === focusKey;
+          const attrs = rowDataAttrs(r);
+          if (isInline) {
+            return html`
+              <tr
+                id=${rowId}
+                key=${String(r?.id ?? `${r.IAD_numurs}-${r.IAD_nosaukums}`)}
+                class="iad-row-inline-edit"
+                data-row-num=${attrs["data-row-num"]}
+                data-row-title=${attrs["data-row-title"]}
+                data-row-tema=${attrs["data-row-tema"]}
+              >
+                <td>
+                  <input class="iad-inline-input" value=${d.IAD_numurs || ""} onInput=${(e) => setInlineDraftField("IAD_numurs", e.target.value)} />
+                </td>
+                <td>
+                  <input class="iad-inline-input" value=${d.Ieteikuma_Nr || ""} onInput=${(e) => setInlineDraftField("Ieteikuma_Nr", e.target.value)} />
+                </td>
+                <td>
+                  <input class="iad-inline-input" required value=${d.IAD_nosaukums || ""} onInput=${(e) => setInlineDraftField("IAD_nosaukums", e.target.value)} />
+                </td>
+                <td class="iad-col-tema">
+                  <textarea class="iad-inline-textarea" onInput=${(e) => setInlineDraftField("IAD_ieteikuma_tema", e.target.value)}>${d.IAD_ieteikuma_tema || ""}</textarea>
+                </td>
+                <td>
+                  <input class="iad-inline-input" value=${d.Nodots_izpildei || ""} onInput=${(e) => setInlineDraftField("Nodots_izpildei", e.target.value)} />
+                </td>
+                <td>
+                  <input type="date" class="iad-inline-input" value=${toDateInputValue(d.IAD_termins) || ""} onInput=${(e) => setInlineDraftField("IAD_termins", e.target.value)} />
+                </td>
+                <td>
+                  <input class="iad-inline-input" value=${d.Atbildigais || ""} onInput=${(e) => setInlineDraftField("Atbildigais", e.target.value)} />
+                </td>
+                <td>
+                  <select class="iad-inline-select" value=${d.IAD_statuss || "Aktīvs"} onChange=${(e) => setInlineDraftField("IAD_statuss", e.target.value)}>
+                    <option value="Aktīvs">Aktīvs</option>
+                    <option value="Pabeigts">Pabeigts</option>
+                    <option value="Atcelts">Atcelts</option>
+                  </select>
+                </td>
+                <td>${renderRowActions(r)}</td>
+              </tr>
+            `;
+          }
+          return html`
+            <tr
+              id=${rowId}
+              key=${String(r?.id ?? `${r.IAD_numurs}-${r.IAD_nosaukums}`)}
+              class=${isFocused ? "iad-row-focus" : ""}
+              data-row-num=${attrs["data-row-num"]}
+              data-row-title=${attrs["data-row-title"]}
+              data-row-tema=${attrs["data-row-tema"]}
+            >
+              <td>${r.IAD_numurs || "—"}</td>
+              <td>${r.Ieteikuma_Nr || "—"}</td>
+              <td>
+                ${r.IAD_nosaukums || "—"}
+                ${rowHasAttachments(r) ? renderAttachmentClip(html) : null}
+              </td>
+              <td class="iad-col-tema">${r.IAD_ieteikuma_tema || "—"}</td>
+              <td>${r.Nodots_izpildei || "—"}</td>
+              <td>
+                ${displayDate(r.IAD_termins)}
+                ${deadlineBadge
+                  ? html`<div><span class=${`iad-deadline-note ${deadlineBadge.tone}`}>${deadlineBadge.text}</span></div>`
+                  : null}
+              </td>
+              <td>${formatPersonField(r.Atbildigais) || "—"}</td>
+              <td>
+                <span class=${`iad-status ${done ? "done" : ""}`}>${st}</span>
+              </td>
+              <td>${renderRowActions(r)}</td>
+            </tr>
+          `;
+        }
+        function renderNewInlineRow() {
+          if (!inlineEdit?.isNew || inlineEdit.sectionKey !== sectionKey) return null;
+          const d = inlineEdit.draft;
+          const rowId = `iad-row-${inlineEdit.rowKey.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+          return html`
+            <tr id=${rowId} key=${inlineEdit.rowKey} class="iad-row-inline-edit">
+              <td>
+                <input class="iad-inline-input" value=${d.IAD_numurs || ""} onInput=${(e) => setInlineDraftField("IAD_numurs", e.target.value)} />
+              </td>
+              <td>
+                <input class="iad-inline-input" value=${d.Ieteikuma_Nr || ""} onInput=${(e) => setInlineDraftField("Ieteikuma_Nr", e.target.value)} />
+              </td>
+              <td>
+                <input class="iad-inline-input" required value=${d.IAD_nosaukums || ""} onInput=${(e) => setInlineDraftField("IAD_nosaukums", e.target.value)} />
+              </td>
+              <td class="iad-col-tema">
+                <textarea class="iad-inline-textarea" onInput=${(e) => setInlineDraftField("IAD_ieteikuma_tema", e.target.value)}>${d.IAD_ieteikuma_tema || ""}</textarea>
+              </td>
+              <td>
+                <input class="iad-inline-input" value=${d.Nodots_izpildei || ""} onInput=${(e) => setInlineDraftField("Nodots_izpildei", e.target.value)} />
+              </td>
+              <td>
+                <input type="date" class="iad-inline-input" value=${toDateInputValue(d.IAD_termins) || ""} onInput=${(e) => setInlineDraftField("IAD_termins", e.target.value)} />
+              </td>
+              <td>
+                <input class="iad-inline-input" value=${d.Atbildigais || ""} onInput=${(e) => setInlineDraftField("Atbildigais", e.target.value)} />
+              </td>
+              <td>
+                <select class="iad-inline-select" value=${d.IAD_statuss || "Aktīvs"} onChange=${(e) => setInlineDraftField("IAD_statuss", e.target.value)}>
+                  <option value="Aktīvs">Aktīvs</option>
+                  <option value="Pabeigts">Pabeigts</option>
+                  <option value="Atcelts">Atcelts</option>
+                </select>
+              </td>
+              <td>${renderInlineActions(true)}</td>
+            </tr>
+          `;
+        }
+        const hasNewInlineRow = inlineEdit?.isNew && inlineEdit.sectionKey === sectionKey;
         return html`
           <div class="iad-table-wrap">
             <table class="iad-table">
@@ -2393,7 +2764,7 @@
                   </th>
                   <th>
                     <div class="iad-th-filter">
-                      <span>Nodots izpildei</span>
+                      <span>Kam nodots izpildei</span>
                       ${filterBtn("nodotsIzpildei")}
                     </div>
                   </th>
@@ -2439,45 +2810,12 @@
                   : null}
               </thead>
               <tbody>
+                ${hasNewInlineRow ? renderNewInlineRow() : null}
                 ${filteredRows.length
-                  ? filteredRows.map((r) => {
-                      const st = statusLabel(r.IAD_statuss);
-                      const done = isInactiveStatus(st);
-                      const deadlineBadge = deadlineBadgeInfo(r);
-                      const focusKey = rowFocusKey(r);
-                      const rowId = `iad-row-${focusKey.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-                      const isFocused = focusedRowKey && focusedRowKey === focusKey;
-                      return html`
-                        <tr id=${rowId} key=${String(r?.id ?? `${r.IAD_numurs}-${r.IAD_nosaukums}`)} class=${isFocused ? "iad-row-focus" : ""}>
-                          <td>${r.IAD_numurs || "—"}</td>
-                          <td>${r.Ieteikuma_Nr || "—"}</td>
-                          <td>
-                            ${r.IAD_nosaukums || "—"}
-                            ${rowHasAttachments(r) ? renderAttachmentClip(html) : null}
-                          </td>
-                          <td class="iad-col-tema">${r.IAD_ieteikuma_tema || "—"}</td>
-                          <td>${displayDate(r.Nodots_izpildei)}</td>
-                          <td>
-                            ${displayDate(r.IAD_termins)}
-                            ${deadlineBadge
-                              ? html`<div><span class=${`iad-deadline-note ${deadlineBadge.tone}`}>${deadlineBadge.text}</span></div>`
-                              : null}
-                          </td>
-                          <td>${formatPersonField(r.Atbildigais) || "—"}</td>
-                          <td>
-                            <span class=${`iad-status ${done ? "done" : ""}`}>${st}</span>
-                          </td>
-                          <td>
-                            <div class="row" style=${{ gap: "0.3rem", flexWrap: "wrap" }}>
-                              <button type="button" class="btn btn-ghost btn-small" onClick=${() => openCard(r)}>Atvērt</button>
-                              <button type="button" class="btn btn-ghost btn-small" onClick=${() => startEdit(r)}>Labot</button>
-                              <button type="button" class="btn btn-danger btn-small" onClick=${() => onDelete(r)}>Dzēst</button>
-                            </div>
-                          </td>
-                        </tr>
-                      `;
-                    })
-                  : html`<tr><td colspan="9" class="iad-empty">${emptyText}</td></tr>`}
+                  ? filteredRows.map((r) => renderTableRow(r))
+                  : hasNewInlineRow
+                    ? null
+                    : html`<tr><td colspan="9" class="iad-empty">${emptyText}</td></tr>`}
               </tbody>
             </table>
           </div>
@@ -2518,7 +2856,15 @@
                 <section class="iad-panel stack" style=${{ gap: "0.75rem" }}>
                   <div class="row" style=${{ justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
                     <h3 style=${{ margin: 0, color: "#075985", fontSize: "0.98rem" }}>IAD ieteikumi</h3>
-                    <div class="row" style=${{ gap: "0.45rem", flexWrap: "wrap" }}>
+                    <div class="row" style=${{ gap: "0.45rem", flexWrap: "wrap", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        class=${`iad-quick-edit-toggle ${quickEditEnabled ? "is-active" : ""}`}
+                        title="Rediģēt ierakstus tieši tabulā bez kartiņas atvēršanas"
+                        onClick=${toggleQuickEditEnabled}
+                      >
+                        Ātrā rediģēšana
+                      </button>
                       <button type="button" class="btn btn-ghost btn-small" disabled=${busy} onClick=${exportToExcel}>Eksportēt uz Excel</button>
                       <button type="button" class="btn btn-primary btn-small" disabled=${busy} onClick=${startCreate}>Pievienot IAD ieteikumu</button>
                     </div>
@@ -2530,6 +2876,16 @@
                     <div class="iad-list-head">
                       <p class="iad-list-title">Aktuālie IAD ieteikumi (${activeRows.length})</p>
                       <div class="iad-list-head-actions">
+                        ${quickEditEnabled
+                          ? html`<button
+                              type="button"
+                              class="btn btn-ghost btn-small"
+                              disabled=${busy || (inlineEdit?.isNew && inlineEdit.sectionKey === "current")}
+                              onClick=${() => startInlineCreate("current")}
+                            >
+                              Pievienot rindu
+                            </button>`
+                          : null}
                         <button type="button" class=${`iad-list-icon-btn ${searchBoxOpen.current ? "is-active" : ""}`} title="Meklēt saturā" onClick=${() => toggleSectionSearchBox("current")}>🔎</button>
                         <button type="button" class=${`iad-list-pin-btn ${pinCurrent ? "is-pinned" : ""}`} onClick=${togglePinCurrent} title=${pinCurrent ? "Noņemt piespraudi" : "Piespraust sarakstu"}>📌</button>
                         <button type="button" class="btn btn-ghost btn-small" onClick=${toggleOpenCurrent}>
@@ -2576,6 +2932,16 @@
                     <div class="iad-list-head">
                       <p class="iad-list-title">Neaktuālie IAD ieteikumi (${inactiveRows.length})</p>
                       <div class="iad-list-head-actions">
+                        ${quickEditEnabled
+                          ? html`<button
+                              type="button"
+                              class="btn btn-ghost btn-small"
+                              disabled=${busy || (inlineEdit?.isNew && inlineEdit.sectionKey === "done")}
+                              onClick=${() => startInlineCreate("done")}
+                            >
+                              Pievienot rindu
+                            </button>`
+                          : null}
                         <button type="button" class=${`iad-list-icon-btn ${searchBoxOpen.done ? "is-active" : ""}`} title="Meklēt saturā" onClick=${() => toggleSectionSearchBox("done")}>🔎</button>
                         <button type="button" class=${`iad-list-pin-btn ${pinDone ? "is-pinned" : ""}`} onClick=${togglePinDone} title=${pinDone ? "Noņemt piespraudi" : "Piespraust sarakstu"}>📌</button>
                         <button type="button" class="btn btn-ghost btn-small" onClick=${toggleOpenDone}>
@@ -2679,7 +3045,7 @@
                                 </div>
                               </div>
                               ${renderCardTextarea("IAD ieteikuma tēma (īss apraksts)", "IAD_ieteikuma_tema", "", { wide: true })}
-                              ${renderCardInput("Nodots izpildei", "Nodots_izpildei", { type: "date" })}
+                              ${renderCardInput("Kam nodots izpildei", "Nodots_izpildei")}
                               ${renderCardInput("IAD ieteikuma termiņš", "IAD_termins", { type: "date" })}
                               <div class="iad-kv">
                                 <strong>IAD ieteikuma statuss</strong>
