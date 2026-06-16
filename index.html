@@ -1700,28 +1700,6 @@
             }
           }
 
-          const resendApiUrl = getPddResendApiUrl();
-          if (resendApiUrl) {
-            try {
-              await getAccessTokenForFunctions();
-              const r = await callPddResendApi({
-                action: "iad_informesana",
-                to,
-                subject,
-                text,
-                html,
-                url,
-                cc,
-              });
-              if (r?.ok) return { ok: true, via: "pdd-resend-api", body: r.body };
-              if (!r?.skipped) {
-                console.warn("[PDD_INFORMESHANA] pdd-resend-api neizdevās", getPddResendApiUrl(), r);
-              }
-            } catch (e) {
-              console.warn("[PDD_INFORMESHANA] pdd-resend-api", e);
-            }
-          }
-
           return { ok: false, reason: "all_channels_failed" };
         };
 
