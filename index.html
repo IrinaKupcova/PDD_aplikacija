@@ -7582,9 +7582,35 @@
             const id = pipe >= 0 ? s.slice(pipe + 1).trim() : s;
             return id.toLowerCase();
           }
-          function appChangesSeenStorageKey() {
+          function readPersistedAppChangesSeenIds(uid, em) {
+            const ids = new Set();
+            const u = String(uid || "").trim().toLowerCase();
+            const e = String(em || "").trim().toLowerCase();
+            const tryKey = (key) => {
+              try {
+                const id = appChangesStampId(localStorage.getItem(key));
+                if (id) ids.add(id);
+              } catch {
+                /* ignore */
+              }
+            };
+            tryKey(APP_CHANGES_SEEN_KEY);
+            if (u) tryKey(`${APP_CHANGES_SEEN_KEY}:${u}`);
+            if (e) tryKey(`${APP_CHANGES_SEEN_KEY}:${e}`);
+            try {
+              for (let i = 0; i < localStorage.length; i += 1) {
+                const key = String(localStorage.key(i) || "");
+                if (!key.startsWith(APP_CHANGES_SEEN_KEY) || key === APP_CHANGES_SEEN_KEY) continue;
+                if ((u && key.includes(u)) || (e && key.endsWith(`:${e}`))) tryKey(key);
+              }
+            } catch {
+              /* ignore */
+            }
+            return ids;
+          }
+          function appChangesIdentity() {
             const uid = String(
-              getStickyAuthValue(LS_LOCAL_USER_ID) || session?.user?.id || ""
+              getStickyAuthValue(LS_LOCAL_USER_ID) || session?.user?.id || profile?.id || ""
             ).trim();
             const em = String(
               getStickyAuthValue(LS_LOCAL_EMAIL) ||
@@ -7594,21 +7620,23 @@
             )
               .trim()
               .toLowerCase();
+            return { uid, em };
+          }
+          function appChangesBadgeMayEvaluate() {
+            if (TIKAI_VIENKARSI_SKATS || isLocalMode()) return true;
+            if (!configured()) return Boolean(session?.user?.id);
+            if (!emailAuthSessionActive()) return false;
+            if (profileLoading) return false;
+            const { uid, em } = appChangesIdentity();
+            return Boolean(uid || em);
+          }
+          function appChangesSeenStorageKey() {
+            const { uid, em } = appChangesIdentity();
             const who = uid || em;
             return who ? `${APP_CHANGES_SEEN_KEY}:${who}` : APP_CHANGES_SEEN_KEY;
           }
           function appChangesSeenStorageKeys(storageKey) {
-            const uid = String(
-              getStickyAuthValue(LS_LOCAL_USER_ID) || session?.user?.id || ""
-            ).trim();
-            const em = String(
-              getStickyAuthValue(LS_LOCAL_EMAIL) ||
-                session?.user?.email ||
-                profile?.email ||
-                ""
-            )
-              .trim()
-              .toLowerCase();
+            const { uid, em } = appChangesIdentity();
             const keys = new Set([APP_CHANGES_SEEN_KEY, String(storageKey ?? "").trim()]);
             if (uid) keys.add(`${APP_CHANGES_SEEN_KEY}:${uid}`);
             if (em) keys.add(`${APP_CHANGES_SEEN_KEY}:${em}`);
@@ -7645,8 +7673,10 @@
           function isAppChangesUnread(latestStamp, storageKey, sess) {
             const latest = appChangesStampId(latestStamp);
             if (!latest) return false;
+            const { uid, em } = appChangesIdentity();
             const metaSeen = readAppChangesSeenFromMeta(sess);
             if (metaSeen && metaSeen === latest) return false;
+            if (readPersistedAppChangesSeenIds(uid, em).has(latest)) return false;
             for (const k of appChangesSeenStorageKeys(storageKey)) {
               if (appChangesStampId(localStorage.getItem(k)) === latest) return false;
             }
@@ -7733,10 +7763,28 @@
             if (v === "pddAppChanges") {
               setShowPddAppChangesBadge(false);
               const seenKey = appChangesSeenStorageKey();
-              if (appChangesLatestIdRef.current) {
-                writeAppChangesSeenId(seenKey, appChangesLatestIdRef.current);
-                void syncAppChangesSeen(supabase, session, seenKey, appChangesLatestIdRef.current);
-              }
+              void (async () => {
+                let latestId = appChangesLatestIdRef.current;
+                if (!latestId) {
+                  try {
+                    const M = globalThis.PDD_IZMAINAS;
+                    const sb = globalThis.__PDD_SUPABASE__;
+                    if (M?.fetchRows && M?.latestStamp && sb) {
+                      await ensureDbReadableSession();
+                      const rows = await M.fetchRows(sb);
+                      latestId = appChangesStampId(M.latestStamp(rows));
+                      appChangesLatestIdRef.current = latestId;
+                      setAppChangesLatestId(latestId);
+                    }
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                if (latestId) {
+                  writeAppChangesSeenId(seenKey, latestId);
+                  void syncAppChangesSeen(supabase, session, seenKey, latestId);
+                }
+              })();
             }
             setView(v);
             if (v === "prombutnes") setPromSub("calendar");
@@ -7903,6 +7951,10 @@
           const [homeAbsencesSnapshot, setHomeAbsencesSnapshot] = useState([]);
           const refreshAppChangesBadge = useCallback(async () => {
             try {
+              if (!appChangesBadgeMayEvaluate()) {
+                setShowPddAppChangesBadge(false);
+                return;
+              }
               const M = globalThis.PDD_IZMAINAS;
               const sb = globalThis.__PDD_SUPABASE__;
               if (!M?.fetchRows || !M?.latestStamp || !sb || TIKAI_VIENKARSI_SKATS || isLocalMode()) {
@@ -7930,7 +7982,7 @@
             } catch {
               setShowPddAppChangesBadge(false);
             }
-          }, [session?.user?.id, session?.user?.email, profile?.email]);
+          }, [session?.user?.id, session?.user?.email, profile?.id, profile?.email, profileLoading]);
           const onAbsencesSnapshot = useCallback((list, uid, canAppr) => {
             const V = globalThis.PDDPrombutnesVesture;
             setPendingCitsNav(Boolean(V?.shouldShowPendingCitsNavBadge?.(list, uid, canAppr)));
