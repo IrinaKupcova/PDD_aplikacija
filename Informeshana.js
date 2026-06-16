@@ -1405,6 +1405,17 @@
       kind: kind || "inform",
     };
     const inBrowser = typeof window !== "undefined" && typeof document !== "undefined";
+
+    const viaPddApiEarly = await sendEmailViaPddResendApi({
+      to: email,
+      subject,
+      text,
+      html,
+      url,
+      cc: ccList,
+    });
+    if (viaPddApiEarly.ok) return recordOk(viaPddApiEarly, viaPddApiEarly.via || "pdd-resend-api");
+
     if (inBrowser && typeof root.PDD_INFORMESHANA_SEND_EMAIL__ === "function") {
       try {
         const custom = await root.PDD_INFORMESHANA_SEND_EMAIL__(customPayload);

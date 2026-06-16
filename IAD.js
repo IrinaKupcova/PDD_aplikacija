@@ -540,6 +540,33 @@
     return p;
   }
 
+  function applyDraftFieldsToRow(merged, draftLike) {
+    if (!merged || typeof merged !== "object" || !draftLike || typeof draftLike !== "object") return merged;
+    merged.IAD_numurs = toStr(draftLike.IAD_numurs, 160) || merged.IAD_numurs;
+    merged.Ieteikuma_Nr = toStr(draftLike.Ieteikuma_Nr, 160);
+    merged.IAD_nosaukums = toStr(draftLike.IAD_nosaukums, 600) || merged.IAD_nosaukums;
+    merged.IAD_ieteikuma_tema = toStr(draftLike.IAD_ieteikuma_tema, 280);
+    merged.Nodots_izpildei = toStr(draftLike.Nodots_izpildei, 280);
+    merged.IAD_termins = toDateInputValue(draftLike.IAD_termins) || merged.IAD_termins;
+    merged.Atbildigais = joinNameList(parseNameList(draftLike.Atbildigais)) || merged.Atbildigais;
+    merged.Lidzatbildigais = joinNameList(parseNameList(draftLike.Lidzatbildigais)) || merged.Lidzatbildigais;
+    merged.IAD_datums = toDateInputValue(draftLike.IAD_datums) || merged.IAD_datums;
+    merged.IAD_PDD_komp_uzdevums = normalizeTextBlock(draftLike.IAD_PDD_komp_uzdevums) || merged.IAD_PDD_komp_uzdevums;
+    merged.Starptermins = toDateInputValue(draftLike.Starptermins) || merged.Starptermins;
+    merged.Planotas_aktivitates = normalizeTextBlock(draftLike.Planotas_aktivitates) || merged.Planotas_aktivitates;
+    merged.Piezimes = normalizeTextBlock(draftLike.Piezimes) || merged.Piezimes;
+    merged.Audita_komentars = normalizeTextBlock(draftLike.Audita_komentars);
+    merged.IAD_statuss = statusLabel(draftLike.IAD_statuss ?? merged.IAD_statuss);
+    return merged;
+  }
+
+  function resetIadRuntimeColProbe() {
+    runtimeColsProbed = false;
+    runtimeOptionalColExists.ieteikumaNr = false;
+    runtimeOptionalColExists.nodotsIzpildei = false;
+    runtimeOptionalColExists.auditaKomentars = false;
+  }
+
   function loadLocalRows() {
     try {
       const raw = localStorage.getItem(LS_IAD_KEY);
@@ -674,6 +701,7 @@
   }
 
   async function fetchIadRowsFromSupabase(sb) {
+    resetIadRuntimeColProbe();
     const table = await resolveIadTableName(sb);
     await ensureRuntimeColsByProbe(sb, table);
     const { data, error } = await sb.from(table).select("*");
@@ -2163,8 +2191,7 @@
         const merged = savedRow
           ? normalizeIadRow({ ...savedRow, ...payloadFromDraft(draftLike) })
           : normalizeIadRow({ ...payloadFromDraft(draftLike) });
-        merged.IAD_statuss = statusLabel(draftLike?.IAD_statuss ?? merged.IAD_statuss);
-        return merged;
+        return applyDraftFieldsToRow(merged, draftLike);
       }
 
       function handleStatusListMigration(savedRow) {
@@ -2326,14 +2353,15 @@
               triggerInformeshanaAfterSave(savedRowOut, previousRowForInform, draft);
             }
             closeOverlay();
-            try {
-              await refresh();
-              if (becameInactive) {
-                setOpenDone(true);
-                setSubmod("iad");
+            if (!savedRow) {
+              try {
+                await refresh();
+              } catch (refreshErr) {
+                setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
               }
-            } catch (refreshErr) {
-              setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
+            } else if (becameInactive) {
+              setOpenDone(true);
+              setSubmod("iad");
             }
           } else {
             const list = loadLocalRows();
@@ -2439,10 +2467,13 @@
               triggerInformeshanaAfterSave(savedRowOut, previousRowForInform, draftLike);
             }
             setInlineEdit(null);
-            try {
-              await refresh();
-            } catch (refreshErr) {
-              setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
+            if (!savedRow) {
+              try {
+                resetIadRuntimeColProbe();
+                await refresh();
+              } catch (refreshErr) {
+                setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
+              }
             }
           } else {
             const list = loadLocalRows();
