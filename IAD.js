@@ -50,6 +50,8 @@
   const ID_COLUMN_CANDIDATES = ["id", "ID", "Id", "iad_id", "IAD_id", "IAD_ID", "IAD.id"];
   let resolvedIadTable = null;
   let runtimeColsProbed = false;
+  const OPTIONAL_PAYLOAD_COL_KEYS = new Set(["ieteikumaNr", "nodotsIzpildei"]);
+  const runtimeOptionalColExists = { ieteikumaNr: false, nodotsIzpildei: false };
 
   function idColumnsToTry() {
     return Array.from(
@@ -120,7 +122,10 @@
     ];
     for (const [key, aliases] of probes) {
       const found = await probeExistingColumn(sb, table, aliases);
-      if (found) next[key] = found;
+      if (found) {
+        next[key] = found;
+        if (OPTIONAL_PAYLOAD_COL_KEYS.has(key)) runtimeOptionalColExists[key] = true;
+      }
     }
     const idFound = await probeExistingColumn(sb, table, ["id", "ID", "Id", "iad_id", "IAD_id", "IAD_ID", "IAD.id"]);
     if (idFound) runtimeIdCol = idFound;
@@ -491,6 +496,13 @@
     };
   }
 
+  function setPayloadField(p, key, value) {
+    if (OPTIONAL_PAYLOAD_COL_KEYS.has(key) && runtimeColsProbed && !runtimeOptionalColExists[key]) return;
+    const col = runtimeCols[key];
+    if (!col) return;
+    p[col] = value;
+  }
+
   function payloadFromDraft(d, opts = {}) {
     const p = {};
     const includeGeneratedId = Boolean(opts?.includeGeneratedId);
@@ -500,21 +512,25 @@
       p.IAD_id = newId;
       p.iad_id = newId;
     }
-    p[runtimeCols.numurs] = toStr(d?.IAD_numurs, 160) || null;
-    p[runtimeCols.ieteikumaNr] = toStr(d?.Ieteikuma_Nr, 160) || null;
-    p[runtimeCols.nosaukums] = toStr(d?.IAD_nosaukums, 600) || null;
-    p[runtimeCols.tema] = toStr(d?.IAD_ieteikuma_tema, 280) || null;
-    p[runtimeCols.nodotsIzpildei] = toDateInputValue(d?.Nodots_izpildei) || toStr(d?.Nodots_izpildei, 160) || null;
-    p[runtimeCols.termins] = toDateInputValue(d?.IAD_termins) || null;
-    p[runtimeCols.atbildigais] = joinNameList(parseNameList(d?.Atbildigais)) || null;
-    p[runtimeCols.statuss] = statusLabel(d?.IAD_statuss) || "Aktīvs";
-    p[runtimeCols.datums] = toDateInputValue(d?.IAD_datums) || null;
-    p[runtimeCols.lidzatbildigais] = joinNameList(parseNameList(d?.Lidzatbildigais)) || null;
-    p[runtimeCols.kompetencesUzdevums] = normalizeTextBlock(d?.IAD_PDD_komp_uzdevums) || null;
-    p[runtimeCols.starptermins] = toDateInputValue(d?.Starptermins) || null;
-    p[runtimeCols.planotasAktivitates] = normalizeTextBlock(d?.Planotas_aktivitates) || null;
-    p[runtimeCols.piezimes] = normalizeTextBlock(d?.Piezimes) || null;
-    p[runtimeCols.pielikumi] = serializeAttachments(d?.Pielikumi);
+    setPayloadField(p, "numurs", toStr(d?.IAD_numurs, 160) || null);
+    setPayloadField(p, "ieteikumaNr", toStr(d?.Ieteikuma_Nr, 160) || null);
+    setPayloadField(p, "nosaukums", toStr(d?.IAD_nosaukums, 600) || null);
+    setPayloadField(p, "tema", toStr(d?.IAD_ieteikuma_tema, 280) || null);
+    setPayloadField(
+      p,
+      "nodotsIzpildei",
+      toDateInputValue(d?.Nodots_izpildei) || toStr(d?.Nodots_izpildei, 160) || null
+    );
+    setPayloadField(p, "termins", toDateInputValue(d?.IAD_termins) || null);
+    setPayloadField(p, "atbildigais", joinNameList(parseNameList(d?.Atbildigais)) || null);
+    setPayloadField(p, "statuss", statusLabel(d?.IAD_statuss) || "Aktīvs");
+    setPayloadField(p, "datums", toDateInputValue(d?.IAD_datums) || null);
+    setPayloadField(p, "lidzatbildigais", joinNameList(parseNameList(d?.Lidzatbildigais)) || null);
+    setPayloadField(p, "kompetencesUzdevums", normalizeTextBlock(d?.IAD_PDD_komp_uzdevums) || null);
+    setPayloadField(p, "starptermins", toDateInputValue(d?.Starptermins) || null);
+    setPayloadField(p, "planotasAktivitates", normalizeTextBlock(d?.Planotas_aktivitates) || null);
+    setPayloadField(p, "piezimes", normalizeTextBlock(d?.Piezimes) || null);
+    setPayloadField(p, "pielikumi", serializeAttachments(d?.Pielikumi));
     return p;
   }
 
@@ -794,9 +810,14 @@
       .iad-module-card[disabled] { opacity:.6; cursor:not-allowed; }
       .iad-panel { border:1px solid #bae6fd; border-radius:12px; background:#f0f9ff; padding:.8rem; }
       .iad-table-wrap { overflow:auto; border:1px solid #cbd5e1; border-radius:10px; background:#fff; }
-      .iad-table { width:100%; border-collapse:collapse; font-size:.84rem; min-width: 860px; }
+      .iad-table { width:100%; border-collapse:collapse; font-size:.84rem; min-width: 1080px; }
       .iad-table th, .iad-table td { border-bottom:1px solid #e2e8f0; padding:.45rem .5rem; text-align:left; vertical-align:top; }
       .iad-table th { background:#e0f2fe; color:#0c4a6e; position:sticky; top:0; z-index:1; }
+      .iad-table .iad-col-tema {
+        min-width: 320px;
+        width: 32%;
+        max-width: 560px;
+      }
       .iad-row-focus {
         background: #fff7ed;
         box-shadow: inset 0 0 0 1px #fb923c;
@@ -856,6 +877,13 @@
         white-space:pre-wrap;
         word-break:break-word;
         box-shadow:inset 0 1px 0 rgba(255,255,255,0.6);
+      }
+      .iad-kv-wide {
+        grid-template-columns: 1fr;
+        gap: 0.45rem;
+      }
+      .iad-kv-wide .iad-kv-textarea {
+        min-height: 5.5rem;
       }
       @media (max-width: 720px) {
         .iad-kv { grid-template-columns:1fr; gap:.4rem; }
@@ -1877,9 +1905,10 @@
         `;
       }
 
-      function renderCardTextarea(label, valueKey, placeholder = "") {
+      function renderCardTextarea(label, valueKey, placeholder = "", opts = {}) {
+        const wide = Boolean(opts?.wide);
         return html`
-          <div class="iad-kv">
+          <div class=${`iad-kv${wide ? " iad-kv-wide" : ""}`}>
             <strong>${label}</strong>
             <div class="iad-kv-value editable">
               <textarea
@@ -2019,13 +2048,42 @@
         return null;
       }
 
-      function triggerInformeshanaAfterSave(savedRow, previousRow) {
-        const api = globalThis.PDD_INFORMESHANA;
-        if (!api?.runAssignmentWelcomeEmails || !savedRow) return;
+      function buildInformeshanaSavedRow(savedRow, draftLike, idHint) {
+        const base =
+          savedRow && typeof savedRow === "object"
+            ? { ...savedRow }
+            : idHint != null
+              ? { id: idHint }
+              : {};
+        const merged = finalizeSavedRow(base, draftLike);
+        merged.Atbildigais = joinNameList(parseNameList(draftLike?.Atbildigais));
+        merged.Lidzatbildigais = joinNameList(parseNameList(draftLike?.Lidzatbildigais));
+        merged.IAD_statuss = statusLabel(draftLike?.IAD_statuss ?? merged.IAD_statuss);
+        return merged;
+      }
+
+      function triggerInformeshanaAfterSave(savedRow, previousRow, draftLike) {
         const sb = supabase ?? globalThis.__PDD_SUPABASE__ ?? null;
-        const run = () => {
+        const rowForInform = buildInformeshanaSavedRow(savedRow, draftLike, editingId ?? savedRow?.id ?? null);
+        const prevForInform = previousRow ? normalizeIadRow({ ...previousRow }) : null;
+
+        const run = (attempt = 0) => {
+          const api = globalThis.PDD_INFORMESHANA;
+          if (!api?.runAssignmentWelcomeEmails) {
+            if (attempt < 30) {
+              setTimeout(() => run(attempt + 1), 100);
+              return;
+            }
+            console.warn("[PDD_INFORMESHANA] modulis nav pieejams — e-pasts netika sūtīts.");
+            return;
+          }
           void api
-            .runAssignmentWelcomeEmails({ supabase: sb, savedRow, previousRow, afterSave: true })
+            .runAssignmentWelcomeEmails({
+              supabase: sb,
+              savedRow: rowForInform,
+              previousRow: prevForInform,
+              afterSave: true,
+            })
             .then((out) => {
               if (out?.skipped && out?.reason === "assignment_unchanged") return;
               if (out?.skipped && out?.reason === "no_new_assignment_persons") return;
@@ -2067,7 +2125,7 @@
             })
             .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IAD saglabāšanas", e));
         };
-        setTimeout(run, 150);
+        setTimeout(() => run(0), 0);
       }
 
       async function onSave(ev) {
@@ -2115,6 +2173,12 @@
                 handleStatusListMigration(row);
               }
             }
+            if (!savedRowOut) {
+              savedRowOut = buildInformeshanaSavedRow(null, draft, editingId);
+            }
+            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) {
+              triggerInformeshanaAfterSave(savedRowOut, previousRowForInform, draft);
+            }
             closeOverlay();
             try {
               await refresh();
@@ -2124,9 +2188,6 @@
               }
             } catch (refreshErr) {
               setErr(String(refreshErr?.message || refreshErr || "Neizdevās atjaunot sarakstu pēc saglabāšanas."));
-            }
-            if (!isInactiveStatus(savedRowOut?.IAD_statuss)) {
-              triggerInformeshanaAfterSave(savedRowOut, previousRowForInform);
             }
           } else {
             const list = loadLocalRows();
@@ -2164,9 +2225,12 @@
               savedRowOut = savedRow;
               handleStatusListMigration(savedRow);
             }
+            if (!savedRowOut) {
+              savedRowOut = buildInformeshanaSavedRow(null, draft, editingId);
+            }
             closeOverlay();
             if (!isInactiveStatus(savedRowOut?.IAD_statuss)) {
-              triggerInformeshanaAfterSave(savedRowOut, previousRowForInform);
+              triggerInformeshanaAfterSave(savedRowOut, previousRowForInform, draft);
             }
           }
         } catch (e) {
@@ -2274,7 +2338,7 @@
                       ${filterBtn("nosaukums")}
                     </div>
                   </th>
-                  <th>
+                  <th class="iad-col-tema">
                     <div class="iad-th-filter">
                       <span>IAD ieteikuma tēma (īss apraksts)</span>
                       ${filterBtn("tema")}
@@ -2311,7 +2375,7 @@
                       <th>${filterSelect("numurs")}</th>
                       <th>${filterSelect("ieteikumaNr")}</th>
                       <th>${filterSelect("nosaukums")}</th>
-                      <th>${filterSelect("tema")}</th>
+                      <th class="iad-col-tema">${filterSelect("tema")}</th>
                       <th>${filterSelect("nodotsIzpildei")}</th>
                       <th>
                         <input
@@ -2344,7 +2408,7 @@
                             ${r.IAD_nosaukums || "—"}
                             ${rowHasAttachments(r) ? renderAttachmentClip(html) : null}
                           </td>
-                          <td>${r.IAD_ieteikuma_tema || "—"}</td>
+                          <td class="iad-col-tema">${r.IAD_ieteikuma_tema || "—"}</td>
                           <td>${displayDate(r.Nodots_izpildei)}</td>
                           <td>
                             ${displayDate(r.IAD_termins)}
@@ -2566,7 +2630,7 @@
                                   />
                                 </div>
                               </div>
-                              ${renderCardInput("IAD ieteikuma tēma (īss apraksts)", "IAD_ieteikuma_tema")}
+                              ${renderCardTextarea("IAD ieteikuma tēma (īss apraksts)", "IAD_ieteikuma_tema", "", { wide: true })}
                               ${renderCardInput("IAD ieteikuma termiņš", "IAD_termins", { type: "date" })}
                               <div class="iad-kv">
                                 <strong>IAD ieteikuma statuss</strong>
@@ -2650,7 +2714,7 @@
                           <div class="iad-card-grid">
                             ${cardEntries(cardOpen).map(
                               (f) => html`
-                                <div key=${f.key} class="iad-kv">
+                                <div key=${f.key} class=${`iad-kv${f.key === "IAD_ieteikuma_tema" ? " iad-kv-wide" : ""}`}>
                                   <strong>${f.label}${f.hasAttach ? renderAttachmentClip(html) : null}</strong>
                                   <div class="iad-kv-value">${f.value}</div>
                                 </div>

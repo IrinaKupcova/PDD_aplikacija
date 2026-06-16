@@ -465,13 +465,13 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=2026051312"></script>
-      <script defer src="./Informeshana.js?v=202605214"></script>
-      <script defer src="./IAD.js?v=202605212"></script>
+      <script defer src="./Informeshana.js?v=202606161"></script>
+      <script defer src="./IAD.js?v=202606162"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=20260422l"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=2026051320"></script>
+      <script defer src="./Navigacija.js?v=202606162"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
@@ -3057,7 +3057,7 @@
                 </button>
                 <button type="button" class="card" onClick=${onOpenDarbaUzdevumi}>
                   <h3>Darba uzdevumi</h3>
-                  <p>IaD ieteikumi un citi apakšmoduļi.</p>
+                  <p>IAD ieteikumi un citi apakšmoduļi.</p>
                 </button>
                 <button type="button" class="card" onClick=${onOpenSaliedesana}>
                   <h3>Saliedēšanas pasākumi, svētku dienas u.c.</h3>
@@ -7661,9 +7661,9 @@
             if (sectionView === "home") return "Sākums";
             if (sectionView === "team") return "Komanda";
             if (sectionView === "saliedesana") return "Saliedēšanas pasākumi, svētku dienas u.c.";
-            if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-current") return "IaD: Aktuālie";
-            if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-done") return "IaD: Neaktuālie";
-            if (sectionView === "darbaUzdevumiIad") return "IaD ieteikumi";
+            if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-current") return "IAD: Aktuālie";
+            if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-done") return "IAD: Neaktuālie";
+            if (sectionView === "darbaUzdevumiIad") return "IAD ieteikumi";
             if (sectionView === "aktualitatesHistory") return "Aktualitāšu vēsture";
             if (sectionView === "pddAppChanges") return "Izmaiņas PDD aplikācijā";
             if (sectionView !== "prombutnes") return "Sadaļa";
@@ -8280,7 +8280,7 @@
                         pinnedListKeys=${iadPinnedListKeys}
                         onPinListChange=${handleIadListPinChange}
                       />`
-                    : html`<section class="list-panel"><p>IaD modulis nav ielādēts.</p></section>`;
+                    : html`<section class="list-panel"><p>IAD modulis nav ielādēts.</p></section>`;
                 }
                 if (view === "saliedesana") {
                   return SaliedesanaPanel

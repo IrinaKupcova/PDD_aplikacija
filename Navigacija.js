@@ -556,7 +556,7 @@
                     class=${`app-nav-sublink ${view === "darbaUzdevumiIad" ? "active" : ""}`}
                     onClick=${() => onChangeView("darbaUzdevumiIad")}
                   >
-                    IaD ieteikumi
+                    IAD ieteikumi
                   </button>
                 </div>
               </details>

@@ -1394,6 +1394,26 @@
       return viaResult;
     }
 
+    const customPayload = {
+      to: email,
+      subject,
+      text,
+      html,
+      url,
+      row,
+      cc: ccList,
+      kind: kind || "inform",
+    };
+    const inBrowser = typeof window !== "undefined" && typeof document !== "undefined";
+    if (inBrowser && typeof root.PDD_INFORMESHANA_SEND_EMAIL__ === "function") {
+      try {
+        const custom = await root.PDD_INFORMESHANA_SEND_EMAIL__(customPayload);
+        if (custom?.ok) return recordOk(custom, custom.via || "custom");
+      } catch (e) {
+        console.warn("[PDD_INFORMESHANA] custom hook error", e);
+      }
+    }
+
     const viaEdge = await sendEmailViaEdgeFunction({ to: email, subject, text, html, url, cc: ccList });
     if (viaEdge.ok) return recordOk(viaEdge, viaEdge.via || "edge_sendEmail");
 
@@ -1409,18 +1429,9 @@
     });
     if (viaInvoke.ok) return recordOk(viaInvoke, viaInvoke.via || "invoke");
 
-    if (typeof root.PDD_INFORMESHANA_SEND_EMAIL__ === "function") {
+    if (!inBrowser && typeof root.PDD_INFORMESHANA_SEND_EMAIL__ === "function") {
       try {
-        const custom = await root.PDD_INFORMESHANA_SEND_EMAIL__({
-          to: email,
-          subject,
-          text,
-          html,
-          url,
-          row,
-          cc: ccList,
-          kind: kind || "inform",
-        });
+        const custom = await root.PDD_INFORMESHANA_SEND_EMAIL__(customPayload);
         if (custom?.ok) return recordOk(custom, custom.via || "custom");
       } catch (e) {
         console.warn("[PDD_INFORMESHANA] custom hook error", e);
