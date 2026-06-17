@@ -1793,6 +1793,7 @@
     sendIadWelcomeEmail,
     buildReminderText,
     buildWelcomeText,
+    buildWelcomeSubject,
     buildIadDeepLink,
     applyIadFocusFromUrl,
     collectRowRecipientEmails,

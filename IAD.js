@@ -2276,9 +2276,26 @@
                   .filter(Boolean)
                   .join("\n");
                 console.error("[PDD_INFORMESHANA] pievienošanas vēstules NETIKA nosūtītas:", fails);
-                const isInvalidKey = /api key is invalid/i.test(detail);
+                const isInvalidKey = /api key is invalid|missing_resend_api_key|no_pdd_resend_api/i.test(detail);
+                const firstFail = fails[0];
+                const openDraft = globalThis.PDD_OPEN_EMAIL_DRAFT__ || api?.openEmailDraftPanel;
+                if (typeof openDraft === "function" && firstFail?.email && rowForInform) {
+                  const subj = api.buildWelcomeSubject
+                    ? api.buildWelcomeSubject(rowForInform)
+                    : "PDD: IAD ieteikums";
+                  const txt = api.buildWelcomeText ? api.buildWelcomeText(rowForInform) : "";
+                  const url = api.buildIadDeepLink ? api.buildIadDeepLink(rowForInform) : "";
+                  openDraft({
+                    to: firstFail.email,
+                    subject: subj,
+                    text: txt,
+                    title: "IAD pievienošana — nosūti manuāli",
+                    url,
+                  });
+                }
                 alert(
-                  "IAD saglabāts, bet automātiskais paziņojums netika nosūtīts.\n\n" +
+                  "IAD saglabāts, bet automātiskais paziņojums netika nosūtīts.\n" +
+                    "Atvēra sagatavoto vēstuli — nokopē un nosūti pa e-pastu.\n\n" +
                     (isInvalidKey
                       ? "RESEND_API_KEY Supabase Edge ir nederīga.\n\n" +
                         "1) Resend.com → API Keys → jauna atslēga\n" +

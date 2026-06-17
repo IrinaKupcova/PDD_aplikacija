@@ -465,8 +465,8 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=2026051312"></script>
-      <script defer src="./Informeshana.js?v=202606166"></script>
-      <script defer src="./IAD.js?v=202606166"></script>
+      <script defer src="./Informeshana.js?v=202606168"></script>
+      <script defer src="./IAD.js?v=202606168"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=20260422l"></script>
@@ -1720,12 +1720,27 @@
             const edgeMsg = String(
               out?.edge?.body?.details?.message || out?.edge?.body?.error || "",
             ).trim();
-            const isInvalidKey = /api key is invalid/i.test(reason + edgeMsg);
+            const isInvalidKey = /api key is invalid|missing_resend_api_key|no_pdd_resend_api/i.test(
+              reason + edgeMsg + String(out?.pddApi?.reason || ""),
+            );
+            const openDraft = globalThis.PDD_OPEN_EMAIL_DRAFT__ || api?.openEmailDraftPanel;
+            if (typeof openDraft === "function") {
+              openDraft({
+                to,
+                subject: api.buildWelcomeSubject ? api.buildWelcomeSubject(row) : "PDD: IAD tests",
+                text: api.buildWelcomeText ? api.buildWelcomeText(row) : "IAD tests",
+                title: "IAD e-pasts — nosūti manuāli",
+                url,
+              });
+            }
             alert(
-              "Tests neizdevās — e-pasts netika nosūtīts automātiski.\n\n" +
+              "Automātiskais tests neizdevās — atvēra sagatavoto vēstuli (nokopē un nosūti pa e-pastu).\n\n" +
                 (isInvalidKey
-                  ? "RESEND_API_KEY Supabase Edge ir nederīga.\n" +
-                    "Izveido jaunu atslēgu Resend.com un ieliec Supabase → Edge Functions → Secrets."
+                  ? "Serverī RESEND_API_KEY nav derīga. Labo:\n" +
+                    "1) resend.com → API Keys\n" +
+                    "2) Supabase → Project Settings → Edge Functions → Secrets → RESEND_API_KEY\n" +
+                    "3) GitHub → Actions → „Supabase Edge — sendEmail + Resend” → Run workflow\n\n" +
+                    "Ja lieto failu no diska (file://), iestati arī Vercel api/pdd-resend vai atver lapu caur GitHub Pages."
                   : reason || edgeMsg || "Nezināma kļūda") +
                 "\n\nPārbaudi arī RESEND_FROM.",
             );
@@ -1733,6 +1748,82 @@
             alert("Tests veiksmīgs — pārbaudi iesūtni: " + to);
           }
           return out;
+        };
+
+        /** Servera diagnostika — pārbauda, vai Supabase Edge Resend atslēga der. */
+        window.PDD_DIAGNOSE_EMAIL = async function PDD_DIAGNOSE_EMAIL() {
+          const cfg = loadConfig();
+          const apiKey = sanitizeHttpHeaderValue(cfg.key || "");
+          const resendApiUrl = getPddResendApiUrl();
+          let accessToken = "";
+          try {
+            const { data } = await supabase.auth.getSession();
+            accessToken = sanitizeHttpHeaderValue(data?.session?.access_token || "");
+          } catch {
+            /* ignore */
+          }
+          const bearer = accessToken || apiKey;
+          const testUrl = String(FILE_PDD_IAD_EMAIL_FN_URL || "").trim() || getIadEmailFnUrls()[0] || "";
+          const report = {
+            resendApiUrl: resendApiUrl || "(nav — file:// bez Vercel)",
+            edgeUrl: testUrl,
+            edgeReachable: false,
+            resendKeyValid: false,
+            httpStatus: 0,
+            message: "",
+            fix: "",
+          };
+          if (!testUrl || !apiKey) {
+            report.message = "Trūkst Supabase URL/atslēgas";
+            report.fix = "Pārbaudi index.html FILE_SUPABASE_URL un anon key";
+            console.warn("[PDD_DIAGNOSE_EMAIL]", report);
+            return report;
+          }
+          try {
+            const r = await fetch(testUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                apikey: apiKey,
+                Authorization: "Bearer " + bearer,
+              },
+              body: JSON.stringify({
+                to: "diagnose@example.com",
+                subject: "PDD diagnose",
+                text: "diagnose",
+              }),
+            });
+            report.httpStatus = r.status;
+            report.edgeReachable = r.status !== 404;
+            const j = await r.json().catch(() => ({}));
+            const msg = String(j?.details?.message || j?.error || "").trim();
+            report.message = msg || JSON.stringify(j).slice(0, 200);
+            const invalidKey = /api key is invalid|missing_resend_api_key/i.test(msg + report.message);
+            report.resendKeyValid = r.ok && !invalidKey;
+            if (invalidKey || r.status === 502) {
+              report.fix =
+                "1) resend.com → API Keys → jauna atslēga (re_...)\n" +
+                "2) Supabase → Project Settings → Edge Functions → Secrets → RESEND_API_KEY\n" +
+                "3) Vai GitHub → Actions → „Sync Resend secret” → Run workflow\n" +
+                "4) Pārlādē lapu un vēlreiz: await PDD_DIAGNOSE_EMAIL()";
+            } else if (r.ok) {
+              report.fix = "Serveris OK — mēģini await PDD_TEST_IAD_EMAIL('tavs@epasts.lv')";
+            }
+          } catch (e) {
+            report.message = String(e?.message || e);
+            report.fix = "Tīkla/CORS kļūda — mēģini atvērt lapu caur GitHub Pages, ne file://";
+          }
+          console.info("[PDD_DIAGNOSE_EMAIL]", report);
+          if (!report.resendKeyValid) {
+            alert(
+              "E-pasta serveris: RESEND_API_KEY Supabase ir NEDERĪGA vai trūkst.\n\n" +
+                report.fix +
+                "\n\n(Detalizēti konsolē — PDD_DIAGNOSE_EMAIL)",
+            );
+          } else {
+            alert("E-pasta serveris izskatās kārtībā. Mēģini: await PDD_TEST_IAD_EMAIL('tavs@epasts.lv')");
+          }
+          return report;
         };
 
         function openManualCitsEmailFallback({ name, veids, startDate, endDate, link }) {
@@ -7669,6 +7760,11 @@
               console.warn("[PDD app changes] neizdevās saglabāt skatījumu kontā", e);
             }
           }
+          function hydrateAppChangesSeenFromMeta(sess) {
+            const metaSeen = readAppChangesSeenFromMeta(sess);
+            if (!metaSeen) return;
+            writeAppChangesSeenId(appChangesSeenStorageKey(), metaSeen);
+          }
           function isAppChangesUnread(latestStamp, storageKey, sess) {
             const latest = appChangesStampId(latestStamp);
             if (!latest) return false;
@@ -7973,6 +8069,7 @@
                 setShowPddAppChangesBadge(false);
                 return;
               }
+              hydrateAppChangesSeenFromMeta(session);
               if (!isAppChangesUnread(latest, seenKey, session)) {
                 setShowPddAppChangesBadge(false);
                 return;
@@ -8049,6 +8146,11 @@
           useEffect(() => {
             deferNonCritical(() => refreshAppChangesBadge());
           }, [refreshAppChangesBadge]);
+          useEffect(() => {
+            if (!session?.user) return;
+            hydrateAppChangesSeenFromMeta(session);
+            deferNonCritical(() => refreshAppChangesBadge());
+          }, [session?.user?.id, session?.user?.user_metadata?.[APP_CHANGES_SEEN_META], refreshAppChangesBadge]);
           useEffect(() => {
             if (view !== "pddAppChanges") {
               setAppChangesHighlightId("");
