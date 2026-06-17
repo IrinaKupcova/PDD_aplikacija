@@ -9,6 +9,7 @@ const corsHeaders = {
 };
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
+const FALLBACK_FROM = "PDD <onboarding@resend.dev>";
 
 function sanitizeHeaderValue(v: unknown): string {
   const s = String(v ?? "").replace(/^\uFEFF/, "").replace(/[\u200B-\u200D\uFEFF]/g, "");
@@ -121,31 +122,57 @@ Deno.serve(async (req: Request) => {
   if (allowCc && bodyCc.length > 0) emailBody.cc = bodyCc;
 
   try {
-    const resendResp = await fetch(RESEND_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${resendApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(emailBody),
-    });
+    const sendOnce = async (body: Record<string, unknown>) => {
+      const resendResp = await fetch(RESEND_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      const raw = await resendResp.text();
+      let parsed: unknown = null;
+      try {
+        parsed = raw ? JSON.parse(raw) : null;
+      } catch {
+        parsed = raw;
+      }
+      return { ok: resendResp.ok, status: resendResp.status, parsed };
+    };
 
-    const raw = await resendResp.text();
-    let parsed: unknown = null;
-    try {
-      parsed = raw ? JSON.parse(raw) : null;
-    } catch {
-      parsed = raw;
+    let sent = await sendOnce(emailBody);
+    const errMsg = String((sent.parsed as { message?: string })?.message ?? "").toLowerCase();
+    const domainUnverified =
+      !sent.ok && (errMsg.includes("domain is not verified") || errMsg.includes("not verified"));
+    if (domainUnverified && !from.toLowerCase().includes("@resend.dev")) {
+      const retryBody: Record<string, unknown> = { ...emailBody, from: FALLBACK_FROM };
+      delete retryBody.cc;
+      const retry = await sendOnce(retryBody);
+      if (retry.ok) {
+        return jsonResponse(
+          {
+            success: true,
+            ok: true,
+            provider: "resend",
+            result: retry.parsed,
+            usedFallbackFrom: true,
+            hint: "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
+          },
+          200,
+        );
+      }
+      sent = retry;
     }
 
-    if (!resendResp.ok) {
+    if (!sent.ok) {
       return jsonResponse(
-        { error: "Resend request failed", status: resendResp.status, details: parsed },
+        { error: "Resend request failed", status: sent.status, details: sent.parsed },
         502,
       );
     }
 
-    return jsonResponse({ success: true, ok: true, provider: "resend", result: parsed }, 200);
+    return jsonResponse({ success: true, ok: true, provider: "resend", result: sent.parsed }, 200);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     return jsonResponse({ error: "Unexpected server error", details: errMsg }, 500);

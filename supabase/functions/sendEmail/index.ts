@@ -9,6 +9,7 @@ const corsHeaders = {
 };
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
+const FALLBACK_FROM = "PDD <onboarding@resend.dev>";
 
 const DEFAULT_APPROVAL_URL =
   "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
@@ -146,6 +147,27 @@ async function sendViaResend(
   return { ok: resendResp.ok, status: resendResp.status, parsed };
 }
 
+async function sendViaResendWithFromFallback(
+  resendApiKey: string,
+  emailBody: Record<string, unknown>,
+  configuredFrom: string,
+): Promise<{ ok: boolean; status: number; parsed: unknown; usedFallbackFrom?: boolean }> {
+  let sent = await sendViaResend(resendApiKey, emailBody);
+  if (sent.ok) return sent;
+  const errMsg = String((sent.parsed as { message?: string })?.message ?? "").toLowerCase();
+  const domainUnverified =
+    !sent.ok && (errMsg.includes("domain is not verified") || errMsg.includes("not verified"));
+  const fromStr = String(emailBody.from ?? configuredFrom).toLowerCase();
+  if (domainUnverified && !fromStr.includes("@resend.dev")) {
+    const retryBody: Record<string, unknown> = { ...emailBody, from: FALLBACK_FROM };
+    delete retryBody.cc;
+    const retry = await sendViaResend(resendApiKey, retryBody);
+    if (retry.ok) return { ...retry, usedFallbackFrom: true };
+    return retry;
+  }
+  return sent;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -205,7 +227,7 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      const sent = await sendViaResend(resendApiKey, emailBody);
+      const sent = await sendViaResendWithFromFallback(resendApiKey, emailBody, from);
       if (!sent.ok) {
         return jsonResponse(
           {
@@ -217,7 +239,18 @@ Deno.serve(async (req: Request) => {
         );
       }
       return jsonResponse(
-        { success: true, ok: true, provider: "resend", result: sent.parsed },
+        {
+          success: true,
+          ok: true,
+          provider: "resend",
+          result: sent.parsed,
+          ...(sent.usedFallbackFrom
+            ? {
+                usedFallbackFrom: true,
+                hint: "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
+              }
+            : {}),
+        },
         200,
       );
     } catch (err) {
@@ -264,7 +297,7 @@ Deno.serve(async (req: Request) => {
       emailBody.cc = ccList;
     }
 
-    const sent = await sendViaResend(resendApiKey, emailBody);
+    const sent = await sendViaResendWithFromFallback(resendApiKey, emailBody, from);
     if (!sent.ok) {
       return jsonResponse(
         {
@@ -276,7 +309,21 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    return jsonResponse({ success: true, ok: true, provider: "resend", result: sent.parsed }, 200);
+    return jsonResponse(
+      {
+        success: true,
+        ok: true,
+        provider: "resend",
+        result: sent.parsed,
+        ...(sent.usedFallbackFrom
+          ? {
+              usedFallbackFrom: true,
+              hint: "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
+            }
+          : {}),
+      },
+      200,
+    );
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const debug = {

@@ -465,8 +465,8 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=2026051312"></script>
-      <script defer src="./Informeshana.js?v=202606168"></script>
-      <script defer src="./IAD.js?v=202606168"></script>
+      <script defer src="./Informeshana.js?v=202606169"></script>
+      <script defer src="./IAD.js?v=202606169"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=20260422l"></script>
@@ -1723,6 +1723,7 @@
             const isInvalidKey = /api key is invalid|missing_resend_api_key|no_pdd_resend_api/i.test(
               reason + edgeMsg + String(out?.pddApi?.reason || ""),
             );
+            const isDomainUnverified = /domain is not verified|not verified/i.test(reason + edgeMsg);
             const openDraft = globalThis.PDD_OPEN_EMAIL_DRAFT__ || api?.openEmailDraftPanel;
             if (typeof openDraft === "function") {
               openDraft({
@@ -1741,7 +1742,14 @@
                     "2) Supabase → Project Settings → Edge Functions → Secrets → RESEND_API_KEY\n" +
                     "3) GitHub → Actions → „Supabase Edge — sendEmail + Resend” → Run workflow\n\n" +
                     "Ja lieto failu no diska (file://), iestati arī Vercel api/pdd-resend vai atver lapu caur GitHub Pages."
-                  : reason || edgeMsg || "Nezināma kļūda") +
+                  : isDomainUnverified
+                    ? "RESEND_FROM izmanto @vid.gov.lv, bet domēns Resend NAV verificēts.\n\n" +
+                      "Ātrais tests — Supabase Secrets → RESEND_FROM:\n" +
+                      "  PDD <onboarding@resend.dev>\n\n" +
+                      "Darba režīmam — resend.com → Domains → pievieno vid.gov.lv un verificē DNS.\n" +
+                      "Tad RESEND_FROM, piem.:\n" +
+                      "  PDD <prombutnes@vid.gov.lv>"
+                    : reason || edgeMsg || "Nezināma kļūda") +
                 "\n\nPārbaudi arī RESEND_FROM.",
             );
           } else {
@@ -1799,13 +1807,17 @@
             const msg = String(j?.details?.message || j?.error || "").trim();
             report.message = msg || JSON.stringify(j).slice(0, 200);
             const invalidKey = /api key is invalid|missing_resend_api_key/i.test(msg + report.message);
+            const domainUnverified = /domain is not verified|not verified/i.test(msg + report.message);
             report.resendKeyValid = r.ok && !invalidKey;
             if (invalidKey || r.status === 502) {
-              report.fix =
-                "1) resend.com → API Keys → jauna atslēga (re_...)\n" +
-                "2) Supabase → Project Settings → Edge Functions → Secrets → RESEND_API_KEY\n" +
-                "3) Vai GitHub → Actions → „Sync Resend secret” → Run workflow\n" +
-                "4) Pārlādē lapu un vēlreiz: await PDD_DIAGNOSE_EMAIL()";
+              report.fix = domainUnverified
+                ? "RESEND_FROM ir @vid.gov.lv, bet domēns nav verificēts Resend.\n" +
+                  "Tests: Supabase Secrets → RESEND_FROM = PDD <onboarding@resend.dev>\n" +
+                  "Darbs: resend.com → Domains → verificē vid.gov.lv"
+                : "1) resend.com → API Keys → jauna atslēga (re_...)\n" +
+                  "2) Supabase → Project Settings → Edge Functions → Secrets → RESEND_API_KEY\n" +
+                  "3) Vai GitHub → Actions → „Sync Resend secret” → Run workflow\n" +
+                  "4) Pārlādē lapu un vēlreiz: await PDD_DIAGNOSE_EMAIL()";
             } else if (r.ok) {
               report.fix = "Serveris OK — mēģini await PDD_TEST_IAD_EMAIL('tavs@epasts.lv')";
             }
