@@ -470,6 +470,10 @@
     return { error: lastError ?? new Error("Neizdevās saglabāt Aizvieto (users / RPC).") };
   }
 
+  function kompetenceFromDbRow(row) {
+    return normalizePapilduKompetence(pickPapilduKompetence(row) || row?.[COL_KOMPETENCE_PAPILDU] || "");
+  }
+
   async function savePapilduKompetenceToSupabase(userId, textValue) {
     const supabase = globalThis.__PDD_SUPABASE__;
     if (!supabase) return { skipped: true, reason: "no_supabase" };
@@ -486,15 +490,26 @@
         p_target_user_id: uid,
         p_kompetence: value,
       });
-      if (!rpcError) return { ok: true, rpc: true, row: rpcData };
+      if (!rpcError && rpcData) {
+        return { ok: true, rpc: true, row: rpcData, column: "Kompetence" };
+      }
       lastError = rpcError;
+      const msg = String(rpcError?.message ?? "");
+      if (/function .* does not exist|could not find the function/i.test(msg)) {
+        lastError = new Error(
+          "Datubāzē nav funkcijas pdd_update_user_kompetence_by_email — palaid migrāciju 20260617120000_users_kompetence_fix.sql Supabase SQL Editor.",
+        );
+        return null;
+      }
       const { data: rpcData2, error: rpcError2 } = await supabase.rpc("pdd_update_user_kompetence_open_by_email", {
         p_actor_email: actorEmail,
         p_target_user_id: uid,
         p_kompetence: value,
       });
-      if (!rpcError2) return { ok: true, rpc: true, row: rpcData2 };
-      lastError = rpcError2;
+      if (!rpcError2 && rpcData2) {
+        return { ok: true, rpc: true, row: rpcData2, column: "Kompetence" };
+      }
+      lastError = rpcError2 || rpcError;
       return null;
     }
 
@@ -508,10 +523,13 @@
       const { data, error } = await supabase.from("users").update(payload).eq("id", uid).select("id").limit(1);
       if (!error) {
         if (Array.isArray(data) && data.length > 0) return { ok: true, column: col };
-        if (Array.isArray(data) && data.length === 0) return { ok: true, column: col };
-        const { error: eBare } = await supabase.from("users").update(payload).eq("id", uid);
-        if (!eBare) return { ok: true, column: col };
-        lastError = eBare;
+        const { data: data2, error: eBare } = await supabase.from("users").update(payload).eq("id", uid).select("id").limit(1);
+        if (!eBare && Array.isArray(data2) && data2.length > 0) return { ok: true, column: col };
+        if (!eBare) {
+          lastError = new Error("Kompetence netika saglabāta — nav tiesību tieši rakstīt users tabulā (izmanto RPC).");
+        } else {
+          lastError = eBare;
+        }
         break;
       }
       const msg = String(error?.message ?? "");
@@ -574,11 +592,26 @@
         error: new Error(
           msg.includes("nav atrasts public.users")
             ? "Tavs e-pasts nav sinhronizēts ar komandas tabulu (public.users). Piesakies ar darba e-pastu, kas tur ir reģistrēts."
-            : msg || "Neizdevās saglabāt kompetences aprakstu."
+            : msg.includes("pdd_update_user_kompetence")
+              ? msg
+              : msg || "Neizdevās saglabāt kompetences aprakstu DB."
         ),
       };
     }
-    if (db?.row) applyDbRowToLocalCache(db.row);
+    if (db?.row) {
+      applyDbRowToLocalCache(db.row);
+      const savedText = kompetenceFromDbRow(db.row);
+      if (savedText !== nextText && nextText) {
+        return {
+          ok: false,
+          user: users[targetIndex],
+          synced: false,
+          error: new Error(
+            "Kompetence netika saglabāta datubāzē. Palaid Supabase SQL migrāciju 20260617120000_users_kompetence_fix.sql.",
+          ),
+        };
+      }
+    }
     if (db?.skipped) return { ok: true, user: users[targetIndex], synced: false };
     return { ok: true, user: loadTeamUsers().find((u) => String(u.id) === uid) || users[targetIndex], synced: true };
   }
