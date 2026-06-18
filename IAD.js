@@ -1048,6 +1048,7 @@
         padding:.35rem .45rem;
         background:#f8fafc;
         border-bottom:1px solid #e2e8f0;
+        font-weight:400;
       }
       .iad-filter-row .input,
       .iad-filter-row .select {
@@ -1075,6 +1076,7 @@
         align-items:flex-start;
         gap:.35rem;
         font-size:.74rem;
+        font-weight:400;
         line-height:1.25;
         cursor:pointer;
         padding:.14rem .18rem;
@@ -1091,6 +1093,7 @@
       }
       .iad-filter-check span {
         word-break:break-word;
+        font-weight:400;
       }
       .iad-list-pin-btn {
         border:1px solid #fecaca;

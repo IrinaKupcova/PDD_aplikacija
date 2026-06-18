@@ -466,7 +466,7 @@
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=202606181"></script>
       <script defer src="./Informeshana.js?v=202606170"></script>
-      <script defer src="./IAD.js?v=202606172"></script>
+      <script defer src="./IAD.js?v=202606182"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=20260422l"></script>
@@ -7788,19 +7788,71 @@
           function readAppChangesSeenFromMeta(sess) {
             return appChangesStampId(sess?.user?.user_metadata?.[APP_CHANGES_SEEN_META]);
           }
+          async function collectAppChangesActorEmails() {
+            const out = [];
+            const push = (raw) => {
+              const s = String(raw ?? "").trim().toLowerCase();
+              if (s && s.includes("@") && !out.includes(s)) out.push(s);
+            };
+            const { em } = appChangesIdentity();
+            push(em);
+            push(session?.user?.email);
+            push(profile?.email);
+            try {
+              push(sessionStorage.getItem(LS_LOCAL_EMAIL));
+            } catch {
+              /* ignore */
+            }
+            push(globalThis.__PDD_ACTOR_EMAIL__);
+            return out;
+          }
+          async function fetchAppChangesSeenFromDb(sb) {
+            if (!sb) return "";
+            const emails = await collectAppChangesActorEmails();
+            if (!emails.length) return "";
+            try {
+              await ensureDbReadableSession();
+              for (const em of emails) {
+                const { data, error } = await sb.rpc("pdd_get_app_changes_seen_by_email", { p_actor_email: em });
+                if (error) {
+                  const msg = String(error?.message ?? "");
+                  if (/function .* does not exist|could not find the function/i.test(msg)) break;
+                  continue;
+                }
+                const id = appChangesStampId(data);
+                if (id) return id;
+              }
+            } catch {
+              /* ignore */
+            }
+            return "";
+          }
+          async function persistAppChangesSeenToDb(sb, stampOrId) {
+            const id = appChangesStampId(stampOrId);
+            if (!sb || !id) return false;
+            const emails = await collectAppChangesActorEmails();
+            if (!emails.length) return false;
+            try {
+              await ensureDbReadableSession();
+              for (const em of emails) {
+                const { data, error } = await sb.rpc("pdd_set_app_changes_seen_by_email", {
+                  p_actor_email: em,
+                  p_seen_id: id,
+                });
+                if (!error) {
+                  return Boolean(appChangesStampId(data) || id);
+                }
+                const msg = String(error?.message ?? "");
+                if (/function .* does not exist|could not find the function/i.test(msg)) break;
+              }
+            } catch (e) {
+              console.warn("[PDD app changes] neizdevās saglabāt skatījumu DB", e);
+            }
+            return false;
+          }
           async function syncAppChangesSeen(sb, sess, storageKey, stampOrId) {
             writeAppChangesSeenId(storageKey, stampOrId);
-            const id = appChangesStampId(stampOrId);
-            if (!id || !sb?.auth?.updateUser || !sess?.user) return;
-            try {
-              const prev = sess.user.user_metadata?.[APP_CHANGES_SEEN_META];
-              if (appChangesStampId(prev) === id) return;
-              await sb.auth.updateUser({
-                data: { ...(sess.user.user_metadata ?? {}), [APP_CHANGES_SEEN_META]: id },
-              });
-            } catch (e) {
-              console.warn("[PDD app changes] neizdevās saglabāt skatījumu kontā", e);
-            }
+            await persistAppChangesSeenToDb(sb, stampOrId);
           }
           function hydrateAppChangesSeenFromMeta(sess) {
             const metaSeen = readAppChangesSeenFromMeta(sess);
@@ -8111,6 +8163,8 @@
                 setShowPddAppChangesBadge(false);
                 return;
               }
+              const dbSeen = await fetchAppChangesSeenFromDb(sb);
+              if (dbSeen) writeAppChangesSeenId(seenKey, dbSeen);
               hydrateAppChangesSeenFromMeta(session);
               if (!isAppChangesUnread(latest, seenKey, session)) {
                 setShowPddAppChangesBadge(false);
@@ -8191,8 +8245,14 @@
           useEffect(() => {
             if (!session?.user) return;
             hydrateAppChangesSeenFromMeta(session);
-            deferNonCritical(() => refreshAppChangesBadge());
-          }, [session?.user?.id, session?.user?.user_metadata?.[APP_CHANGES_SEEN_META], refreshAppChangesBadge]);
+            void (async () => {
+              const sb = globalThis.__PDD_SUPABASE__;
+              const seenKey = appChangesSeenStorageKey();
+              const dbSeen = await fetchAppChangesSeenFromDb(sb);
+              if (dbSeen) writeAppChangesSeenId(seenKey, dbSeen);
+              deferNonCritical(() => refreshAppChangesBadge());
+            })();
+          }, [session?.user?.id, session?.user?.email, session?.user?.user_metadata?.[APP_CHANGES_SEEN_META], refreshAppChangesBadge]);
           useEffect(() => {
             if (view !== "pddAppChanges") {
               setAppChangesHighlightId("");

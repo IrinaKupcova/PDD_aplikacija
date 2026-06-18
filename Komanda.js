@@ -339,16 +339,13 @@
     }
     if (row) {
       const em = pickEmailForRpcFromUserRow(row);
-      if (em && supabase?.from) {
+      if (em && supabase?.rpc) {
         try {
-          const { data } = await supabase
-            .from("users")
-            .select("id")
-            .or(`email.eq.${em},i-mail.eq.${em},e-mail.eq.${em}`)
-            .limit(1)
-            .maybeSingle();
-          const found = String(data?.id ?? "").trim();
-          if (found) return found;
+          const { data, error } = await supabase.rpc("pdd_lookup_user_by_email", { p_email: em });
+          if (!error && Array.isArray(data) && data.length) {
+            const found = String(data[0]?.user_id ?? data[0]?.id ?? "").trim();
+            if (found) return found;
+          }
         } catch {
           /* ignore */
         }
@@ -725,6 +722,18 @@
     }
     if (db?.row) {
       applyDbRowToLocalCache(db.row);
+      const savedId = String(db.row.id ?? "").trim();
+      if (savedId && savedId !== uid) {
+        const refreshed = loadTeamUsers();
+        const uiIdx = refreshed.findIndex((u) => String(u.id) === uid);
+        if (uiIdx >= 0) {
+          refreshed[uiIdx] = normalizeUser({
+            ...refreshed[uiIdx],
+            [COL_KOMPETENCE_PAPILDU]: kompetenceFromDbRow(db.row),
+          });
+          saveTeamUsers(refreshed);
+        }
+      }
       const savedText = kompetenceFromDbRow(db.row);
       if (savedText !== nextText && nextText) {
         return {
