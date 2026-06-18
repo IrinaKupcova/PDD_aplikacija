@@ -314,44 +314,70 @@
     };
   }
 
-  async function resolveDbUserIdForSave(userId, supabase) {
+  function isUuidLike(v) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(v ?? ""));
+  }
+
+  async function ensureDbSessionForKomanda(supabase) {
+    const fn = globalThis.__PDD_ENSURE_DB_SESSION__;
+    if (typeof fn === "function") {
+      try {
+        await fn();
+      } catch {
+        /* ignore */
+      }
+    } else if (supabase?.auth?.getSession) {
+      try {
+        const s = await supabase.auth.getSession();
+        if (!s?.data?.session?.access_token && supabase.auth.signInAnonymously) {
+          await supabase.auth.signInAnonymously();
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  async function lookupUserIdByEmailRpc(supabase, email) {
+    const em = String(email ?? "").trim().toLowerCase();
+    if (!em || !em.includes("@") || !supabase?.rpc) return "";
+    try {
+      const { data, error } = await supabase.rpc("pdd_lookup_user_by_email", { p_email: em });
+      if (error || !Array.isArray(data) || !data.length) return "";
+      const r0 = data[0];
+      return String(r0?.user_id ?? r0?.id ?? "").trim();
+    } catch {
+      return "";
+    }
+  }
+
+  async function resolveTargetUserIdForKompetence(userId, supabase) {
     const uid = String(userId ?? "").trim();
     if (!uid) return uid;
-    if (!isSelfTeamRow(uid)) return uid;
-    const list = loadTeamUsers();
-    const row = list.find((u) => String(u?.id ?? "").trim() === uid);
-    const rowEmails = collectTeamUserEmails(row);
-    const actorEmails = await collectActorEmailsForRpc(supabase);
-    const overlap = actorEmails.filter((em) => rowEmails.includes(em));
-    const lookupEmails = overlap.length ? overlap : actorEmails;
-    if (supabase?.rpc) {
-      for (const em of lookupEmails) {
-        try {
-          const { data, error } = await supabase.rpc("pdd_lookup_user_by_email", { p_email: em });
-          if (error || !Array.isArray(data) || !data.length) continue;
-          const r0 = data[0];
-          const found = String(r0?.user_id ?? r0?.id ?? "").trim();
+    const row = loadTeamUsers().find((u) => String(u?.id ?? "").trim() === uid);
+    const emails = collectTeamUserEmails(row);
+    if (supabase) {
+      for (const em of emails) {
+        const found = await lookupUserIdByEmailRpc(supabase, em);
+        if (found) return found;
+      }
+      if (isSelfTeamRow(uid)) {
+        const actorEmails = await collectActorEmailsForRpc(supabase);
+        for (const em of actorEmails) {
+          const found = await lookupUserIdByEmailRpc(supabase, em);
           if (found) return found;
-        } catch {
-          /* ignore */
         }
       }
     }
-    if (row) {
-      const em = pickEmailForRpcFromUserRow(row);
-      if (em && supabase?.rpc) {
-        try {
-          const { data, error } = await supabase.rpc("pdd_lookup_user_by_email", { p_email: em });
-          if (!error && Array.isArray(data) && data.length) {
-            const found = String(data[0]?.user_id ?? data[0]?.id ?? "").trim();
-            if (found) return found;
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    return uid;
+    return isUuidLike(uid) ? uid : uid;
+  }
+
+  function kompetenceRpcActorNotFoundError(err) {
+    const msg = String(err?.message ?? err ?? "");
+    if (!/nav atrasts public\.users pēc e-pasta/i.test(msg)) return null;
+    return new Error(
+      "Tavs e-pasts ir public.users tabulā kolonnā \"e-mail\", bet serverī nav atjaunināta kompetences saglabāšanas funkcija. Administrators: palaid supabase/migrations/20260618120000_pdd_self_kompetence_by_email.sql (vai scripts/apply-kompetence-migration.ps1).",
+    );
   }
 
   function notifyTeamUsersChanged() {
@@ -565,15 +591,17 @@
     return normalizePapilduKompetence(pickPapilduKompetence(row) || row?.[COL_KOMPETENCE_PAPILDU] || "");
   }
 
-  async function savePapilduKompetenceToSupabase(userId, textValue) {
+  async function savePapilduKompetenceToSupabase(userId, textValue, opts = {}) {
     const supabase = globalThis.__PDD_SUPABASE__;
     if (!supabase) return { skipped: true, reason: "no_supabase" };
+    const uiUid = String(opts.uiUserId ?? userId ?? "").trim();
     const rawUid = String(userId ?? "").trim();
     if (!rawUid) return { error: new Error("Trūkst userId.") };
-    const uid = await resolveDbUserIdForSave(rawUid, supabase);
+    await ensureDbSessionForKomanda(supabase);
+    const uid = await resolveTargetUserIdForKompetence(rawUid, supabase);
     const value = normalizePapilduKompetence(textValue) || null;
     const actorEmails = await collectActorEmailsForRpc(supabase);
-    const selfRow = isSelfTeamRow(rawUid);
+    const selfRow = isSelfTeamRow(uiUid || rawUid);
     let lastError = null;
 
     async function trySelfRpc(actorEmail) {
@@ -586,12 +614,10 @@
         return { ok: true, rpc: true, row: rpcData, column: "Kompetence", self: true };
       }
       if (rpcError) {
-        lastError = rpcError;
+        lastError = kompetenceRpcActorNotFoundError(rpcError) || rpcError;
         const msg = String(rpcError?.message ?? "");
         if (/function .* does not exist|could not find the function/i.test(msg)) {
-          lastError = new Error(
-            "Datubāzē nav funkcijas pdd_update_self_kompetence_by_email — palaid migrāciju 20260618120000_pdd_self_kompetence_by_email.sql Supabase SQL Editor.",
-          );
+          lastError = null;
         }
       }
       return null;
@@ -607,11 +633,11 @@
       if (!rpcError && rpcData) {
         return { ok: true, rpc: true, row: rpcData, column: "Kompetence" };
       }
-      lastError = rpcError;
+      lastError = kompetenceRpcActorNotFoundError(rpcError) || rpcError;
       const msg = String(rpcError?.message ?? "");
       if (/function .* does not exist|could not find the function/i.test(msg)) {
         lastError = new Error(
-          "Datubāzē nav kompetences saglabāšanas funkcijas — palaid migrāciju 20260618120000_pdd_self_kompetence_by_email.sql Supabase SQL Editor.",
+          "Datubāzē nav kompetences saglabāšanas funkcijas — palaid scripts/apply-kompetence-migration.ps1 vai SQL migrāciju 20260618120000_pdd_self_kompetence_by_email.sql.",
         );
         return null;
       }
@@ -623,7 +649,7 @@
       if (!rpcError2 && rpcData2) {
         return { ok: true, rpc: true, row: rpcData2, column: "Kompetence" };
       }
-      lastError = rpcError2 || rpcError;
+      lastError = kompetenceRpcActorNotFoundError(rpcError2 || rpcError) || rpcError2 || rpcError;
       return null;
     }
 
@@ -677,7 +703,6 @@
 
     const sb = globalThis.__PDD_SUPABASE__;
     await ensureUserInLocalCache(uid, sb);
-    const dbUid = sb ? await resolveDbUserIdForSave(uid, sb) : uid;
 
     const users = loadTeamUsers();
     const i = users.findIndex((u) => String(u.id) === uid);
@@ -704,7 +729,7 @@
     saveTeamUsers(users);
 
     if (!syncDb) return { ok: true, user: users[targetIndex], synced: false };
-    const db = await savePapilduKompetenceToSupabase(dbUid !== uid ? dbUid : uid, nextText);
+    const db = await savePapilduKompetenceToSupabase(uid, nextText, { uiUserId: uid });
     if (db?.error) {
       const msg = String(db.error?.message ?? db.error ?? "");
       return {
@@ -712,11 +737,13 @@
         user: users[targetIndex],
         synced: false,
         error: new Error(
-          msg.includes("nav atrasts public.users")
-            ? "Tavs e-pasts nav sinhronizēts ar komandas tabulu (public.users). Piesakies ar darba e-pastu, kas tur ir reģistrēts."
-            : msg.includes("pdd_update_user_kompetence")
-              ? msg
-              : msg || "Neizdevās saglabāt kompetences aprakstu DB."
+          msg.includes("nav atjaunināta kompetences") || msg.includes("apply-kompetence-migration")
+            ? msg
+            : msg.includes("nav atrasts public.users")
+              ? "Tavs e-pasts nav sinhronizēts ar komandas tabulu (public.users). Piesakies ar darba e-pastu, kas tur ir reģistrēts."
+              : msg.includes("pdd_update_user_kompetence") || msg.includes("pdd_update_self_kompetence")
+                ? msg
+                : msg || "Neizdevās saglabāt kompetences aprakstu DB."
         ),
       };
     }
@@ -735,13 +762,13 @@
         }
       }
       const savedText = kompetenceFromDbRow(db.row);
-      if (savedText !== nextText && nextText) {
+      if (savedText !== nextText && nextText && !db?.self) {
         return {
           ok: false,
           user: users[targetIndex],
           synced: false,
           error: new Error(
-            "Kompetence netika saglabāta datubāzē. Palaid Supabase SQL migrāciju 20260618120000_pdd_self_kompetence_by_email.sql.",
+            "Kompetence netika saglabāta datubāzē. Palaid scripts/apply-kompetence-migration.ps1 (vai SQL migrāciju 20260618120000_pdd_self_kompetence_by_email.sql).",
           ),
         };
       }
