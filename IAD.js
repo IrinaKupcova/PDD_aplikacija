@@ -1054,6 +1054,44 @@
         width:100%;
         font-size:.78rem;
       }
+      .iad-filter-checks {
+        max-height:7.5rem;
+        overflow-y:auto;
+        overflow-x:hidden;
+        border:1px solid #dbeafe;
+        border-radius:8px;
+        background:#fff;
+        padding:.2rem;
+        display:grid;
+        gap:.1rem;
+      }
+      .iad-filter-checks--empty {
+        font-size:.74rem;
+        color:#64748b;
+        padding:.25rem .15rem;
+      }
+      .iad-filter-check {
+        display:flex;
+        align-items:flex-start;
+        gap:.35rem;
+        font-size:.74rem;
+        line-height:1.25;
+        cursor:pointer;
+        padding:.14rem .18rem;
+        border-radius:6px;
+        margin:0;
+      }
+      .iad-filter-check:hover {
+        background:#f1f5f9;
+      }
+      .iad-filter-check input {
+        margin-top:.12rem;
+        flex-shrink:0;
+        cursor:pointer;
+      }
+      .iad-filter-check span {
+        word-break:break-word;
+      }
       .iad-list-pin-btn {
         border:1px solid #fecaca;
         background:#fff5f5;
@@ -1226,8 +1264,26 @@
       const [pendingFocusTask, setPendingFocusTask] = useState(null);
       const hasFocusRequest = Boolean(pendingFocusTask || focusTask || globalThis.__PDD_IAD_OPEN_TARGET__);
       const [listFilters, setListFilters] = useState({
-        current: { numurs: "", ieteikumaNr: "", nosaukums: "", tema: "", nodotsIzpildei: "", termins: "", atbildigais: "", statuss: "" },
-        done: { numurs: "", ieteikumaNr: "", nosaukums: "", tema: "", nodotsIzpildei: "", termins: "", atbildigais: "", statuss: "" },
+        current: {
+          numurs: [],
+          ieteikumaNr: [],
+          nosaukums: [],
+          tema: [],
+          nodotsIzpildei: [],
+          termins: [],
+          atbildigais: [],
+          statuss: [],
+        },
+        done: {
+          numurs: [],
+          ieteikumaNr: [],
+          nosaukums: [],
+          tema: [],
+          nodotsIzpildei: [],
+          termins: [],
+          atbildigais: [],
+          statuss: [],
+        },
       });
       const [sectionSearch, setSectionSearch] = useState({ current: "", done: "" });
       const [searchBoxOpen, setSearchBoxOpen] = useState({ current: false, done: false });
@@ -1283,9 +1339,34 @@
         if (colKey === "nosaukums") return String(row?.IAD_nosaukums ?? "").trim();
         if (colKey === "tema") return String(row?.IAD_ieteikuma_tema ?? "").trim();
         if (colKey === "nodotsIzpildei") return String(row?.Nodots_izpildei ?? "").trim();
+        if (colKey === "termins") return toDateInputValue(row?.IAD_termins) || "";
         if (colKey === "atbildigais") return formatPersonField(row?.Atbildigais);
         if (colKey === "statuss") return statusLabel(row?.IAD_statuss);
         return "";
+      }
+
+      function normalizeFilterValues(value) {
+        if (Array.isArray(value)) {
+          return [...new Set(value.map((v) => String(v ?? "").trim()).filter(Boolean))];
+        }
+        const single = String(value ?? "").trim();
+        return single ? [single] : [];
+      }
+
+      function getColumnFilterValues(sectionKey, colKey) {
+        const raw = listFilters?.[sectionKey]?.[colKey];
+        return normalizeFilterValues(raw);
+      }
+
+      function rowMatchesFilterColumn(row, colKey, selectedValues) {
+        const picked = normalizeFilterValues(selectedValues);
+        if (!picked.length) return true;
+        const cell = listRowFilterValue(row, colKey);
+        if (colKey === "termins") {
+          const rowDate = toDateInputValue(row?.IAD_termins);
+          return picked.some((v) => toDateInputValue(v) === rowDate);
+        }
+        return picked.includes(cell);
       }
 
       function buildListFilterOptions(rowsList, colKey) {
@@ -1309,14 +1390,14 @@
         const f = listFilters?.[sectionKey] || {};
         const sectionNeedle = sectionSearch?.[sectionKey] || "";
         return src.filter((row) => {
-          if (f.numurs && listRowFilterValue(row, "numurs") !== String(f.numurs).trim()) return false;
-          if (f.ieteikumaNr && listRowFilterValue(row, "ieteikumaNr") !== String(f.ieteikumaNr).trim()) return false;
-          if (f.nosaukums && listRowFilterValue(row, "nosaukums") !== String(f.nosaukums).trim()) return false;
-          if (f.tema && listRowFilterValue(row, "tema") !== String(f.tema).trim()) return false;
-          if (f.nodotsIzpildei && listRowFilterValue(row, "nodotsIzpildei") !== String(f.nodotsIzpildei).trim()) return false;
-          if (f.termins && toDateInputValue(row?.IAD_termins) !== toDateInputValue(f.termins)) return false;
-          if (f.atbildigais && listRowFilterValue(row, "atbildigais") !== String(f.atbildigais).trim()) return false;
-          if (f.statuss && listRowFilterValue(row, "statuss") !== String(f.statuss).trim()) return false;
+          if (!rowMatchesFilterColumn(row, "numurs", f.numurs)) return false;
+          if (!rowMatchesFilterColumn(row, "ieteikumaNr", f.ieteikumaNr)) return false;
+          if (!rowMatchesFilterColumn(row, "nosaukums", f.nosaukums)) return false;
+          if (!rowMatchesFilterColumn(row, "tema", f.tema)) return false;
+          if (!rowMatchesFilterColumn(row, "nodotsIzpildei", f.nodotsIzpildei)) return false;
+          if (!rowMatchesFilterColumn(row, "termins", f.termins)) return false;
+          if (!rowMatchesFilterColumn(row, "atbildigais", f.atbildigais)) return false;
+          if (!rowMatchesFilterColumn(row, "statuss", f.statuss)) return false;
           if (!rowHasSearchHit(row, sectionNeedle)) return false;
           return true;
         });
@@ -1325,8 +1406,16 @@
       function setColumnFilter(sectionKey, colKey, value) {
         setListFilters((prev) => ({
           ...prev,
-          [sectionKey]: { ...(prev?.[sectionKey] || {}), [colKey]: String(value ?? "") },
+          [sectionKey]: { ...(prev?.[sectionKey] || {}), [colKey]: normalizeFilterValues(value) },
         }));
+      }
+
+      function toggleColumnFilterValue(sectionKey, colKey, value, checked) {
+        const v = String(value ?? "").trim();
+        if (!v) return;
+        const cur = getColumnFilterValues(sectionKey, colKey);
+        const next = checked ? [...new Set([...cur, v])] : cur.filter((x) => x !== v);
+        setColumnFilter(sectionKey, colKey, next);
       }
 
       function setSectionSearchValue(sectionKey, value) {
@@ -1338,12 +1427,11 @@
       }
 
       function clearColumnFilter(sectionKey, colKey) {
-        setColumnFilter(sectionKey, colKey, "");
+        setColumnFilter(sectionKey, colKey, []);
       }
 
       function isColumnFilterActive(sectionKey, colKey) {
-        const f = listFilters?.[sectionKey] || {};
-        return String(f[colKey] ?? "").trim() !== "";
+        return getColumnFilterValues(sectionKey, colKey).length > 0;
       }
 
       function onColumnFilterBtnClick(sectionKey, colKey) {
@@ -2583,7 +2671,6 @@
 
       function renderList(rowsList, emptyText, sectionKey) {
         const filteredRows = applyListFiltering(rowsList, sectionKey);
-        const f = listFilters?.[sectionKey] || {};
         const filtersOpen = Boolean(filterRowOpen?.[sectionKey]);
         const filterOptions = {
           numurs: buildListFilterOptions(rowsList, "numurs"),
@@ -2591,26 +2678,38 @@
           nosaukums: buildListFilterOptions(rowsList, "nosaukums"),
           tema: buildListFilterOptions(rowsList, "tema"),
           nodotsIzpildei: buildListFilterOptions(rowsList, "nodotsIzpildei"),
+          termins: buildListFilterOptions(rowsList, "termins"),
           atbildigais: buildListFilterOptions(rowsList, "atbildigais"),
           statuss: buildListFilterOptions(rowsList, "statuss"),
         };
         const filterFunnel = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M22 3H2l8 9v7l4 2v-9l8-9z"></path>
         </svg>`;
-        function filterSelect(colKey) {
+        function filterCheckboxList(colKey) {
           const options = filterOptions[colKey] ?? [];
-          return html`<select
-            class="select"
-            value=${f[colKey] || ""}
-            onChange=${(e) => setColumnFilter(sectionKey, colKey, e.target.value)}
-          >
-            <option value="">Visi</option>
-            ${options.map(
-              (o) => html`
-                <option key=${`${colKey}-${o.value}`} value=${o.value}>${o.label}</option>
-              `
-            )}
-          </select>`;
+          const selected = new Set(getColumnFilterValues(sectionKey, colKey));
+          if (!options.length) {
+            return html`<div class="iad-filter-checks iad-filter-checks--empty">Nav vērtību</div>`;
+          }
+          return html`<div class="iad-filter-checks" role="group" aria-label="Filtrs">
+            ${options.map((o) => {
+              const label =
+                colKey === "termins" && o.value ? displayDate(o.value) || o.label : o.label;
+              const checkId = `iad-f-${sectionKey}-${colKey}-${String(o.value).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48)}`;
+              const isOn = selected.has(o.value);
+              return html`
+                <label class="iad-filter-check" key=${`${colKey}-${o.value}`} for=${checkId} title=${o.value}>
+                  <input
+                    type="checkbox"
+                    id=${checkId}
+                    checked=${isOn}
+                    onChange=${(e) => toggleColumnFilterValue(sectionKey, colKey, o.value, e.target.checked)}
+                  />
+                  <span>${label}</span>
+                </label>
+              `;
+            })}
+          </div>`;
         }
         function filterBtn(colKey) {
           const active = isColumnFilterActive(sectionKey, colKey);
@@ -2844,21 +2943,14 @@
                 </tr>
                 ${filtersOpen
                   ? html`<tr class="iad-filter-row">
-                      <th>${filterSelect("numurs")}</th>
-                      <th>${filterSelect("ieteikumaNr")}</th>
-                      <th>${filterSelect("nosaukums")}</th>
-                      <th class="iad-col-tema">${filterSelect("tema")}</th>
-                      <th>${filterSelect("nodotsIzpildei")}</th>
-                      <th>
-                        <input
-                          type="date"
-                          class="input"
-                          value=${toDateInputValue(f.termins) || ""}
-                          onChange=${(e) => setColumnFilter(sectionKey, "termins", e.target.value)}
-                        />
-                      </th>
-                      <th>${filterSelect("atbildigais")}</th>
-                      <th>${filterSelect("statuss")}</th>
+                      <th>${filterCheckboxList("numurs")}</th>
+                      <th>${filterCheckboxList("ieteikumaNr")}</th>
+                      <th>${filterCheckboxList("nosaukums")}</th>
+                      <th class="iad-col-tema">${filterCheckboxList("tema")}</th>
+                      <th>${filterCheckboxList("nodotsIzpildei")}</th>
+                      <th>${filterCheckboxList("termins")}</th>
+                      <th>${filterCheckboxList("atbildigais")}</th>
+                      <th>${filterCheckboxList("statuss")}</th>
                       <th></th>
                     </tr>`
                   : null}
