@@ -157,6 +157,58 @@
     return String(v ?? "").trim().slice(0, 4000);
   }
 
+  function collectTeamUserEmails(u) {
+    const out = [];
+    const push = (raw) => {
+      const s = String(raw ?? "").trim().toLowerCase();
+      if (s && s.includes("@") && !out.includes(s)) out.push(s);
+    };
+    if (!u || typeof u !== "object") return out;
+    push(u.email);
+    push(u["i-mail"]);
+    push(u["e-mail"]);
+    return out;
+  }
+
+  function collectActorEmailsSync() {
+    const out = [];
+    const push = (raw) => {
+      const s = String(raw ?? "").trim().toLowerCase();
+      if (s && s.includes("@") && !out.includes(s)) out.push(s);
+    };
+    push(globalThis.__PDD_ACTOR_EMAIL__);
+    try {
+      push(sessionStorage.getItem("pdd_local_email"));
+    } catch {
+      /* ignore */
+    }
+    const actor = getCurrentLocalActor();
+    const list = loadTeamUsers();
+    const me =
+      list.find((u) => String(u?.id ?? "").trim() === String(actor?.id ?? "").trim()) ||
+      list.find((u) => {
+        const emails = collectTeamUserEmails(u);
+        return emails.some((em) => out.includes(em));
+      });
+    if (me) {
+      for (const em of collectTeamUserEmails(me)) push(em);
+      push(pickEmailForRpcFromUserRow(me));
+    }
+    return out;
+  }
+
+  function isSelfTeamRow(targetUserId) {
+    const tid = String(targetUserId ?? "").trim();
+    if (!tid) return false;
+    const ids = resolveActorTeamIds();
+    if (ids.has(tid)) return true;
+    const actorEmails = new Set(collectActorEmailsSync());
+    if (!actorEmails.size) return false;
+    const target = loadTeamUsers().find((u) => String(u?.id ?? "").trim() === tid);
+    if (!target) return false;
+    return collectTeamUserEmails(target).some((em) => actorEmails.has(em));
+  }
+
   function resolveActorTeamIds() {
     const ids = new Set();
     const actor = getCurrentLocalActor();
@@ -248,19 +300,61 @@
     saveTeamUsers(users);
   }
 
-  /** Administrators var labot jebkuru; parastais lietotājs — tikai savu ierakstu. */
+  /** Administrators var labot jebkuru; parastais lietotājs — tikai savu ierakstu (pēc ID vai e-pasta). */
   function assertMayEditTeamUserRow(targetUserId) {
     const tid = String(targetUserId ?? "").trim();
     if (!tid) return { ok: false, error: new Error("Trūkst userId.") };
     if (isGlobalActorAdmin()) return { ok: true };
     const actor = getCurrentLocalActor();
     if (actor.role === "admin") return { ok: true };
-    const ids = resolveActorTeamIds();
-    if (ids.has(tid)) return { ok: true };
+    if (isSelfTeamRow(tid)) return { ok: true };
     return {
       ok: false,
       error: new Error("Tikai administrators vai pats lietotājs var mainīt šo informāciju."),
     };
+  }
+
+  async function resolveDbUserIdForSave(userId, supabase) {
+    const uid = String(userId ?? "").trim();
+    if (!uid) return uid;
+    if (!isSelfTeamRow(uid)) return uid;
+    const list = loadTeamUsers();
+    const row = list.find((u) => String(u?.id ?? "").trim() === uid);
+    const rowEmails = collectTeamUserEmails(row);
+    const actorEmails = await collectActorEmailsForRpc(supabase);
+    const overlap = actorEmails.filter((em) => rowEmails.includes(em));
+    const lookupEmails = overlap.length ? overlap : actorEmails;
+    if (supabase?.rpc) {
+      for (const em of lookupEmails) {
+        try {
+          const { data, error } = await supabase.rpc("pdd_lookup_user_by_email", { p_email: em });
+          if (error || !Array.isArray(data) || !data.length) continue;
+          const r0 = data[0];
+          const found = String(r0?.user_id ?? r0?.id ?? "").trim();
+          if (found) return found;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    if (row) {
+      const em = pickEmailForRpcFromUserRow(row);
+      if (em && supabase?.from) {
+        try {
+          const { data } = await supabase
+            .from("users")
+            .select("id")
+            .or(`email.eq.${em},i-mail.eq.${em},e-mail.eq.${em}`)
+            .limit(1)
+            .maybeSingle();
+          const found = String(data?.id ?? "").trim();
+          if (found) return found;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return uid;
   }
 
   function notifyTeamUsersChanged() {
@@ -477,11 +571,34 @@
   async function savePapilduKompetenceToSupabase(userId, textValue) {
     const supabase = globalThis.__PDD_SUPABASE__;
     if (!supabase) return { skipped: true, reason: "no_supabase" };
-    const uid = String(userId ?? "").trim();
-    if (!uid) return { error: new Error("Trūkst userId.") };
+    const rawUid = String(userId ?? "").trim();
+    if (!rawUid) return { error: new Error("Trūkst userId.") };
+    const uid = await resolveDbUserIdForSave(rawUid, supabase);
     const value = normalizePapilduKompetence(textValue) || null;
     const actorEmails = await collectActorEmailsForRpc(supabase);
+    const selfRow = isSelfTeamRow(rawUid);
     let lastError = null;
+
+    async function trySelfRpc(actorEmail) {
+      if (!actorEmail || !selfRow) return null;
+      const { data: rpcData, error: rpcError } = await supabase.rpc("pdd_update_self_kompetence_by_email", {
+        p_actor_email: actorEmail,
+        p_kompetence: value,
+      });
+      if (!rpcError && rpcData) {
+        return { ok: true, rpc: true, row: rpcData, column: "Kompetence", self: true };
+      }
+      if (rpcError) {
+        lastError = rpcError;
+        const msg = String(rpcError?.message ?? "");
+        if (/function .* does not exist|could not find the function/i.test(msg)) {
+          lastError = new Error(
+            "Datubāzē nav funkcijas pdd_update_self_kompetence_by_email — palaid migrāciju 20260618120000_pdd_self_kompetence_by_email.sql Supabase SQL Editor.",
+          );
+        }
+      }
+      return null;
+    }
 
     async function tryRpc(actorEmail) {
       if (!actorEmail) return null;
@@ -497,7 +614,7 @@
       const msg = String(rpcError?.message ?? "");
       if (/function .* does not exist|could not find the function/i.test(msg)) {
         lastError = new Error(
-          "Datubāzē nav funkcijas pdd_update_user_kompetence_by_email — palaid migrāciju 20260617120000_users_kompetence_fix.sql Supabase SQL Editor.",
+          "Datubāzē nav kompetences saglabāšanas funkcijas — palaid migrāciju 20260618120000_pdd_self_kompetence_by_email.sql Supabase SQL Editor.",
         );
         return null;
       }
@@ -511,6 +628,13 @@
       }
       lastError = rpcError2 || rpcError;
       return null;
+    }
+
+    if (selfRow) {
+      for (const em of actorEmails) {
+        const selfHit = await trySelfRpc(em);
+        if (selfHit) return selfHit;
+      }
     }
 
     for (const em of actorEmails) {
@@ -556,6 +680,7 @@
 
     const sb = globalThis.__PDD_SUPABASE__;
     await ensureUserInLocalCache(uid, sb);
+    const dbUid = sb ? await resolveDbUserIdForSave(uid, sb) : uid;
 
     const users = loadTeamUsers();
     const i = users.findIndex((u) => String(u.id) === uid);
@@ -582,7 +707,7 @@
     saveTeamUsers(users);
 
     if (!syncDb) return { ok: true, user: users[targetIndex], synced: false };
-    const db = await savePapilduKompetenceToSupabase(uid, nextText);
+    const db = await savePapilduKompetenceToSupabase(dbUid !== uid ? dbUid : uid, nextText);
     if (db?.error) {
       const msg = String(db.error?.message ?? db.error ?? "");
       return {
@@ -607,7 +732,7 @@
           user: users[targetIndex],
           synced: false,
           error: new Error(
-            "Kompetence netika saglabāta datubāzē. Palaid Supabase SQL migrāciju 20260617120000_users_kompetence_fix.sql.",
+            "Kompetence netika saglabāta datubāzē. Palaid Supabase SQL migrāciju 20260618120000_pdd_self_kompetence_by_email.sql.",
           ),
         };
       }

@@ -464,7 +464,7 @@
       <div id="root"></div>
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
-      <script defer src="./Komanda.js?v=202606171"></script>
+      <script defer src="./Komanda.js?v=202606181"></script>
       <script defer src="./Informeshana.js?v=202606170"></script>
       <script defer src="./IAD.js?v=202606172"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
@@ -4752,7 +4752,15 @@
                 return;
               }
               if (r?.synced === false) {
-                setAuthHint("Teksts saglabāts lokālajā kešā; Supabase nav pieejams vai nav sinhronizēts.");
+                setAuthHint("Teksts saglabāts lokālajā kešā; datubāzē nav sinhronizēts. Pārbaudi e-pastu un Supabase migrāciju.");
+                try {
+                  if (r?.user && window.KOMANDA?.mergeTeamUsersCache) {
+                    window.KOMANDA.mergeTeamUsersCache([r.user]);
+                  }
+                } catch {
+                  /* ignore */
+                }
+                return;
               }
               await onReload?.();
             } catch (e) {
