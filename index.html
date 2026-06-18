@@ -3998,6 +3998,16 @@
           }
           async function handleSubmit(e) {
             e.preventDefault();
+            const OUTLOOK_CALENDAR_REMINDER =
+              "Atgādinājums! Ievieto šo prombūtni arī savā Outlook kalendārā, lai arī citi kolēģi ir informēti par tavu prombūtni";
+            const showOutlookCalendarReminder = (targetIds) => {
+              const actorId = String(resolvedUserId ?? "").trim();
+              const ids = (Array.isArray(targetIds) ? targetIds : [])
+                .map((v) => String(v ?? "").trim())
+                .filter(Boolean);
+              if (actorId && ids.length && !ids.includes(actorId)) return;
+              alert(OUTLOOK_CALENDAR_REMINDER);
+            };
             const finalUserIds = Array.from(
               new Set(
                 (Array.isArray(selectedUserIds) ? selectedUserIds : [])
@@ -4181,8 +4191,13 @@
                         "Automātiskais sūtīšanas mēģinājums šoreiz nesanāca." +
                         (setupHint ? "\n\n" + setupHint : resendShort ? resendShort : "") +
                         (!setupHint && !resendShort ? " Tehnisko tekstu meklē F12 → Console „[PDD Cits e-pasts]”." : "") +
-                        hint401,
+                        hint401 +
+                        (targetUserIds.includes(String(resolvedUserId ?? "").trim())
+                          ? `\n\n${OUTLOOK_CALENDAR_REMINDER}`
+                          : ""),
                     );
+                } else {
+                  showOutlookCalendarReminder(targetUserIds);
                 }
                 const base = window.location.href.split("?")[0];
                 const link = `${base}?citsRow=${encodeURIComponent(rowId)}`;
@@ -4264,6 +4279,7 @@
               setTypeId("");
               setSelectedUserId(null);
               setSelectedUserIds([]);
+              showOutlookCalendarReminder(targetUserIds);
               onCreated();
             } finally {
               setBusy(false);
