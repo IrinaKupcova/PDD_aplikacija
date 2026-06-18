@@ -163,13 +163,96 @@
     if (actor?.id) ids.add(String(actor.id).trim());
     const g = String(globalThis.__PDD_ACTOR_USER_ID__ ?? "").trim();
     if (g) ids.add(g);
+    const sess = String(globalThis.__PDD_SESSION_USER_ID__ ?? "").trim();
+    if (sess) ids.add(sess);
     return ids;
+  }
+
+  function isGlobalActorAdmin() {
+    const r = String(globalThis.__PDD_ACTOR_ROLE__ ?? "").trim().toLowerCase();
+    return r === "admin";
+  }
+
+  async function collectActorEmailsForRpc(supabase) {
+    const out = [];
+    const push = (raw) => {
+      const s = String(raw ?? "").trim().toLowerCase();
+      if (s && s.includes("@") && !out.includes(s)) out.push(s);
+    };
+    push(globalThis.__PDD_ACTOR_EMAIL__);
+    push(sessionStorage.getItem("pdd_local_email"));
+    if (supabase?.auth?.getSession) {
+      try {
+        const s = await supabase.auth.getSession();
+        push(s?.data?.session?.user?.email);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (supabase?.auth?.getUser) {
+      try {
+        const u = await supabase.auth.getUser();
+        push(u?.data?.user?.email);
+      } catch {
+        /* ignore */
+      }
+    }
+    const actorId = String(globalThis.__PDD_ACTOR_USER_ID__ ?? "").trim();
+    const list = loadTeamUsers();
+    const me =
+      list.find((u) => String(u?.id ?? "").trim() === actorId) ||
+      list.find((u) => {
+        const a = String(u?.email ?? "").trim().toLowerCase();
+        const b = String(u?.["i-mail"] ?? "").trim().toLowerCase();
+        const c = String(u?.["e-mail"] ?? "").trim().toLowerCase();
+        return out.some((em) => em === a || em === b || em === c);
+      });
+    if (me) {
+      push(pickEmailForRpcFromUserRow(me));
+      push(me.email);
+      push(me["i-mail"]);
+      push(me["e-mail"]);
+    }
+    return out;
+  }
+
+  async function ensureUserInLocalCache(userId, supabase) {
+    const uid = String(userId ?? "").trim();
+    if (!uid) return loadTeamUsers();
+    let users = loadTeamUsers();
+    if (users.some((u) => String(u.id) === uid)) return users;
+    if (supabase?.from) {
+      try {
+        const { data } = await supabase.from("users").select("*").eq("id", uid).maybeSingle();
+        if (data) {
+          users = [...users, normalizeUser(data)];
+          saveTeamUsers(users);
+          return users;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return users;
+  }
+
+  function applyDbRowToLocalCache(row) {
+    if (!row || typeof row !== "object") return;
+    const uid = String(row.id ?? "").trim();
+    if (!uid) return;
+    const users = loadTeamUsers();
+    const idx = users.findIndex((u) => String(u.id) === uid);
+    const merged = normalizeUser({ ...(idx >= 0 ? users[idx] : {}), ...row, id: uid });
+    if (idx >= 0) users[idx] = merged;
+    else users.push(merged);
+    saveTeamUsers(users);
   }
 
   /** Administrators var labot jebkuru; parastais lietotājs — tikai savu ierakstu. */
   function assertMayEditTeamUserRow(targetUserId) {
     const tid = String(targetUserId ?? "").trim();
     if (!tid) return { ok: false, error: new Error("Trūkst userId.") };
+    if (isGlobalActorAdmin()) return { ok: true };
     const actor = getCurrentLocalActor();
     if (actor.role === "admin") return { ok: true };
     const ids = resolveActorTeamIds();
@@ -214,8 +297,7 @@
   }
 
   function upsertTeamUser(user) {
-    const actor = getCurrentLocalActor();
-    if (actor.role !== "admin") {
+    if (!isGlobalActorAdmin() && getCurrentLocalActor().role !== "admin") {
       alert("Labot drīkst tikai Admin.");
       return null;
     }
@@ -256,8 +338,7 @@
   }
 
   function deleteTeamUser(id) {
-    const actor = getCurrentLocalActor();
-    if (actor.role !== "admin") {
+    if (!isGlobalActorAdmin() && getCurrentLocalActor().role !== "admin") {
       alert("Dzēst drīkst tikai Admin.");
       return;
     }
@@ -337,10 +418,10 @@
     const uid = String(userId ?? "").trim();
     if (!uid) return { error: new Error("Trūkst userId.") };
     const value = normalizeAizvieto(aizvietoValue) || null;
-    const actorEmail = await resolveActorEmail(supabase);
+    const actorEmails = await collectActorEmailsForRpc(supabase);
     let lastError = null;
 
-    async function tryRpc() {
+    async function tryRpc(actorEmail) {
       if (!actorEmail) return null;
       const { data: rpcData, error: rpcError } = await supabase.rpc("pdd_update_user_aizvieto_by_email", {
         p_actor_email: actorEmail,
@@ -359,6 +440,11 @@
       return null;
     }
 
+    for (const em of actorEmails) {
+      const rpcOk = await tryRpc(em);
+      if (rpcOk) return rpcOk;
+    }
+
     for (const col of AIZVIETO_KEYS) {
       const payload = { [col]: value };
       const { data, error } = await supabase.from("users").update(payload).eq("id", uid).select("id").limit(1);
@@ -367,8 +453,6 @@
         const { error: eBare } = await supabase.from("users").update(payload).eq("id", uid);
         if (!eBare) return { ok: true, column: col };
         lastError = eBare;
-        const rpcOk = await tryRpc();
-        if (rpcOk) return rpcOk;
         break;
       }
       const msg = String(error?.message ?? "");
@@ -377,12 +461,12 @@
         continue;
       }
       lastError = error;
-      const rpcOk = await tryRpc();
-      if (rpcOk) return rpcOk;
       break;
     }
-    const rpcOk = await tryRpc();
-    if (rpcOk) return rpcOk;
+    for (const em of actorEmails) {
+      const rpcOk = await tryRpc(em);
+      if (rpcOk) return rpcOk;
+    }
     return { error: lastError ?? new Error("Neizdevās saglabāt Aizvieto (users / RPC).") };
   }
 
@@ -392,10 +476,10 @@
     const uid = String(userId ?? "").trim();
     if (!uid) return { error: new Error("Trūkst userId.") };
     const value = normalizePapilduKompetence(textValue) || null;
-    const actorEmail = await resolveActorEmail(supabase);
+    const actorEmails = await collectActorEmailsForRpc(supabase);
     let lastError = null;
 
-    async function tryRpc() {
+    async function tryRpc(actorEmail) {
       if (!actorEmail) return null;
       const { data: rpcData, error: rpcError } = await supabase.rpc("pdd_update_user_kompetence_by_email", {
         p_actor_email: actorEmail,
@@ -414,8 +498,10 @@
       return null;
     }
 
-    const rpcHit = await tryRpc();
-    if (rpcHit) return rpcHit;
+    for (const em of actorEmails) {
+      const rpcHit = await tryRpc(em);
+      if (rpcHit) return rpcHit;
+    }
 
     for (const col of PAPILDU_KOMP_KEYS) {
       const payload = { [col]: value };
@@ -436,6 +522,10 @@
       lastError = error;
       break;
     }
+    for (const em of actorEmails) {
+      const rpcHit = await tryRpc(em);
+      if (rpcHit) return rpcHit;
+    }
     return { error: lastError ?? new Error("Neizdevās saglabāt papildu informāciju par kompetenci (users / RPC).") };
   }
 
@@ -445,6 +535,9 @@
 
     const perm = assertMayEditTeamUserRow(uid);
     if (!perm.ok) return { error: perm.error };
+
+    const sb = globalThis.__PDD_SUPABASE__;
+    await ensureUserInLocalCache(uid, sb);
 
     const users = loadTeamUsers();
     const i = users.findIndex((u) => String(u.id) === uid);
@@ -472,9 +565,22 @@
 
     if (!syncDb) return { ok: true, user: users[targetIndex], synced: false };
     const db = await savePapilduKompetenceToSupabase(uid, nextText);
-    if (db?.error) return { ok: false, user: users[targetIndex], synced: false, error: db.error };
+    if (db?.error) {
+      const msg = String(db.error?.message ?? db.error ?? "");
+      return {
+        ok: false,
+        user: users[targetIndex],
+        synced: false,
+        error: new Error(
+          msg.includes("nav atrasts public.users")
+            ? "Tavs e-pasts nav sinhronizēts ar komandas tabulu (public.users). Piesakies ar darba e-pastu, kas tur ir reģistrēts."
+            : msg || "Neizdevās saglabāt kompetences aprakstu."
+        ),
+      };
+    }
+    if (db?.row) applyDbRowToLocalCache(db.row);
     if (db?.skipped) return { ok: true, user: users[targetIndex], synced: false };
-    return { ok: true, user: users[targetIndex], synced: true };
+    return { ok: true, user: loadTeamUsers().find((u) => String(u.id) === uid) || users[targetIndex], synced: true };
   }
 
   async function setUserAizvieto({ userId, replacementUserId = "", replacementName = "", syncDb = true }) {
@@ -483,6 +589,9 @@
 
     const perm = assertMayEditTeamUserRow(uid);
     if (!perm.ok) return { error: perm.error };
+
+    const sb = globalThis.__PDD_SUPABASE__;
+    await ensureUserInLocalCache(uid, sb);
 
     const users = loadTeamUsers();
     const i = users.findIndex((u) => String(u.id) === uid);
@@ -516,24 +625,62 @@
 
     if (!syncDb) return { ok: true, user: users[targetIndex], synced: false };
     const db = await saveAizvietoToSupabase(uid, next);
-    if (db?.error) return { ok: false, user: users[targetIndex], synced: false, error: db.error };
-    return { ok: true, user: users[targetIndex], synced: true };
+    if (db?.error) {
+      const msg = String(db.error?.message ?? db.error ?? "");
+      return {
+        ok: false,
+        user: users[targetIndex],
+        synced: false,
+        error: new Error(
+          msg.includes("nav atrasts public.users")
+            ? "Tavs e-pasts nav sinhronizēts ar komandas tabulu (public.users). Piesakies ar darba e-pastu, kas tur ir reģistrēts."
+            : msg || "Neizdevās saglabāt Aizvieto."
+        ),
+      };
+    }
+    if (db?.row) applyDbRowToLocalCache(db.row);
+    return { ok: true, user: loadTeamUsers().find((u) => String(u.id) === uid) || users[targetIndex], synced: true };
   }
 
   function getCurrentLocalActor() {
-    // Šī lapa strādā “lokālajā režīmā” caur sessionStorage, un loma nāk no COMANDA lokālās tabulas.
-    // Ja nav login-informācijas, pieņemam defaultu (local-user-1).
-    const uid = sessionStorage.getItem(LS_LOCAL_USER_ID) || LOCAL_USER_ID;
+    const uid =
+      String(globalThis.__PDD_ACTOR_USER_ID__ ?? "").trim() ||
+      sessionStorage.getItem(LS_LOCAL_USER_ID) ||
+      LOCAL_USER_ID;
     const list = loadTeamUsers();
-    const me = (Array.isArray(list) ? list : []).find((u) => String(u.id) === String(uid)) ?? null;
-    const role = normalizeUser(me)?.role === "admin" ? "admin" : "user";
-    return { id: uid, role };
+    const authEm = String(globalThis.__PDD_ACTOR_EMAIL__ ?? sessionStorage.getItem("pdd_local_email") ?? "")
+      .trim()
+      .toLowerCase();
+    let me = (Array.isArray(list) ? list : []).find((u) => String(u.id) === String(uid)) ?? null;
+    if (!me && authEm) {
+      me =
+        list.find((u) => {
+          const a = String(u?.email ?? "").trim().toLowerCase();
+          const b = String(u?.["i-mail"] ?? "").trim().toLowerCase();
+          const c = String(u?.["e-mail"] ?? "").trim().toLowerCase();
+          return a === authEm || b === authEm || c === authEm;
+        }) ?? null;
+    }
+    let role = "user";
+    if (isGlobalActorAdmin()) role = "admin";
+    else if (normalizeUser(me)?.role === "admin") role = "admin";
+    return { id: me?.id ? String(me.id) : uid, role };
   }
 
   // Public API (tikai komandas lietotāji; ziņas atsevišķi Zinas.js)
   window.KOMANDA = {
     loadTeamUsers,
     saveTeamUsers,
+    mergeTeamUsersCache(rows) {
+      if (!Array.isArray(rows) || !rows.length) return;
+      const byId = new Map(loadTeamUsers().map((u) => [String(u.id), u]));
+      for (const r of rows) {
+        const id = String(r?.id ?? "").trim();
+        if (!id) continue;
+        byId.set(id, normalizeUser({ ...(byId.get(id) || {}), ...r, id }));
+      }
+      saveTeamUsers([...byId.values()]);
+    },
     upsertTeamUser,
     deleteTeamUser,
     getReplacementOptions,

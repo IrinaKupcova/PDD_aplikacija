@@ -147,6 +147,20 @@ async function sendViaResend(
   return { ok: resendResp.ok, status: resendResp.status, parsed };
 }
 
+function resendErrorText(parsed: unknown): string {
+  if (!parsed || typeof parsed !== "object") return "";
+  return String((parsed as { message?: string }).message ?? "").trim();
+}
+
+function isResendFromOrDomainError(parsed: unknown): boolean {
+  const m = resendErrorText(parsed).toLowerCase();
+  return (
+    m.includes("domain is not verified") ||
+    m.includes("only send testing emails") ||
+    m.includes("not verified")
+  );
+}
+
 async function sendViaResendWithFromFallback(
   resendApiKey: string,
   emailBody: Record<string, unknown>,
@@ -154,11 +168,14 @@ async function sendViaResendWithFromFallback(
 ): Promise<{ ok: boolean; status: number; parsed: unknown; usedFallbackFrom?: boolean }> {
   let sent = await sendViaResend(resendApiKey, emailBody);
   if (sent.ok) return sent;
-  const errMsg = String((sent.parsed as { message?: string })?.message ?? "").toLowerCase();
-  const domainUnverified =
-    !sent.ok && (errMsg.includes("domain is not verified") || errMsg.includes("not verified"));
+  const errMsg = resendErrorText(sent.parsed).toLowerCase();
+  const needsFallback =
+    !sent.ok &&
+    (errMsg.includes("domain is not verified") ||
+      errMsg.includes("only send testing emails") ||
+      errMsg.includes("not verified"));
   const fromStr = String(emailBody.from ?? configuredFrom).toLowerCase();
-  if (domainUnverified && !fromStr.includes("@resend.dev")) {
+  if (needsFallback && !fromStr.includes("@resend.dev")) {
     const retryBody: Record<string, unknown> = { ...emailBody, from: FALLBACK_FROM };
     delete retryBody.cc;
     const retry = await sendViaResend(resendApiKey, retryBody);
@@ -299,11 +316,15 @@ Deno.serve(async (req: Request) => {
 
     const sent = await sendViaResendWithFromFallback(resendApiKey, emailBody, from);
     if (!sent.ok) {
+      const hint = isResendFromOrDomainError(sent.parsed)
+        ? "Verificē domēnu resend.com/domains un iestati RESEND_FROM uz @vid.gov.lv (testa režīmā tikai uz Resend konta e-pastu)."
+        : undefined;
       return jsonResponse(
         {
           error: "Resend request failed",
           status: sent.status,
           details: sent.parsed,
+          ...(hint ? { resend_hint: hint } : {}),
         },
         502,
       );
