@@ -471,12 +471,14 @@
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=20260422l"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202606162"></script>
+      <script defer src="./Navigacija.js?v=202606204"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
+      <script defer src="./ProcesuVadiba.js?v=202606204"></script>
+      <script defer src="./ProcesuVadibaPieslegums.js?v=202606204"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -1313,6 +1315,7 @@
         }
         let cachedIadPanel = null;
         let cachedSaliedesanaPanel = null;
+        let cachedProcesuVadibaPanel = null;
         function getIadPanel() {
           if (!cachedIadPanel && globalThis.IAD?.createIadModule) {
             cachedIadPanel = globalThis.IAD.createIadModule(html, React);
@@ -1324,6 +1327,19 @@
             cachedSaliedesanaPanel = globalThis.SALIEDESANA.createSaliedesanaPanel(html, React);
           }
           return cachedSaliedesanaPanel;
+        }
+        function getProcesuVadibaPanel() {
+          if (cachedProcesuVadibaPanel) return cachedProcesuVadibaPanel;
+          const factory =
+            globalThis.PDD_PROCESU_VADIBA_INTEGRACIJA?.getPanel ||
+            globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule;
+          if (typeof factory !== "function") return null;
+          try {
+            cachedProcesuVadibaPanel = factory(html, React);
+          } catch (e) {
+            console.error("[Procesu vadība] Neizdevās inicializēt moduli", e);
+          }
+          return cachedProcesuVadibaPanel;
         }
         const AppShellWithNav =
           globalThis.PDD_NAV?.createAppShellWithNav?.(html) ??
@@ -2985,7 +3001,7 @@
           return html`<${View} supabase=${supabase} highlightRowId=${highlightRowId || ""} />`;
         }
 
-        function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenSaliedesana, onOpenTodayTask, absencesToday }) {
+        function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenSaliedesana, onOpenProcesuVadiba, onOpenTodayTask, absencesToday }) {
           const [sodienRows, setSodienRows] = useState(() => {
             try {
               if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !configured() || !globalThis.__PDD_SUPABASE__) {
@@ -3178,6 +3194,10 @@
                 </button>
                 <button type="button" class="card" onClick=${onOpenSaliedesana}>
                   <h3>Saliedēšanas pasākumi, svētku dienas u.c.</h3>
+                </button>
+                <button type="button" class="card" onClick=${onOpenProcesuVadiba}>
+                  <h3>Procesu vadība</h3>
+                  <p>Uzdevumi, tabulas, Gantt, termiņi un prezentabls pārskats vadībai.</p>
                 </button>
               </div>
               ${sodienBlock}
@@ -7902,6 +7922,7 @@
             if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-current") return "IAD: Aktuālie";
             if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-done") return "IAD: Neaktuālie";
             if (sectionView === "darbaUzdevumiIad") return "IAD ieteikumi";
+            if (sectionView === "procesuVadiba") return "Procesu vadība";
             if (sectionView === "aktualitatesHistory") return "Aktualitāšu vēsture";
             if (sectionView === "pddAppChanges") return "Izmaiņas PDD aplikācijā";
             if (sectionView !== "prombutnes") return "Sadaļa";
@@ -7997,7 +8018,14 @@
             setView(v);
             if (v === "prombutnes") setPromSub("calendar");
             if (v !== "darbaUzdevumiIad") setDarbaUzdevumiFocus(null);
+            globalThis.PDD_PROCESU_VADIBA_INTEGRACIJA?.highlightNav?.(v);
           }, [view, promSub, session, supabase]);
+          useEffect(() => {
+            globalThis.__PDD_CHANGE_VIEW__ = handleChangeView;
+            return () => {
+              if (globalThis.__PDD_CHANGE_VIEW__ === handleChangeView) delete globalThis.__PDD_CHANGE_VIEW__;
+            };
+          }, [handleChangeView]);
           const handlePromSubChange = useCallback((sub) => {
             setNavPast((p) => [...p, { view, promSub }]);
             setPromSub(sub);
@@ -8561,6 +8589,12 @@
                     ? html`<${SaliedesanaPanel} />`
                     : html`<section class="list-panel"><p>Saliedēšanas modulis nav ielādēts.</p></section>`;
                 }
+                if (view === "procesuVadiba") {
+                  const PvPanel = getProcesuVadibaPanel();
+                  return PvPanel
+                    ? html`<${PvPanel} embedded=${true} />`
+                    : html`<section class="list-panel"><p>Procesu vadības modulis nav ielādēts.</p></section>`;
+                }
                 return null;
               })()}
               ${view === "home"
@@ -8578,6 +8612,10 @@
                     onOpenSaliedesana=${() => {
                       setNavPast((p) => [...p, { view, promSub }]);
                       setView("saliedesana");
+                    }}
+                    onOpenProcesuVadiba=${() => {
+                      setNavPast((p) => [...p, { view, promSub }]);
+                      setView("procesuVadiba");
                     }}
                     onOpenTodayTask=${(task) => {
                       setNavPast((p) => [...p, { view, promSub }]);
@@ -8602,6 +8640,8 @@
                   : view === "pddAppChanges"
                     ? html`<${PddAppChangesView} highlightRowId=${appChangesHighlightId} />`
                   : view === "darbaUzdevumiIad"
+                    ? null
+                  : view === "procesuVadiba"
                     ? null
                   : view === "saliedesana"
                     ? null

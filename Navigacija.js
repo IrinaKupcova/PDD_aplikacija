@@ -780,6 +780,13 @@
               >
                 Saliedēšanas pasākumi, svētku dienas u.c.
               </button>
+              <button
+                type="button"
+                class=${`app-nav-link ${view === "procesuVadiba" ? "active" : ""}`}
+                onClick=${() => onChangeView("procesuVadiba")}
+              >
+                Procesu vadība
+              </button>
               <details class="app-nav-vesture-details" open=${vestureAccordionOpen}>
                 <summary class="app-nav-link app-nav-vesture-summary">Vēsture</summary>
                 <div class="app-nav-sub" role="group" aria-label="Vēstures apakšsadaļas">

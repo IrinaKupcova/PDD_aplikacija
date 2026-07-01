@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="lv">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDD — Procesu vadība</title>
+    <style>
+      html, body { margin: 0; min-height: 100%; background: #e8f8f3; font-family: "Segoe UI", system-ui, sans-serif; }
+      #root { min-height: 100vh; }
+      .pv-boot-error {
+        max-width: 520px; margin: 2rem auto; padding: 1.25rem 1.5rem;
+        background: #fff; border: 1px solid #f87171; border-radius: 12px; color: #7f1d1d;
+      }
+      .pv-boot-error h1 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+      .pv-boot-error p { margin: 0.35rem 0; font-size: 0.92rem; line-height: 1.45; }
+    </style>
+    <script defer src="./Komanda.js?v=202606182"></script>
+    <script defer src="./ProcesuVadiba.js?v=202606204"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from "https://esm.sh/react@19.0.0";
+      import { createRoot } from "https://esm.sh/react-dom@19.0.0/client";
+      import htm from "https://esm.sh/htm@3.1.1";
+
+      const html = htm.bind(React.createElement);
+      const rootEl = document.getElementById("root");
+      let tries = 0;
+
+      function showBootError(msg) {
+        rootEl.innerHTML = `<div class="pv-boot-error"><h1>Procesu vadība nav ielādēta</h1><p>${msg}</p><p>Pārbaudi, vai fails <strong>ProcesuVadiba.js</strong> ir augšupielādēts (Push) un pārlādē ar Ctrl+F5.</p></div>`;
+      }
+
+      function boot() {
+        tries += 1;
+        const api = globalThis.PDD_PROCESU_VADIBA;
+        if (!api?.createProcesuVadibaModule) {
+          if (tries < 120) {
+            requestAnimationFrame(boot);
+            return;
+          }
+          showBootError("Skripts ProcesuVadiba.js netika atrasts vai nav ielādējies.");
+          return;
+        }
+        try {
+          const Panel = api.createProcesuVadibaModule(html, React);
+          createRoot(rootEl).render(html`<${Panel} embedded=${false} />`);
+        } catch (e) {
+          console.error(e);
+          showBootError(String(e?.message || e));
+        }
+      }
+      boot();
+    </script>
+  </body>
+</html>
