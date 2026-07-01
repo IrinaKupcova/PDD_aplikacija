@@ -4,7 +4,7 @@
  */
 (function (root) {
   const LS_KEY = "pdd_procesu_vadiba_v2";
-  const MODULE_VERSION = 2;
+  const MODULE_VERSION = 3;
   const REMOTE_TABLE = "Procesu_vadiba";
   const REMOTE_ROW_ID = "main";
   const REMOTE_SAVE_MS = 700;
@@ -146,6 +146,7 @@
       screen: "overview",
       activePhaseId: null,
       activeToolId: null,
+      overviewBlocks: [],
       phases: [
         {
           id: phaseId,
@@ -158,6 +159,7 @@
           end: addDays(t0, 120),
           progress: 15,
           status: "Procesā",
+          blocks: [],
           tools: [
             {
               id: registryToolId,
@@ -188,6 +190,7 @@
           end: addDays(t0, 30),
           progress: 25,
           status: "Procesā",
+          blocks: [],
           tools: [],
           registries: {},
         },
@@ -201,6 +204,7 @@
           end: addDays(t0, 90),
           progress: 5,
           status: "Plānots",
+          blocks: [],
           tools: [],
           registries: {},
         },
@@ -209,19 +213,22 @@
   }
 
   function migrateState(s) {
-    if (!s || s.version !== MODULE_VERSION || !Array.isArray(s.phases) || s.phases.length === 0) {
+    if (!s || !Array.isArray(s.phases) || s.phases.length === 0) {
       return defaultState();
     }
     for (const p of s.phases) {
       p.tools = Array.isArray(p.tools) ? p.tools : [];
       p.registries = p.registries && typeof p.registries === "object" ? p.registries : {};
+      p.blocks = Array.isArray(p.blocks) ? p.blocks : [];
     }
+    s.overviewBlocks = Array.isArray(s.overviewBlocks) ? s.overviewBlocks : [];
     if (s.screen !== "overview" && s.screen !== "phase") s.screen = "overview";
     if (s.screen === "phase" && s.activePhaseId && !s.phases.some((p) => p.id === s.activePhaseId)) {
       s.screen = "overview";
       s.activePhaseId = null;
       s.activeToolId = null;
     }
+    s.version = MODULE_VERSION;
     return s;
   }
 
@@ -406,6 +413,73 @@ tr.active td{background:#f0fdf9}
     return { min: dates[0], max: dates[dates.length - 1] };
   }
 
+  function ganttMonthLabels(range) {
+    const minT = new Date(range.min).getTime();
+    const maxT = new Date(range.max).getTime();
+    const spanMs = Math.max(86400000, maxT - minT + 86400000);
+    const out = [];
+    const d = new Date(range.min);
+    d.setDate(1);
+    while (d.getTime() <= maxT + 86400000 * 31) {
+      const left = ((d.getTime() - minT) / spanMs) * 100;
+      if (left <= 100) {
+        out.push({
+          left: `${Math.max(0, Math.min(100, left))}%`,
+          label: d.toLocaleDateString("lv-LV", { month: "short", year: "2-digit" }),
+        });
+      }
+      d.setMonth(d.getMonth() + 1);
+    }
+    return out;
+  }
+
+  const CONTENT_BLOCK_TYPES = [
+    { id: "richtext", label: "Teksts (formatēts)" },
+    { id: "image", label: "Attēls" },
+    { id: "attachment", label: "Pielikums" },
+    { id: "table", label: "Tabula" },
+    { id: "list", label: "Saraksts / uzskaitījums" },
+  ];
+
+  function createContentBlock(type) {
+    const id = uid();
+    if (type === "richtext") return { id, type, title: "Teksts", html: "<p></p>" };
+    if (type === "image") return { id, type, title: "Attēls", dataUrl: "", name: "" };
+    if (type === "attachment") return { id, type, title: "Pielikums", dataUrl: "", name: "", mime: "", size: 0 };
+    if (type === "table") {
+      const c1 = uid();
+      const c2 = uid();
+      return {
+        id,
+        type,
+        title: "Tabula",
+        columns: [
+          { id: c1, name: "Kolonna 1" },
+          { id: c2, name: "Kolonna 2" },
+        ],
+        rows: [{ id: uid(), cells: {} }],
+      };
+    }
+    if (type === "list") return { id, type, title: "Saraksts", ordered: false, items: [{ id: uid(), text: "" }] };
+    return null;
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ""));
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+
+  function formatFileSize(bytes) {
+    const n = Number(bytes) || 0;
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
   function phaseChildren(phases, parentId) {
     return (Array.isArray(phases) ? phases : [])
       .filter((p) => p.parentId === parentId)
@@ -446,6 +520,7 @@ tr.active td{background:#f0fdf9}
       end: addDays(t0, parentId ? 30 : 90),
       progress: 0,
       status: "Plānots",
+      blocks: [],
       tools: parentId
         ? []
         : [
@@ -475,9 +550,9 @@ tr.active td{background:#f0fdf9}
   }
 
   function ensureStyles() {
-    if (typeof document === "undefined" || document.getElementById("pdd-pv-styles-v4")) return;
+    if (typeof document === "undefined" || document.getElementById("pdd-pv-styles-v5")) return;
     const el = document.createElement("style");
-    el.id = "pdd-pv-styles-v4";
+    el.id = "pdd-pv-styles-v5";
     el.textContent = `
       .pv-root {
         --pv-bg: #e8f8f3;
@@ -495,8 +570,10 @@ tr.active td{background:#f0fdf9}
       }
       .pv-shell {
         display: grid;
-        grid-template-columns: minmax(250px, 290px) minmax(0, 1fr);
-        min-height: calc(100vh - 120px);
+        grid-template-columns: minmax(240px, 270px) minmax(0, 1fr);
+        min-height: calc(100vh - 80px);
+        width: 100%;
+        max-width: none;
         border-radius: 14px;
         overflow: hidden;
         border: 1px solid var(--pv-border);
@@ -535,7 +612,7 @@ tr.active td{background:#f0fdf9}
         width: 100%; border: 1px dashed #047857; background: rgba(255,255,255,0.4);
         color: #01171d; border-radius: 10px; padding: 0.5rem; font: inherit; cursor: pointer;
       }
-      .pv-main { padding: 1rem 1.2rem; overflow: auto; min-width: 0; }
+      .pv-main { padding: 1rem 1.5rem 2rem; overflow: auto; min-width: 0; width: 100%; }
       .pv-topbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.75rem; margin-bottom: 1rem; }
       .pv-topbar h1 { margin: 0; font-size: 1.25rem; }
       .pv-topbar .sub { margin: 0.2rem 0 0; color: var(--pv-muted); font-size: 0.84rem; }
@@ -558,15 +635,25 @@ tr.active td{background:#f0fdf9}
       .pv-card h3 { margin: 0 0 0.65rem; font-size: 0.95rem; color: #065f46; }
       .pv-gantt-global { overflow-x: auto; }
       .pv-gantt-head {
-        display: grid; grid-template-columns: 220px minmax(480px, 1fr) 70px;
+        display: grid; grid-template-columns: 260px minmax(720px, 1fr) 70px;
         gap: 0.5rem; font-size: 0.74rem; color: var(--pv-muted); padding-bottom: 0.35rem;
         border-bottom: 1px solid #c5ebe3;
       }
       .pv-gantt-row {
-        display: grid; grid-template-columns: 220px minmax(480px, 1fr) 70px;
+        display: grid; grid-template-columns: 260px minmax(720px, 1fr) 70px;
         gap: 0.5rem; align-items: center; padding: 0.45rem 0;
         border-bottom: 1px solid #e0f2ee; font-size: 0.82rem;
       }
+      .pv-gantt-months {
+        position: relative; height: 26px; margin-bottom: 0.25rem;
+        border-bottom: 1px dashed #c5ebe3; background: #f8fffd;
+      }
+      .pv-gantt-month-tick {
+        position: absolute; top: 0; bottom: 0;
+        border-left: 1px solid #b8e0d6; padding-left: 0.25rem;
+        font-size: 0.68rem; color: #0f4d47; white-space: nowrap;
+      }
+      .pv-gantt-track-wrap { min-width: 0; }
       .pv-gantt-row.sub .pv-gantt-label { padding-left: 1rem; font-size: 0.78rem; }
       .pv-gantt-track {
         position: relative; height: 26px; background: #e8f8f3; border-radius: 6px; overflow: hidden;
@@ -665,6 +752,40 @@ tr.active td{background:#f0fdf9}
       .pv-phase-summary-row .meta { font-size: 0.78rem; color: var(--pv-muted); margin-top: 0.2rem; }
       .pv-status-pill.muted { background: #f3f4f6; color: #9ca3af; }
       .pv-status-pill.overdue { background: #fce8e8; color: #9f4f4f; }
+      .pv-content-block {
+        border: 1px solid #c5ebe3; border-radius: 10px; padding: 0.75rem;
+        margin-bottom: 0.65rem; background: #fcfffe;
+      }
+      .pv-content-block-head {
+        display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+        justify-content: space-between; margin-bottom: 0.55rem;
+      }
+      .pv-content-block-head input[type="text"] {
+        flex: 1 1 180px; border: 1px solid #c5ebe3; border-radius: 8px;
+        padding: 0.35rem 0.5rem; font: inherit;
+      }
+      .pv-rt-toolbar {
+        display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.45rem;
+        padding: 0.35rem; background: #f0fdf9; border-radius: 8px; border: 1px solid #c5ebe3;
+      }
+      .pv-rt-toolbar button, .pv-rt-toolbar select, .pv-rt-toolbar input[type="color"] {
+        border: 1px solid #c5ebe3; background: #fff; border-radius: 6px;
+        padding: 0.2rem 0.45rem; font: inherit; font-size: 0.78rem; cursor: pointer; min-height: 28px;
+      }
+      .pv-rt-toolbar button:hover { border-color: #0d9488; }
+      .pv-rt-body {
+        min-height: 120px; padding: 0.65rem 0.75rem; border: 1px solid #c5ebe3;
+        border-radius: 8px; background: #fff; line-height: 1.5; font-size: 0.9rem;
+      }
+      .pv-rt-body:focus { outline: 2px solid #75ccbd; outline-offset: 1px; }
+      .pv-img-preview { max-width: 100%; max-height: 360px; border-radius: 8px; border: 1px solid #c5ebe3; }
+      .pv-attach-row {
+        display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+        padding: 0.5rem; background: #f0fdf9; border-radius: 8px;
+      }
+      .pv-list-editor { display: flex; flex-direction: column; gap: 0.35rem; }
+      .pv-list-editor-row { display: flex; gap: 0.35rem; align-items: center; }
+      .pv-list-editor-row input { flex: 1; padding: 0.4rem 0.5rem; border: 1px solid #c5ebe3; border-radius: 8px; font: inherit; }
     `;
     document.head.appendChild(el);
   }
@@ -757,6 +878,238 @@ tr.active td{background:#f0fdf9}
         <button type="button" class=${`pv-link ${className || ""}`} onClick=${() => onGo(phase.id)}>
           ${phase.title}
         </button>
+      `;
+    }
+
+    function PhaseLink({ phase, onGo, className }) {
+      if (!phase) return null;
+      return html`
+        <button type="button" class=${`pv-link ${className || ""}`} onClick=${() => onGo(phase.id)}>
+          ${phase.title}
+        </button>
+      `;
+    }
+
+    function RichTextEditor({ value, onChange }) {
+      const editorRef = useRef(null);
+      useEffect(() => {
+        if (editorRef.current && editorRef.current.innerHTML !== (value || "")) {
+          editorRef.current.innerHTML = value || "<p></p>";
+        }
+      }, [value]);
+      function exec(cmd, val) {
+        editorRef.current?.focus();
+        try {
+          document.execCommand(cmd, false, val);
+        } catch {
+          /* ignore */
+        }
+        onChange(editorRef.current?.innerHTML || "");
+      }
+      function sync() {
+        onChange(editorRef.current?.innerHTML || "");
+      }
+      return html`
+        <div class="pv-rt-wrap">
+          <div class="pv-rt-toolbar">
+            <button type="button" title="Treknraksts" onClick=${() => exec("bold")}><strong>B</strong></button>
+            <button type="button" title="Kursīvs" onClick=${() => exec("italic")}><em>I</em></button>
+            <button type="button" title="Pasvītrots" onClick=${() => exec("underline")}><u>U</u></button>
+            <button type="button" title="Izcelt" onClick=${() => exec("hiliteColor", "#fff3b0")}>🖍</button>
+            <input type="color" title="Teksta krāsa" onChange=${(e) => exec("foreColor", e.target.value)} />
+            <input type="color" title="Fona krāsa" onChange=${(e) => exec("hiliteColor", e.target.value)} />
+            <select onChange=${(e) => e.target.value && exec("fontSize", e.target.value)}>
+              <option value="">Izmērs</option>
+              <option value="2">Mazs</option>
+              <option value="3">Parasts</option>
+              <option value="4">Liels</option>
+              <option value="5">Ļoti liels</option>
+            </select>
+            <button type="button" onClick=${() => exec("insertUnorderedList")}>• Saraksts</button>
+            <button type="button" onClick=${() => exec("insertOrderedList")}>1. Saraksts</button>
+            <button type="button" onClick=${() => exec("removeFormat")}>✕ Formāts</button>
+            <button type="button" onClick=${() => exec("insertText", " → ")}>→</button>
+            <button type="button" onClick=${() => exec("insertText", " • ")}>•</button>
+            <button type="button" onClick=${() => exec("insertText", " ✓ ")}>✓</button>
+          </div>
+          <div class="pv-rt-body" contenteditable="true" ref=${editorRef} onInput=${sync}></div>
+        </div>
+      `;
+    }
+
+    function ContentBlockEditor({ block, onChange, onRemove }) {
+      function patch(p) {
+        onChange({ ...block, ...p });
+      }
+      async function onPickFile(kind, e) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (file.size > 4 * 1024 * 1024) {
+          alert("Fails lielāks par 4 MB — izvēlies mazāku vai saīsini.");
+          e.target.value = "";
+          return;
+        }
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          patch({
+            dataUrl,
+            name: file.name,
+            mime: file.type || "application/octet-stream",
+            size: file.size,
+          });
+        } catch {
+          alert("Neizdevās nolasīt failu.");
+        }
+        e.target.value = "";
+      }
+      return html`
+        <div class="pv-content-block">
+          <div class="pv-content-block-head">
+            <input type="text" value=${block.title || ""} onInput=${(e) => patch({ title: e.target.value })} />
+            <button type="button" class="pv-btn danger" onClick=${onRemove}>Dzēst bloku</button>
+          </div>
+          ${block.type === "richtext"
+            ? ce(RichTextEditor, { value: block.html || "", onChange: (html) => patch({ html }) })
+            : null}
+          ${block.type === "image"
+            ? html`
+                <div>
+                  <input type="file" accept="image/*" onChange=${(e) => onPickFile("image", e)} />
+                  ${block.dataUrl
+                    ? html`<img class="pv-img-preview" src=${block.dataUrl} alt=${block.name || "attēls"} />`
+                    : html`<p class="pv-empty" style=${{ padding: "0.5rem" }}>Pievieno attēlu (PNG, JPG…)</p>`}
+                </div>
+              `
+            : null}
+          ${block.type === "attachment"
+            ? html`
+                <div class="pv-attach-row">
+                  <input type="file" onChange=${(e) => onPickFile("attachment", e)} />
+                  ${block.name
+                    ? html`<a class="pv-link" href=${block.dataUrl} download=${block.name}>📎 ${block.name} (${formatFileSize(block.size)})</a>`
+                    : html`<span class="pv-empty" style=${{ padding: 0 }}>Pievieno pielikumu</span>`}
+                </div>
+              `
+            : null}
+          ${block.type === "table"
+            ? html`
+                <div class="pv-toolbar">
+                  <button type="button" class="pv-btn" onClick=${() => patch({ rows: [...(block.rows || []), { id: uid(), cells: {} }] })}>+ Rinda</button>
+                  <button
+                    type="button"
+                    class="pv-btn"
+                    onClick=${() =>
+                      patch({
+                        columns: [...(block.columns || []), { id: uid(), name: `Kolonna ${(block.columns?.length || 0) + 1}` }],
+                      })}
+                  >
+                    + Kolonna
+                  </button>
+                </div>
+                <div class="pv-table-wrap">
+                  <table class="pv-table">
+                    <thead>
+                      <tr>
+                        ${(block.columns || []).map(
+                          (c) => html`
+                            <th>
+                              <input value=${c.name} onInput=${(e) => patch({ columns: block.columns.map((x) => (x.id === c.id ? { ...x, name: e.target.value } : x)) })} />
+                            </th>
+                          `,
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${(block.rows || []).map(
+                        (row) => html`
+                          <tr key=${row.id}>
+                            ${(block.columns || []).map(
+                              (c) => html`
+                                <td>
+                                  <input
+                                    value=${row.cells?.[c.id] ?? ""}
+                                    onInput=${(e) =>
+                                      patch({
+                                        rows: block.rows.map((r) =>
+                                          r.id === row.id ? { ...r, cells: { ...r.cells, [c.id]: e.target.value } } : r,
+                                        ),
+                                      })}
+                                  />
+                                </td>
+                              `,
+                            )}
+                            <td>
+                              <button type="button" class="pv-link" style=${{ color: "#dc2626" }} onClick=${() => patch({ rows: block.rows.filter((r) => r.id !== row.id) })}>✕</button>
+                            </td>
+                          </tr>
+                        `,
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              `
+            : null}
+          ${block.type === "list"
+            ? html`
+                <div class="pv-toolbar">
+                  <button type="button" class="pv-btn" onClick=${() => patch({ ordered: !block.ordered })}>
+                    ${block.ordered ? "Numurēts saraksts" : "Aizzīmējumu saraksts"}
+                  </button>
+                  <button type="button" class="pv-btn" onClick=${() => patch({ items: [...(block.items || []), { id: uid(), text: "" }] })}>+ Punkts</button>
+                </div>
+                <div class="pv-list-editor">
+                  ${(block.items || []).map(
+                    (item, idx) => html`
+                      <div class="pv-list-editor-row" key=${item.id}>
+                        <span>${block.ordered ? `${idx + 1}.` : "•"}</span>
+                        <input value=${item.text} onInput=${(e) => patch({ items: block.items.map((x) => (x.id === item.id ? { ...x, text: e.target.value } : x)) })} />
+                        <button type="button" class="pv-link" style=${{ color: "#dc2626" }} onClick=${() => patch({ items: block.items.filter((x) => x.id !== item.id) })}>✕</button>
+                      </div>
+                    `,
+                  )}
+                </div>
+              `
+            : null}
+        </div>
+      `;
+    }
+
+    function ContentWorkspace({ title, blocks, onChange }) {
+      const list = Array.isArray(blocks) ? blocks : [];
+      function setBlocks(next) {
+        onChange(next);
+      }
+      function addBlock(type) {
+        const b = createContentBlock(type);
+        if (b) setBlocks([...list, b]);
+      }
+      function updateBlock(id, next) {
+        setBlocks(list.map((b) => (b.id === id ? next : b)));
+      }
+      function removeBlock(id) {
+        setBlocks(list.filter((b) => b.id !== id));
+      }
+      return html`
+        <div class="pv-card">
+          <h3>${title || "Saturs"}</h3>
+          <div class="pv-toolbar">
+            ${CONTENT_BLOCK_TYPES.map(
+              (t) => html`
+                <button type="button" class="pv-btn" onClick=${() => addBlock(t.id)}>+ ${t.label}</button>
+              `,
+            )}
+          </div>
+          ${list.length
+            ? list.map((b) =>
+                ce(ContentBlockEditor, {
+                  key: b.id,
+                  block: b,
+                  onChange: (next) => updateBlock(b.id, next),
+                  onRemove: () => removeBlock(b.id),
+                }),
+              )
+            : html`<p class="pv-empty">Pievieno tekstu, attēlu, pielikumu, tabulu vai sarakstu.</p>`}
+        </div>
       `;
     }
 
@@ -917,6 +1270,7 @@ tr.active td{background:#f0fdf9}
     function GanttChart({ items, onGoPhase, onPatchPhase, title, subtitle }) {
       const list = Array.isArray(items) ? items : [];
       const range = ganttRange(list);
+      const months = ganttMonthLabels(range);
       const spanMs = Math.max(86400000, new Date(range.max).getTime() - new Date(range.min).getTime() + 86400000);
 
       function barStyle(phase) {
@@ -935,7 +1289,16 @@ tr.active td{background:#f0fdf9}
           <div class="pv-gantt-global">
             <div class="pv-gantt-head">
               <span>Posms</span>
-              <span>${range.min} — ${range.max}</span>
+              <div class="pv-gantt-track-wrap">
+                <div class="pv-gantt-months">
+                  ${months.map(
+                    (m, i) => html`
+                      <div class="pv-gantt-month-tick" key=${i} style=${{ left: m.left }}>${m.label}</div>
+                    `,
+                  )}
+                </div>
+                <span style=${{ fontSize: "0.72rem" }}>${range.min} — ${range.max}</span>
+              </div>
               <span>%</span>
             </div>
             ${list.length
@@ -949,9 +1312,11 @@ tr.active td{background:#f0fdf9}
                         <span class="pv-phase-num">${p.num || ""}</span>
                         ${onGoPhase ? ce(PhaseLink, { phase: p, onGo: onGoPhase }) : html`<span>${p.title}</span>`}
                       </div>
-                      <div class="pv-gantt-track">
-                        <div class="pv-gantt-bar ${tone}" style=${{ left: st.left, width: st.width }}>
-                          <div class="fill" style=${{ width: `${st.pr}%` }}></div>
+                      <div class="pv-gantt-track-wrap">
+                        <div class="pv-gantt-track">
+                          <div class="pv-gantt-bar ${tone}" style=${{ left: st.left, width: st.width }}>
+                            <div class="fill" style=${{ width: `${st.pr}%` }}></div>
+                          </div>
                         </div>
                       </div>
                       <input
@@ -1089,7 +1454,7 @@ tr.active td{background:#f0fdf9}
       `;
     }
 
-    function OverviewScreen({ phases, onGoPhase, patchPhase, addPhase, deletePhase }) {
+    function OverviewScreen({ phases, overviewBlocks, onOverviewBlocksChange, onGoPhase, patchPhase, addPhase, deletePhase }) {
       const [newTitle, setNewTitle] = useState("");
       const [newParent, setNewParent] = useState("");
       const [newDesc, setNewDesc] = useState("");
@@ -1170,6 +1535,12 @@ tr.active td{background:#f0fdf9}
               <button type="button" class="pv-btn primary" onClick=${submitAddPhase}>+ Pievienot</button>
             </div>
           </div>
+
+          ${ce(ContentWorkspace, {
+            title: "Vispārīgais saturs — piezīmes, attēli, pielikumi",
+            blocks: overviewBlocks,
+            onChange: onOverviewBlocksChange,
+          })}
         </div>
       `;
     }
@@ -1263,6 +1634,12 @@ tr.active td{background:#f0fdf9}
           })}
 
           ${ce(PhaseGantt, { phase, phases, onGoPhase, onPatchPhase: patchPhase })}
+
+          ${ce(ContentWorkspace, {
+            title: "Posma saturs — teksti, attēli, pielikumi, tabulas",
+            blocks: phase.blocks || [],
+            onChange: (blocks) => patchPhase(phase.id, { blocks }),
+          })}
 
           ${isRoot
             ? html`
@@ -1477,6 +1854,8 @@ tr.active td{background:#f0fdf9}
               ${state.screen === "overview"
                 ? ce(OverviewScreen, {
                     phases,
+                    overviewBlocks: state.overviewBlocks || [],
+                    onOverviewBlocksChange: (blocks) => setState((p) => ({ ...p, overviewBlocks: blocks })),
                     onGoPhase: goPhase,
                     patchPhase,
                     addPhase,
