@@ -477,8 +477,8 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202606211"></script>
-      <script defer src="./ProcesuVadibaPieslegums.js?v=202606212"></script>
+      <script defer src="./ProcesuVadiba.js?v=202606213"></script>
+      <script defer src="./ProcesuVadibaPieslegums.js?v=202606213"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -1343,46 +1343,6 @@
           hasFactory: typeof globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule === "function",
           hasPanel: Boolean(getProcesuVadibaPanel()),
         });
-        function ProcesuVadibaHost({ loadTick = 0 }) {
-          const hostRef = useRef(null);
-          const rootRef = useRef(null);
-          useEffect(() => {
-            const el = hostRef.current;
-            if (!el) return undefined;
-            const factory = globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule;
-            if (!factory) {
-              el.innerHTML =
-                '<section class="list-panel"><p><strong>Procesu vadība ielādējas…</strong> Pagaidi un pārlādē ar Ctrl+F5.</p></section>';
-              return undefined;
-            }
-            let Panel = getProcesuVadibaPanel();
-            if (!Panel) {
-              try {
-                Panel = factory(html, React);
-                cachedProcesuVadibaPanel = Panel;
-              } catch (e) {
-                console.error("[Procesu vadība] mount", e);
-                el.innerHTML =
-                  '<section class="list-panel"><p>Procesu vadības modulis neizdevās ielādēt. Skatīt konsoli.</p></section>';
-                return undefined;
-              }
-            }
-            if (!rootRef.current) rootRef.current = createRoot(el);
-            rootRef.current.render(React.createElement(Panel));
-            console.info("[Procesu vadība] ielādēts");
-            return () => {
-              try {
-                rootRef.current?.unmount();
-              } catch {
-                /* ignore */
-              }
-              rootRef.current = null;
-            };
-          }, [loadTick]);
-          return html`<div ref=${hostRef} class="pv-mount-host" style=${{ minHeight: "70vh", width: "100%" }}>
-            <p style="padding:1rem;color:#0f3d38;margin:0">Ielādē Procesu vadību…</p>
-          </div>`;
-        }
         const AppShellWithNav =
           globalThis.PDD_NAV?.createAppShellWithNav?.(html) ??
           (({ header, children }) => html`
@@ -7765,7 +7725,6 @@
           }, [session?.user, profile]);
           const [view, setView] = useState("home");
           const viewRef = useRef("home");
-          const [pvLoadTick, setPvLoadTick] = useState(0);
           const [promSub, setPromSub] = useState("calendar");
           const [navPast, setNavPast] = useState([]);
           const [darbaUzdevumiFocus, setDarbaUzdevumiFocus] = useState(null);
@@ -8050,19 +8009,6 @@
               if (globalThis.__PDD_CHANGE_VIEW__ === handleChangeView) delete globalThis.__PDD_CHANGE_VIEW__;
             };
           }, [handleChangeView]);
-          useEffect(() => {
-            if (view !== "procesuVadiba") return undefined;
-            if (getProcesuVadibaPanel()) return undefined;
-            let tries = 0;
-            const id = setInterval(() => {
-              tries += 1;
-              if (globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule || tries > 40) {
-                setPvLoadTick((t) => t + 1);
-                clearInterval(id);
-              }
-            }, 150);
-            return () => clearInterval(id);
-          }, [view, pvLoadTick]);
           const handlePromSubChange = useCallback((sub) => {
             setNavPast((p) => [...p, { view, promSub }]);
             setPromSub(sub);
@@ -8627,7 +8573,19 @@
                     : html`<section class="list-panel"><p>Saliedēšanas modulis nav ielādēts.</p></section>`;
                 }
                 if (view === "procesuVadiba") {
-                  return React.createElement(ProcesuVadibaHost, { loadTick: pvLoadTick });
+                  return html`<iframe
+                    title="Procesu vadība"
+                    src="./procesu-vadiba.html"
+                    class="pv-embed-frame"
+                    style=${{
+                      display: "block",
+                      width: "100%",
+                      minHeight: "calc(100vh - 9rem)",
+                      border: "0",
+                      borderRadius: "14px",
+                      background: "#e8f8f3",
+                    }}
+                  ></iframe>`;
                 }
                 return null;
               })()}

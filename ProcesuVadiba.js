@@ -413,6 +413,7 @@
   }
 
   function createProcesuVadibaModule(html, React) {
+    ensureStyles();
     const { useState, useEffect, useCallback, useMemo, useRef, createElement: ce } = React;
 
     function usePersistedState() {
@@ -929,7 +930,6 @@
     }
 
     return function ProcesuVadibaPanel() {
-      ensureStyles();
       const [state, setState, syncStatus] = usePersistedState();
 
       useEffect(() => {
