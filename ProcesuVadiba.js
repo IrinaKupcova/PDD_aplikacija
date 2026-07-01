@@ -12,7 +12,7 @@
   const REMOTE_HISTORY_TABLE = "Procesu_vadibas_vesture";
   const REMOTE_ROW_ID = "main";
   const REMOTE_SAVE_MS = 700;
-  const REMOTE_POLL_MS = 20000;
+  const REMOTE_POLL_MS = 8000;
   const REMOTE_HISTORY_LIMIT = 40;
   const HISTORY_PAGE_SIZE = 20;
   const REMOTE_SYNC_ENABLED = true;
@@ -78,7 +78,7 @@
   function saveState(state) {
     if (typeof localStorage === "undefined") return;
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify({ ...state, updatedAt: new Date().toISOString() }));
+      localStorage.setItem(LS_KEY, JSON.stringify(state));
     } catch (e) {
       console.warn("[Procesu vadība] Neizdevās saglabāt lokāli", e);
     }
@@ -115,7 +115,23 @@
     if (!cfg) return null;
     const lib = root.supabase;
     if (lib?.createClient) return lib.createClient(cfg.url, cfg.key);
+    if (typeof lib === "function") return lib(cfg.url, cfg.key);
+    if (typeof root.createClient === "function") return root.createClient(cfg.url, cfg.key);
     return null;
+  }
+
+  function waitMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function waitForSharedSupabase(maxMs = 12000) {
+    const step = 150;
+    const tries = Math.ceil(maxMs / step);
+    for (let i = 0; i < tries; i += 1) {
+      if (root.__PDD_SUPABASE__) return root.__PDD_SUPABASE__;
+      await waitMs(step);
+    }
+    return root.__PDD_SUPABASE__ || null;
   }
 
   let ensureSupabasePromise = null;
@@ -124,6 +140,8 @@
     if (root.__PDD_SUPABASE__) return root.__PDD_SUPABASE__;
     if (!ensureSupabasePromise) {
       ensureSupabasePromise = (async () => {
+        await waitForSharedSupabase();
+        if (root.__PDD_SUPABASE__) return root.__PDD_SUPABASE__;
         const cfg = getSupabaseConfig();
         const sb = createSupabaseClient(cfg);
         if (!sb) return null;
@@ -199,8 +217,6 @@
       if (legacy?.state && typeof legacy.state === "object") data = legacy;
       else return null;
     }
-    const hasPhases = Array.isArray(data.state.phases) && data.state.phases.length > 0;
-    if (!hasPhases) return null;
     return migrateState({
       ...data.state,
       updatedAt: data.updated_at || data.state.updatedAt,
@@ -383,7 +399,9 @@
   }
 
   function migrateState(s) {
-    if (!s || !Array.isArray(s.phases) || s.phases.length === 0) {
+    if (!s || typeof s !== "object") return defaultState();
+    if (!Array.isArray(s.phases)) return defaultState();
+    if (s.phases.length === 0 && !s.workPlanSections?.length && !s.updatedAt && !s.updated_at) {
       return defaultState();
     }
     for (const p of s.phases) {
@@ -2374,10 +2392,12 @@ ${body}
     function usePersistedState() {
       const [state, setState] = useState(() => loadState());
       const [syncStatus, setSyncStatus] = useState("local");
+      const [syncError, setSyncError] = useState("");
       const saveTimerRef = useRef(null);
       const remoteReadyRef = useRef(false);
       const stateRef = useRef(state);
       const hydratedRef = useRef(false);
+      const savingRef = useRef(false);
 
       useEffect(() => {
         stateRef.current = state;
@@ -2391,42 +2411,53 @@ ${body}
           const sb = await ensureSupabaseClient();
           if (cancelled) return;
           if (!sb) {
-            if (tryNum < 40) {
-              retryTimer = setTimeout(() => hydrateFromRemote(tryNum + 1), 1000);
+            if (tryNum < 80) {
+              retryTimer = setTimeout(() => hydrateFromRemote(tryNum + 1), 250);
               return;
             }
             setSyncStatus("local");
+            setSyncError("Nav Supabase savienojuma — dati tikai šajā pārlūkā.");
             remoteReadyRef.current = true;
             return;
           }
           try {
-            const local = loadState();
             let remote = await fetchRemoteState(sb);
-            let booted = false;
             if (!remote) {
+              const local = loadState();
               const boot = await saveRemoteState(sb, local);
               if (boot?.ok) {
-                remote = local;
-                booted = true;
+                remote = { ...local, updatedAt: boot.updatedAt };
               } else {
                 console.warn(
                   "[Procesu vadība] Neizdevās saglabāt Supabase — pārbaudi, vai tabula Procesu_vadibas_modulis eksistē.",
                   boot?.error,
                 );
-                if (!cancelled) setSyncStatus("error");
+                if (!cancelled) {
+                  setSyncStatus("error");
+                  setSyncError(
+                    boot?.error?.message ||
+                      "Neizdevās rakstīt Supabase. Palaid SQL: supabase/PIEMEROT_PROCESU_VADIBAS_MODULIS.sql",
+                  );
+                }
                 remoteReadyRef.current = true;
                 return;
               }
             }
             if (cancelled || hydratedRef.current) return;
             hydratedRef.current = true;
-            const merged = booted ? local : pickNewerState(remote, local);
-            setState(merged);
-            saveState(merged);
-            if (!cancelled) setSyncStatus("synced");
+            setState(remote);
+            saveState(remote);
+            stateRef.current = remote;
+            if (!cancelled) {
+              setSyncStatus("synced");
+              setSyncError("");
+            }
           } catch (e) {
             console.warn("[Procesu vadība] sākotnējā sinhronizācija", e);
-            if (!cancelled) setSyncStatus("error");
+            if (!cancelled) {
+              setSyncStatus("error");
+              setSyncError(String(e?.message || e || "Sinhronizācijas kļūda"));
+            }
           } finally {
             if (!cancelled) remoteReadyRef.current = true;
           }
@@ -2450,14 +2481,29 @@ ${body}
         clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => {
           void (async () => {
+            savingRef.current = true;
             const sb = await ensureSupabaseClient();
             if (!sb) {
+              savingRef.current = false;
               setSyncStatus("local");
+              setSyncError("Nav Supabase — izmaiņas nav kopīgas ar komandu.");
               return;
             }
             const out = await saveRemoteState(sb, stateRef.current);
-            if (!out?.ok) setSyncStatus("error");
-            else setSyncStatus("synced");
+            savingRef.current = false;
+            if (!out?.ok) {
+              setSyncStatus("error");
+              setSyncError(
+                out?.error?.message ||
+                  "Neizdevās saglabāt Supabase. Pārbaudi tabulu Procesu_vadibas_modulis un tīkla savienojumu.",
+              );
+              return;
+            }
+            const synced = { ...stateRef.current, updatedAt: out.updatedAt };
+            stateRef.current = synced;
+            saveState(synced);
+            setSyncStatus("synced");
+            setSyncError("");
           })();
         }, REMOTE_SAVE_MS);
         return () => clearTimeout(saveTimerRef.current);
@@ -2467,17 +2513,19 @@ ${body}
         if (!REMOTE_SYNC_ENABLED) return undefined;
         const poll = setInterval(() => {
           void (async () => {
-            if (!remoteReadyRef.current || saveTimerRef.current) return;
+            if (!remoteReadyRef.current || saveTimerRef.current || savingRef.current) return;
             const sb = await ensureSupabaseClient();
             if (!sb) return;
             try {
               const remote = await fetchRemoteState(sb);
               if (!remote) return;
               const local = stateRef.current;
-              if (stateTimestamp(remote) > stateTimestamp(local) + 1000) {
+              if (stateTimestamp(remote) > stateTimestamp(local)) {
                 setState(remote);
                 saveState(remote);
+                stateRef.current = remote;
                 setSyncStatus("synced");
+                setSyncError("");
               }
             } catch (e) {
               console.warn("[Procesu vadība] fona sinhronizācija", e);
@@ -2487,7 +2535,51 @@ ${body}
         return () => clearInterval(poll);
       }, [setState]);
 
-      return [state, setState, syncStatus];
+      useEffect(() => {
+        if (!REMOTE_SYNC_ENABLED) return undefined;
+        let channel = null;
+        let sbRef = null;
+        let cancelled = false;
+
+        void (async () => {
+          const sb = await ensureSupabaseClient();
+          if (!sb || cancelled) return;
+          sbRef = sb;
+          channel = sb
+            .channel("pv-modulis-team-sync")
+            .on(
+              "postgres_changes",
+              {
+                event: "UPDATE",
+                schema: "public",
+                table: REMOTE_TABLE,
+                filter: `id=eq.${REMOTE_ROW_ID}`,
+              },
+              () => {
+                void (async () => {
+                  if (saveTimerRef.current || savingRef.current) return;
+                  const remote = await fetchRemoteState(sb);
+                  if (!remote) return;
+                  if (stateTimestamp(remote) > stateTimestamp(stateRef.current)) {
+                    setState(remote);
+                    saveState(remote);
+                    stateRef.current = remote;
+                    setSyncStatus("synced");
+                    setSyncError("");
+                  }
+                })();
+              },
+            )
+            .subscribe();
+        })();
+
+        return () => {
+          cancelled = true;
+          if (sbRef && channel) sbRef.removeChannel(channel);
+        };
+      }, [setState]);
+
+      return [state, setState, syncStatus, syncError];
     }
 
     function StatusPill({ value }) {
@@ -4513,7 +4605,7 @@ ${body}
     }
 
     return function ProcesuVadibaPanel() {
-      const [state, setState, syncStatus] = usePersistedState();
+      const [state, setState, syncStatus, syncError] = usePersistedState();
 
       useEffect(() => {
         console.info("[Procesu vadība] panelis atvērts");
@@ -4525,8 +4617,10 @@ ${body}
           : syncStatus === "saving"
             ? "Saglabā Supabase…"
             : syncStatus === "error"
-              ? "DB kļūda — dati lokāli"
-              : "Tikai lokāli";
+              ? "DB kļūda — dati vēl nav kopīgi"
+              : syncStatus === "local"
+                ? "Tikai lokāli — nav Supabase"
+                : "Sinhronizē…";
 
       const phases = state.phases || [];
       const workPlanSections = state.workPlanSections || [];
@@ -4733,7 +4827,10 @@ ${body}
               <div class="pv-brand">
                 <h2>Procesu vadība</h2>
                 <p style=${{ margin: "0.35rem 0 0", fontSize: "0.72rem", opacity: 0.9 }}>${syncLabel}</p>
-                <p class="pv-sync-note">Visi uzdevumi, teksti, tabulas un darba plāns — kopīgi Komandas lietotājiem.</p>
+                ${syncError
+                  ? html`<p style=${{ margin: "0.25rem 0 0", fontSize: "0.68rem", color: "#7f1d1d", lineHeight: 1.35 }}>${syncError}</p>`
+                  : null}
+                <p class="pv-sync-note">Visi uzdevumi, teksti, tabulas un darba plāns — kopīgi komandas lietotājiem caur Supabase.</p>
               </div>
               <button
                 type="button"

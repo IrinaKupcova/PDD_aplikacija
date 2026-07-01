@@ -15,8 +15,30 @@
       .pv-boot-error p { margin: 0.35rem 0; font-size: 0.92rem; line-height: 1.45; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+      (function () {
+        const PDD_SB_URL = "https://fdnkvecgqetmwilwolgt.supabase.co";
+        const PDD_SB_ANON_KEY = "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
+        function bootSupabase() {
+          if (globalThis.__PDD_SUPABASE__) return;
+          const lib = globalThis.supabase;
+          if (!lib?.createClient) return;
+          const sb = lib.createClient(PDD_SB_URL, PDD_SB_ANON_KEY);
+          globalThis.__PDD_SUPABASE__ = sb;
+          globalThis.__PDD_ENSURE_DB_SESSION__ = async function () {
+            const { data } = await sb.auth.getSession();
+            if (data?.session?.access_token) return true;
+            const { error } = await sb.auth.signInAnonymously();
+            if (error) console.warn("[Procesu vadība] anon auth", error);
+            return true;
+          };
+          void globalThis.__PDD_ENSURE_DB_SESSION__();
+        }
+        bootSupabase();
+      })();
+    </script>
     <script defer src="./Komanda.js?v=202606182"></script>
-    <script defer src="./ProcesuVadiba.js?v=202606268"></script>
+    <script defer src="./ProcesuVadiba.js?v=202606269"></script>
   </head>
   <body>
     <div id="root"><p style="padding:1.25rem;color:#1f4d47;margin:0">Ielādē Procesu vadību…</p></div>
