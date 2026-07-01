@@ -1,0 +1,26 @@
+---
+description: Procesu vadība — stabilā versija 202606270; nesalauzt Supabase sinhronizāciju
+globs: ProcesuVadiba.js,ProcesuVadibaPieslegums.js,procesu-vadiba.html,Procesu vadība.js
+alwaysApply: false
+---
+
+# Procesu vadība — stabilā relīze 202606270 (MODULE_VERSION 9)
+
+Šī versija ir apstiprināta ar kopīgu Supabase sinhronizāciju. **Nemainīt bez skaidra migrācijas plāna.**
+
+## Neaiztikt (sinhronizācija)
+
+- `REMOTE_SYNC_ENABLED` paliek `true`
+- Kopīgais avots: tabula `Procesu_vadibas_modulis`, rinda `id = main`, kolonna `state` (JSON)
+- Vēsture: `Procesu_vadibas_vesture`
+- Ielādē: **Supabase pirmajā vietā**; izmanto `pickTeamState` / `stateContentScore` — **ne** atgriezt `pickNewerState(local, remote)` kā noklusējumu
+- `saveState` **nedrīkst** automātiski piešķirt jaunu `updatedAt` katram kešam
+- Saglabā `backupLocalState`, `forcePushToTeam`, vēstures atjaunošanu
+
+## Cache bust
+
+HTML failos `ProcesuVadiba.js?v=202606270` — palielini versiju tikai kopā ar apzinātu relīzi.
+
+## Git
+
+Stabilais tags: `procesu-vadiba-stable-202606270`. Pirms lielām izmaiņām salīdzini ar šo tagu.

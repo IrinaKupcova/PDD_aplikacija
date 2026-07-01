@@ -1,10 +1,16 @@
 /**
  * Procesu vadība — uzdevumi, posmi, apakšposmi, Gantt, Lists reģistri.
  * Eksports: globalThis.PDD_PROCESU_VADIBA.createProcesuVadibaModule(html, React)
+ *
+ * STABILA RELĪZE: 202606270 (MODULE_VERSION 9)
+ * — Kopīgs stāvoklis Supabase tabulā Procesu_vadibas_modulis (id = main)
+ * — Vēsture: Procesu_vadibas_vesture; neizslēgt REMOTE_SYNC_ENABLED
+ * — Neatgriezties pie local-first / pickNewerState(local) ielādē
  */
 (function (root) {
   const LS_KEY = "pdd_procesu_vadiba_v2";
-  const MODULE_VERSION = 8;
+  const MODULE_VERSION = 9;
+  const STABLE_RELEASE = "202606270";
   const GANTT_CHART_LABEL = "Gantt Chart";
   const GANTT_CHART_SUBLABEL = "Laika grafiks";
   const REMOTE_TABLE = "Procesu_vadibas_modulis";
@@ -5090,6 +5096,8 @@ ${body}
   }
 
   root.PDD_PROCESU_VADIBA = {
+    MODULE_VERSION,
+    STABLE_RELEASE,
     createProcesuVadibaModule,
     loadState,
     ensureSupabaseClient,
