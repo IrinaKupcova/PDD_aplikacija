@@ -2357,7 +2357,9 @@
                 const detail = fails
                   .map((f) => {
                     const edgeMsg = String(
-                      f?.edge?.body?.details?.message ||
+                      f?.custom?.body?.details?.message ||
+                        f?.custom?.body?.error ||
+                        f?.edge?.body?.details?.message ||
                         f?.edge?.body?.error ||
                         f?.reason ||
                         "",
@@ -2367,9 +2369,9 @@
                   .filter(Boolean)
                   .join("\n");
                 console.error("[PDD_INFORMESHANA] pievienošanas vēstules NETIKA nosūtītas:", fails);
-                const isInvalidKey = /api key is invalid|missing_resend_api_key|no_pdd_resend_api/i.test(detail);
-                const isDomainUnverified = /domain is not verified|not verified/i.test(detail);
-                const isTestingOnly = /only send testing emails/i.test(detail);
+                const alertMsg = api.buildInformeshanaAlertMessage
+                  ? api.buildInformeshanaAlertMessage(detail, fails)
+                  : "Automātiskā sūtīšana neizdevās.";
                 const firstFail = fails[0];
                 const openDraft = globalThis.PDD_OPEN_EMAIL_DRAFT__ || api?.openEmailDraftPanel;
                 if (typeof openDraft === "function" && firstFail?.email && rowForInform) {
@@ -2389,17 +2391,7 @@
                 alert(
                   "IAD saglabāts, bet automātiskais paziņojums netika nosūtīts.\n" +
                     "Atvēra sagatavoto vēstuli — nokopē un nosūti pa e-pastu.\n\n" +
-                    (isInvalidKey
-                      ? "RESEND_API_KEY Supabase Edge ir nederīga.\n\n" +
-                        "1) Resend.com → API Keys → jauna atslēga\n" +
-                        "2) GitHub Secrets → RESEND_API_KEY\n" +
-                        "3) Supabase → Edge Functions → Secrets → RESEND_API_KEY\n" +
-                        "4) Actions → „Supabase Edge — sendEmail + Resend” → Run workflow"
-                      : isTestingOnly || isDomainUnverified
-                        ? "Resend: ar testa sūtītāju var sūtīt tikai uz Resend konta e-pastu.\n\n" +
-                          "Lai iet uz @vid.gov.lv: resend.com → Domains → verificē vid.gov.lv,\n" +
-                          "tad RESEND_FROM = PDD <...@vid.gov.lv> Supabase Secrets."
-                        : "Pārbaudi RESEND_API_KEY un RESEND_FROM.") +
+                    alertMsg +
                     (detail ? `\n\n${detail}` : "\n\nSkaties F12 → Console."),
                 );
               } else if (out?.sent > 0) {

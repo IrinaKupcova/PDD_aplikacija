@@ -465,8 +465,8 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=202606182"></script>
-      <script defer src="./Informeshana.js?v=202606184"></script>
-      <script defer src="./IAD.js?v=202606182"></script>
+      <script defer src="./Informeshana.js?v=202606185"></script>
+      <script defer src="./IAD.js?v=202606185"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=20260422l"></script>
@@ -1635,6 +1635,7 @@
           const bearerVariants = [apiKey];
           if (accessToken && accessToken !== apiKey) bearerVariants.push(accessToken);
 
+          let lastFail = { ok: false, reason: "all_channels_failed" };
           for (const u of fetchUrls) {
             const dedicated = /\/sendIadEmail$/i.test(u);
             const emailPayload = dedicated ? iadInvokePayload : legacyPayload;
@@ -1659,6 +1660,7 @@
                 if (isSendPddEmailResponseOk(j, out.ok)) {
                   return { ok: true, via: dedicated ? "edge_sendIadEmail" : "edge_sendEmail", body: j };
                 }
+                lastFail = { ok: false, reason: j?.error || j?.reason || "edge_failed", status: out.status, body: j, fnUrl: u };
                 if (!out.ok || j?.skipped) {
                   if (j?.reason === "not_cits") {
                     console.warn(
@@ -1700,7 +1702,7 @@
             }
           }
 
-          return { ok: false, reason: "all_channels_failed" };
+          return { ok: false, reason: "all_channels_failed", body: lastFail?.body, status: lastFail?.status };
         };
 
         window.PDD_TEST_IAD_EMAIL = async function PDD_TEST_IAD_EMAIL(to = "irina.kupcova@vid.gov.lv") {

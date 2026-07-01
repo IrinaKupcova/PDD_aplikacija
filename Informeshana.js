@@ -956,11 +956,33 @@
   }
 
   function getAnonApiKey() {
-    if (typeof localStorage !== "undefined") {
-      const ls = String(localStorage.getItem("pdd_supabase_anon_key") || "").trim();
-      if (ls) return ls;
+    try {
+      const sb = root.__PDD_SUPABASE__;
+      const fromClient = String(sb?.supabaseKey ?? "").trim();
+      if (fromClient) return sanitizeHttpHeaderValue(fromClient);
+    } catch {
+      /* ignore */
     }
-    return FILE_SUPABASE_ANON_KEY;
+    const fileKey = sanitizeHttpHeaderValue(FILE_SUPABASE_ANON_KEY);
+    if (typeof localStorage !== "undefined") {
+      const ls = sanitizeHttpHeaderValue(localStorage.getItem("pdd_supabase_anon_key") || "");
+      if (ls.startsWith("eyJ") && ls.length >= 80) return ls;
+      if (/^sb_/i.test(ls) && ls.length >= 30) return ls;
+    }
+    return fileKey;
+  }
+
+  async function getAccessTokenForInformeshana() {
+    const sb = getSupabaseClientForBrowser();
+    if (!sb?.auth?.getSession) return "";
+    try {
+      const { data } = await sb.auth.getSession();
+      const t = sanitizeHttpHeaderValue(data?.session?.access_token || "");
+      if (t.startsWith("eyJ")) return t;
+    } catch {
+      /* ignore */
+    }
+    return "";
   }
 
   /** Pārlūkā: Edge ar anon atslēgu. Node: RESEND_API_KEY. */
@@ -1310,56 +1332,62 @@
       ...(ccList.length ? { cc: ccList } : {}),
     };
 
+    const accessToken = await getAccessTokenForInformeshana();
+    const bearerVariants = [apiKey];
+    if (accessToken && accessToken !== apiKey) bearerVariants.push(accessToken);
+
     let lastFail = { ok: false, reason: "edge_skipped" };
     for (const fnUrl of getIadEmailFnUrls()) {
       const dedicated = /\/sendIadEmail$/i.test(fnUrl);
       const payload = dedicated ? iadPayload : legacyPayload;
-      try {
-        const res = await fetch(fnUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: apiKey,
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        const raw = await res.text();
-        let body = null;
+      for (const bearer of bearerVariants) {
         try {
-          body = raw ? JSON.parse(raw) : null;
-        } catch {
-          body = { raw };
-        }
-        if (res.ok && body && (body.ok || body.success) && !body.skipped) {
-          return { ok: true, via: dedicated ? "edge_sendIadEmail" : "edge_sendEmail", body, fnUrl };
-        }
-        if (body?.skipped && body?.reason === "not_cits" && typeof console !== "undefined" && console.warn) {
-          console.warn(
-            "[PDD_INFORMESHANA] sendEmail serverī nav IaD atbalsta (not_cits). Atjaunini sendEmail kodu vai izmanto Vercel pdd-resend (kā prombūtnēm).",
-            fnUrl,
-          );
-        }
-        if (
-          String(body?.details?.message || body?.error || "").toLowerCase().includes("api key is invalid") &&
-          typeof console !== "undefined" &&
-          console.warn
-        ) {
-          console.warn(
-            "[PDD_INFORMESHANA] Supabase Edge RESEND_API_KEY ir nederīga. Prombūtnes strādā caur Vercel — iestati localStorage.pdd_resend_api_url",
-            fnUrl,
+          const res = await fetch(fnUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: apiKey,
+              Authorization: `Bearer ${bearer}`,
+            },
+            body: JSON.stringify(payload),
+          });
+          const raw = await res.text();
+          let body = null;
+          try {
+            body = raw ? JSON.parse(raw) : null;
+          } catch {
+            body = { raw };
+          }
+          if (res.ok && body && (body.ok || body.success) && !body.skipped) {
+            return { ok: true, via: dedicated ? "edge_sendIadEmail" : "edge_sendEmail", body, fnUrl };
+          }
+          if (body?.skipped && body?.reason === "not_cits" && typeof console !== "undefined" && console.warn) {
+            console.warn(
+              "[PDD_INFORMESHANA] sendEmail serverī nav IaD atbalsta (not_cits). Atjaunini sendEmail kodu vai izmanto Vercel pdd-resend (kā prombūtnēm).",
+              fnUrl,
+            );
+          }
+          if (
+            String(body?.details?.message || body?.error || "").toLowerCase().includes("api key is invalid") &&
+            typeof console !== "undefined" &&
+            console.warn
+          ) {
+            console.warn(
+              "[PDD_INFORMESHANA] Supabase Edge RESEND_API_KEY ir nederīga — atjaunini Supabase Edge Secrets.",
+              fnUrl,
+              body,
+            );
+          }
+          lastFail = {
+            ok: false,
+            reason: body?.reason || body?.error || "edge_skipped",
+            status: res.status,
             body,
-          );
+            fnUrl,
+          };
+        } catch (e) {
+          lastFail = { ok: false, reason: "edge_fetch_error", error: String(e?.message || e), fnUrl };
         }
-        lastFail = {
-          ok: false,
-          reason: body?.reason || body?.error || "edge_skipped",
-          status: res.status,
-          body,
-          fnUrl,
-        };
-      } catch (e) {
-        lastFail = { ok: false, reason: "edge_fetch_error", error: String(e?.message || e), fnUrl };
       }
     }
     return lastFail;
@@ -1370,10 +1398,51 @@
     const edgeMsg = String(viaEdge?.body?.details?.message || viaEdge?.body?.error || viaEdge?.reason || "").trim();
     if (edgeMsg) parts.push(`Edge: ${edgeMsg}`);
     const pddMsg = String(viaPddApi?.body?.error || viaPddApi?.reason || "").trim();
-    if (pddMsg) parts.push(`API: ${pddMsg}`);
+    if (pddMsg && !/^(no_resend_api_url|pdd_resend_skipped|no_pdd_resend_api)$/i.test(pddMsg)) {
+      parts.push(`API: ${pddMsg}`);
+    }
     const resendMsg = String(viaResend?.body?.message || viaResend?.reason || "").trim();
-    if (resendMsg) parts.push(`Resend: ${resendMsg}`);
+    if (resendMsg && resendMsg !== "resend_http_skipped_browser") parts.push(`Resend: ${resendMsg}`);
     return parts.join(" · ") || "Nezināma kļūda";
+  }
+
+  function buildInformeshanaAlertMessage(detail, fails) {
+    const d = String(detail || "");
+    const dl = d.toLowerCase();
+    const firstReason = String(fails?.[0]?.reason || "").toLowerCase();
+    if (firstReason === "no_email_for_name" || dl.includes("no_email_for_name")) {
+      return (
+        "Komandas sarakstā nav atrasts šīs personas e-pasts.\n\n" +
+        "Papildini e-pastu tabulā users (kolonna email / i-mail / e-mail) un mēģini vēlreiz."
+      );
+    }
+    if (/api key is invalid/i.test(dl)) {
+      return (
+        "RESEND_API_KEY Supabase Edge ir nederīga.\n\n" +
+        "1) Resend.com → API Keys → jauna atslēga\n" +
+        "2) Supabase → Edge Functions → Secrets → RESEND_API_KEY\n" +
+        "3) Actions → „Supabase Edge — sendEmail + Resend” → Run workflow"
+      );
+    }
+    if (/only send testing emails/i.test(dl)) {
+      return (
+        "Resend testa režīmā vēstule tiek novirzīta uz pliada@inbox.lv.\n" +
+        "Pārbaudi šo pastkasti — tur būs kopija ar plānotajām adresēm."
+      );
+    }
+    if (/domain is not verified|not verified/i.test(dl)) {
+      return (
+        "Resend: domēns vēl nav verificēts.\n" +
+        "Pagaidām vēstules nonāk uz pliada@inbox.lv (testa režīms)."
+      );
+    }
+    if (/edge_fetch_error|failed to fetch|all_channels_failed/i.test(dl)) {
+      return (
+        "Neizdevās sasniegt Supabase Edge funkciju no pārlūka.\n" +
+        "Pārbaudi, vai sendIadEmail ir deployota, un mēģini Ctrl+F5."
+      );
+    }
+    return "Automātiskā sūtīšana neizdevās. Skaties F12 → Console.";
   }
 
   async function dispatchIadInformEmail({ to, subject, text, html, url, row, cc, kind, messageText, supabase }) {
@@ -1416,11 +1485,14 @@
     });
     if (viaPddApiEarly.ok) return recordOk(viaPddApiEarly, viaPddApiEarly.via || "pdd-resend-api");
 
+    let viaCustom = null;
     if (inBrowser && typeof root.PDD_INFORMESHANA_SEND_EMAIL__ === "function") {
       try {
         const custom = await root.PDD_INFORMESHANA_SEND_EMAIL__(customPayload);
+        viaCustom = custom;
         if (custom?.ok) return recordOk(custom, custom.via || "custom");
       } catch (e) {
+        viaCustom = { ok: false, reason: "custom_hook_exception", error: String(e?.message || e) };
         console.warn("[PDD_INFORMESHANA] custom hook error", e);
       }
     }
@@ -1459,10 +1531,12 @@
     });
     if (viaPddApi.ok) return recordOk(viaPddApi, viaPddApi.via || "pdd-resend-api");
 
-    const viaResend = await sendEmailViaResendHttp({ to: email, subject, text, html, cc: ccList });
+    const viaResend = inBrowser
+      ? { ok: false, reason: "resend_http_skipped_browser" }
+      : await sendEmailViaResendHttp({ to: email, subject, text, html, cc: ccList });
     if (viaResend.ok) return recordOk(viaResend, viaResend.via || "resend_http");
 
-    const failReason = formatIadEmailFailure(viaEdge, viaPddApi, viaResend);
+    const failReason = formatIadEmailFailure(viaCustom || viaEdge, viaPddApi, viaResend);
     if (typeof console !== "undefined" && console.error) {
       console.error("[PDD_INFORMESHANA] automātiskā sūtīšana neizdevās:", failReason, {
         to: email,
@@ -1475,9 +1549,10 @@
     return {
       ok: false,
       reason: failReason,
-      edge: viaEdge,
+      edge: viaCustom?.body ? viaCustom : viaEdge,
       pddApi: viaPddApi,
       resend: viaResend,
+      custom: viaCustom,
     };
   }
 
@@ -1838,6 +1913,7 @@
     isControlMonitorRecipient,
     openEmailDraftPanel,
     closeEmailDraftPanel,
+    buildInformeshanaAlertMessage,
     hasServerEmailChannel,
     debugEmailChannel: () => ({
       hasChannel: hasServerEmailChannel(),
