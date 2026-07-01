@@ -96,6 +96,63 @@
     return stateTimestamp(a) >= stateTimestamp(b) ? a : b;
   }
 
+  function stateContentScore(state) {
+    const phases = Array.isArray(state?.phases) ? state.phases : [];
+    const roots = phases.filter((p) => !p.parentId).length;
+    const blocks = phases.reduce((n, p) => n + (Array.isArray(p.blocks) ? p.blocks.length : 0), 0);
+    const wpTasks = (Array.isArray(state?.workPlanSections) ? state.workPlanSections : []).reduce(
+      (n, s) => n + (Array.isArray(s.tasks) ? s.tasks.length : 0),
+      0,
+    );
+    return roots * 10000 + phases.length * 100 + blocks * 10 + wpTasks * 5;
+  }
+
+  function stateSummaryLabel(state) {
+    const phases = Array.isArray(state?.phases) ? state.phases : [];
+    const roots = phases.filter((p) => !p.parentId).length;
+    const wpTasks = (Array.isArray(state?.workPlanSections) ? state.workPlanSections : []).reduce(
+      (n, s) => n + (Array.isArray(s.tasks) ? s.tasks.length : 0),
+      0,
+    );
+    return `${roots} uzdev. · ${phases.length} elementi · ${wpTasks} darba plāna uzdev.`;
+  }
+
+  function isLikelyDemoState(state) {
+    const roots = (state?.phases || []).filter((p) => !p.parentId);
+    if (roots.length !== 1) return false;
+    return String(roots[0]?.title || "").includes("jauna koncepta ieviešana");
+  }
+
+  function pickTeamState(local, remote) {
+    if (!remote) return local;
+    if (!local) return remote;
+    const localScore = stateContentScore(local);
+    const remoteScore = stateContentScore(remote);
+    if (localScore > remoteScore) return local;
+    if (remoteScore > localScore) return remote;
+    return stateTimestamp(remote) >= stateTimestamp(local) ? remote : local;
+  }
+
+  function backupLocalState(state) {
+    if (typeof localStorage === "undefined" || !state) return;
+    try {
+      localStorage.setItem(`${LS_KEY}_backup`, JSON.stringify(state));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function loadLocalBackupState() {
+    if (typeof localStorage === "undefined") return null;
+    try {
+      const raw = localStorage.getItem(`${LS_KEY}_backup`);
+      if (!raw) return null;
+      return migrateState(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+  }
+
   function getSupabaseConfig() {
     const url = String(
       (typeof localStorage !== "undefined" && localStorage.getItem(PDD_SB_LS_URL)) || PDD_SB_URL || "",
@@ -275,7 +332,7 @@
     const offset = paginated ? page * pageSize : 0;
     let query = sb
       .from(REMOTE_HISTORY_TABLE)
-      .select("id, saved_at, saved_by, action", paginated ? { count: "exact" } : undefined)
+      .select("id, saved_at, saved_by, action, state", paginated ? { count: "exact" } : undefined)
       .eq("module_id", REMOTE_ROW_ID)
       .order("saved_at", { ascending: false });
     if (paginated) {
@@ -2421,9 +2478,12 @@ ${body}
             return;
           }
           try {
+            const local = loadState();
+            if (local && stateContentScore(local) > stateContentScore(defaultState())) {
+              backupLocalState(local);
+            }
             let remote = await fetchRemoteState(sb);
             if (!remote) {
-              const local = loadState();
               const boot = await saveRemoteState(sb, local);
               if (boot?.ok) {
                 remote = { ...local, updatedAt: boot.updatedAt };
@@ -2442,6 +2502,37 @@ ${body}
                 remoteReadyRef.current = true;
                 return;
               }
+            } else {
+              const backup = loadLocalBackupState();
+              const candidates = [local, backup].filter(Boolean);
+              let best = remote;
+              for (const cand of candidates) {
+                if (stateContentScore(cand) > stateContentScore(best)) best = cand;
+              }
+              let pushedRicher = false;
+              if (stateContentScore(best) > stateContentScore(remote)) {
+                const push = await saveRemoteState(sb, best);
+                if (push?.ok) {
+                  remote = { ...best, updatedAt: push.updatedAt };
+                  pushedRicher = true;
+                } else {
+                  remote = best;
+                }
+              } else {
+                remote = pickTeamState(local, remote);
+              }
+              if (cancelled || hydratedRef.current) return;
+              hydratedRef.current = true;
+              setState(remote);
+              saveState(remote);
+              stateRef.current = remote;
+              if (!cancelled) {
+                setSyncStatus("synced");
+                setSyncError(
+                  pushedRicher ? "Lokālie dati bija pilnāki — augšupielādēti komandai Supabase." : "",
+                );
+              }
+              return;
             }
             if (cancelled || hydratedRef.current) return;
             hydratedRef.current = true;
@@ -2579,7 +2670,63 @@ ${body}
         };
       }, [setState]);
 
-      return [state, setState, syncStatus, syncError];
+      const forcePushToTeam = useCallback(async () => {
+        const sb = await ensureSupabaseClient();
+        if (!sb) {
+          setSyncStatus("local");
+          setSyncError("Nav Supabase — nevar augšupielādēt komandai.");
+          return false;
+        }
+        savingRef.current = true;
+        const out = await saveRemoteState(sb, stateRef.current);
+        savingRef.current = false;
+        if (!out?.ok) {
+          setSyncStatus("error");
+          setSyncError(out?.error?.message || "Neizdevās augšupielādēt datus komandai.");
+          return false;
+        }
+        const synced = { ...stateRef.current, updatedAt: out.updatedAt };
+        stateRef.current = synced;
+        saveState(synced);
+        setSyncStatus("synced");
+        setSyncError("Dati augšupielādēti komandai Supabase.");
+        return true;
+      }, []);
+
+      const restoreLocalBackup = useCallback(async () => {
+        const backup = loadLocalBackupState();
+        if (!backup) {
+          alert("Nav atrasta lokālā rezerves kopija šajā pārlūkā.");
+          return false;
+        }
+        if (
+          typeof confirm === "function" &&
+          !confirm(`Atjaunot rezerves kopiju (${stateSummaryLabel(backup)})? Aizstās pašreizējos datus.`)
+        ) {
+          return false;
+        }
+        setState(backup);
+        stateRef.current = backup;
+        saveState(backup);
+        backupLocalState(backup);
+        const sb = await ensureSupabaseClient();
+        if (sb) {
+          savingRef.current = true;
+          const out = await saveRemoteState(sb, backup);
+          savingRef.current = false;
+          if (out?.ok) {
+            const synced = { ...backup, updatedAt: out.updatedAt };
+            setState(synced);
+            stateRef.current = synced;
+            saveState(synced);
+            setSyncStatus("synced");
+            setSyncError("Rezerves kopija atjaunota un augšupielādēta komandai.");
+          }
+        }
+        return true;
+      }, [setState]);
+
+      return [state, setState, syncStatus, syncError, forcePushToTeam, restoreLocalBackup];
     }
 
     function StatusPill({ value }) {
@@ -4039,8 +4186,8 @@ ${body}
           <div class="pv-card">
             <h1>Vēsture un atjaunošana</h1>
             <p class="pv-history-intro">
-              Katra saglabāšana Supabase tiek arhivēta. Šeit var atjaunot iepriekšējo stāvokli — visi uzdevumi,
-              posmi, tabulas, teksti un darba plāna uzdevumi atjaunojas kopā. Vienā lapā rāda ${HISTORY_PAGE_SIZE} ierakstus.
+              Katra saglabāšana Supabase tiek arhivēta. Ja pazuduši uzdevumi, meklē ierakstu ar
+              <strong> visvairāk elementu</strong> un nospied „Atjaunot šo versiju”. Vienā lapā rāda ${HISTORY_PAGE_SIZE} ierakstus.
             </p>
             ${loading
               ? html`<p class="pv-empty">Ielādē vēsturi…</p>`
@@ -4056,6 +4203,11 @@ ${body}
                               <div style=${{ marginTop: "0.2rem", fontSize: "0.76rem" }}>
                                 ${row.saved_by ? `Lietotājs: ${row.saved_by}` : "Lietotājs: —"}
                               </div>
+                              ${row.state
+                                ? html`<div style=${{ marginTop: "0.15rem", fontSize: "0.74rem", color: "#047857", fontWeight: 600 }}>
+                                    ${stateSummaryLabel(migrateState(row.state))}
+                                  </div>`
+                                : null}
                             </div>
                             <button
                               type="button"
@@ -4605,7 +4757,7 @@ ${body}
     }
 
     return function ProcesuVadibaPanel() {
-      const [state, setState, syncStatus, syncError] = usePersistedState();
+      const [state, setState, syncStatus, syncError, forcePushToTeam, restoreLocalBackup] = usePersistedState();
 
       useEffect(() => {
         console.info("[Procesu vadība] panelis atvērts");
@@ -4820,6 +4972,13 @@ ${body}
         });
       }, []);
 
+      const dataSummary = useMemo(() => stateSummaryLabel(state), [state]);
+      const showDemoHint = useMemo(() => isLikelyDemoState(state), [state]);
+      const hasLocalBackup = useMemo(() => {
+        const b = loadLocalBackupState();
+        return Boolean(b && stateContentScore(b) > stateContentScore(state));
+      }, [state]);
+
       return html`
         <div class="pv-root">
           <div class="pv-shell">
@@ -4831,6 +4990,32 @@ ${body}
                   ? html`<p style=${{ margin: "0.25rem 0 0", fontSize: "0.68rem", color: "#7f1d1d", lineHeight: 1.35 }}>${syncError}</p>`
                   : null}
                 <p class="pv-sync-note">Visi uzdevumi, teksti, tabulas un darba plāns — kopīgi komandas lietotājiem caur Supabase.</p>
+                <p style=${{ margin: "0.35rem 0 0", fontSize: "0.68rem", opacity: 0.92 }}>Tagad: ${dataSummary}</p>
+                ${showDemoHint
+                  ? html`<p style=${{ margin: "0.25rem 0 0", fontSize: "0.68rem", color: "#92400e", lineHeight: 1.35 }}>
+                      Redzami tikai sākuma demo dati. Atver <strong>Vēsture un atjaunošana</strong> vai rezerves kopiju.
+                    </p>`
+                  : null}
+                ${hasLocalBackup
+                  ? html`
+                      <button
+                        type="button"
+                        class="pv-nav-btn"
+                        style=${{ marginTop: "0.35rem", fontSize: "0.78rem" }}
+                        onClick=${() => void restoreLocalBackup()}
+                      >
+                        ↩ Atjaunot no rezerves kopijas
+                      </button>
+                    `
+                  : null}
+                <button
+                  type="button"
+                  class="pv-nav-btn"
+                  style=${{ marginTop: "0.35rem", fontSize: "0.78rem" }}
+                  onClick=${() => void forcePushToTeam()}
+                >
+                  ↑ Augšupielādēt komandai
+                </button>
               </div>
               <button
                 type="button"
