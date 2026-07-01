@@ -2399,7 +2399,15 @@
                   .filter((r) => r?.ok && r?.email)
                   .map((r) => String(r.email))
                   .join(", ");
+                const testRelay = (out?.results || []).some(
+                  (r) => r?.body?.usedTestRelay || r?.custom?.body?.usedTestRelay,
+                );
                 console.info("[PDD_INFORMESHANA] automātiski nosūtītas pievienošanas vēstules:", out.sent, sentTo);
+                if (testRelay) {
+                  console.info(
+                    "[PDD_INFORMESHANA] Resend testa režīms — kopija ar plānotajām adresēm: pliada@inbox.lv",
+                  );
+                }
               }
             })
             .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IAD saglabāšanas", e));
