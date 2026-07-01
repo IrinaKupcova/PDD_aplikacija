@@ -8,6 +8,7 @@
   const REMOTE_TABLE = "Procesu_vadiba";
   const REMOTE_ROW_ID = "main";
   const REMOTE_SAVE_MS = 700;
+  const REMOTE_SYNC_ENABLED = false;
 
   const STATUS_PRESETS = ["Nav sākts", "Plānots", "Procesā", "Gaida atbildi", "Pabeigts", "Atcelts"];
   const REGISTRY_COLUMN_TYPES = [
@@ -79,7 +80,7 @@
   }
 
   async function fetchRemoteState(sb) {
-    if (!sb) return null;
+    if (!REMOTE_SYNC_ENABLED || !sb) return null;
     await ensureDbSession(sb);
     const { data, error } = await sb
       .from(REMOTE_TABLE)
@@ -99,7 +100,7 @@
   }
 
   async function saveRemoteState(sb, state) {
-    if (!sb || !state) return { ok: false, reason: "no_data" };
+    if (!REMOTE_SYNC_ENABLED || !sb || !state) return { ok: false, reason: "no_data" };
     await ensureDbSession(sb);
     const updatedAt = new Date().toISOString();
     const email =
@@ -926,6 +927,10 @@
     return function ProcesuVadibaPanel() {
       ensureStyles();
       const [state, setState, syncStatus] = usePersistedState();
+
+      useEffect(() => {
+        console.info("[Procesu vadība] panelis atvērts");
+      }, []);
 
       const syncLabel =
         syncStatus === "synced"

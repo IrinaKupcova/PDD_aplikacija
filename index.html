@@ -477,8 +477,8 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script src="./ProcesuVadiba.js?v=202606207"></script>
-      <script defer src="./ProcesuVadibaPieslegums.js?v=202606207"></script>
+      <script defer src="./ProcesuVadiba.js?v=202606208"></script>
+      <script defer src="./ProcesuVadibaPieslegums.js?v=202606208"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -1330,10 +1330,19 @@
         }
         function getProcesuVadibaPanel() {
           if (!cachedProcesuVadibaPanel && globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule) {
-            cachedProcesuVadibaPanel = globalThis.PDD_PROCESU_VADIBA.createProcesuVadibaModule(html, React);
+            try {
+              cachedProcesuVadibaPanel = globalThis.PDD_PROCESU_VADIBA.createProcesuVadibaModule(html, React);
+            } catch (e) {
+              console.error("[Procesu vadība] inicializācijas kļūda", e);
+            }
           }
           return cachedProcesuVadibaPanel;
         }
+        globalThis.__PDD_DEBUG_PROCESU_VADIBA__ = () => ({
+          hasApi: Boolean(globalThis.PDD_PROCESU_VADIBA),
+          hasFactory: typeof globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule === "function",
+          hasPanel: Boolean(getProcesuVadibaPanel()),
+        });
         const AppShellWithNav =
           globalThis.PDD_NAV?.createAppShellWithNav?.(html) ??
           (({ header, children }) => html`
