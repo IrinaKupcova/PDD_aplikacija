@@ -142,6 +142,8 @@ Deno.serve(async (req: Request) => {
     };
 
     let sent = await sendOnce(emailBody);
+    let usedFallbackFrom = false;
+    let usedTestRelay = false;
     const errMsg = String((sent.parsed as { message?: string })?.message ?? "").toLowerCase();
     const domainUnverified =
       !sent.ok && (errMsg.includes("domain is not verified") || errMsg.includes("not verified"));
@@ -150,19 +152,43 @@ Deno.serve(async (req: Request) => {
       delete retryBody.cc;
       const retry = await sendOnce(retryBody);
       if (retry.ok) {
-        return jsonResponse(
-          {
-            success: true,
-            ok: true,
-            provider: "resend",
-            result: retry.parsed,
-            usedFallbackFrom: true,
-            hint: "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
-          },
-          200,
-        );
+        usedFallbackFrom = true;
+        sent = retry;
+      } else {
+        sent = retry;
       }
-      sent = retry;
+    }
+
+    if (!sent.ok && String((sent.parsed as { message?: string })?.message ?? "").toLowerCase().includes("only send testing emails")) {
+      const hit = String((sent.parsed as { message?: string })?.message ?? "").match(
+        /your own email address \(([^)]+)\)/i,
+      );
+      const testTo = sanitizeHeaderValue(
+        hit?.[1] || Deno.env.get("RESEND_TEST_TO") || Deno.env.get("RESEND_ACCOUNT_EMAIL") || "",
+      );
+      if (testTo) {
+        const origTo = emailBody.to;
+        const origCc = emailBody.cc;
+        const notice = `<p style="background:#fef3c7;padding:10px;border-radius:8px;"><strong>PDD (Resend testa režīms):</strong> Novirzīts uz ${escapeHtml(
+          testTo,
+        )}. Plānotie TO: ${escapeHtml(JSON.stringify(origTo))}; CC: ${escapeHtml(
+          JSON.stringify(origCc ?? []),
+        )}</p>`;
+        const relay = await sendOnce({
+          from: FALLBACK_FROM,
+          to: [testTo],
+          subject: `[PDD] ${subject}`,
+          html: notice + html,
+          ...(textRaw ? { text: textRaw } : {}),
+        });
+        if (relay.ok) {
+          usedFallbackFrom = true;
+          usedTestRelay = true;
+          sent = relay;
+        } else {
+          sent = relay;
+        }
+      }
     }
 
     if (!sent.ok) {
@@ -172,7 +198,24 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    return jsonResponse({ success: true, ok: true, provider: "resend", result: sent.parsed }, 200);
+    return jsonResponse(
+      {
+        success: true,
+        ok: true,
+        provider: "resend",
+        result: sent.parsed,
+        ...(usedFallbackFrom
+          ? {
+              usedFallbackFrom: true,
+              hint: usedTestRelay
+                ? "Resend testa režīms — vēstule nosūtīta uz Resend konta e-pastu."
+                : "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
+            }
+          : {}),
+        ...(usedTestRelay ? { usedTestRelay: true } : {}),
+      },
+      200,
+    );
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     return jsonResponse({ error: "Unexpected server error", details: errMsg }, 500);

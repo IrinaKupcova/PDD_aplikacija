@@ -9,7 +9,7 @@
 
 const { createClient } = require("@supabase/supabase-js");
 const { Resend } = require("resend");
-const { sendCitsPendingNotificationFromApi } = require("../epasts_sazina.js");
+const { sendCitsPendingNotificationFromApi, sendResendHtmlWithFallback } = require("../epasts_sazina.js");
 
 function normLoose(v) {
   return String(v ?? "")
@@ -121,34 +121,31 @@ async function sendAdminApplicant(resend, from, adminEmail, applicantEmail, pack
   const nb = String(applicantEmail || "").trim();
   const sent = [];
   if (na.includes("@") && nb.includes("@") && na.toLowerCase() === nb.toLowerCase()) {
-    const { error } = await resend.emails.send({
+    await sendResendHtmlWithFallback(resend, {
       from,
-      to: [na],
+      to: na,
       subject: `${packApplicant.subject} · ${packAdmin.subject}`,
       html: `<div>${packApplicant.html}</div><hr/><div>${packAdmin.html}</div>`,
     });
-    if (error) throw new Error(error.message || String(error));
     sent.push(na);
     return sent;
   }
   if (na.includes("@")) {
-    const { error } = await resend.emails.send({
+    await sendResendHtmlWithFallback(resend, {
       from,
-      to: [na],
+      to: na,
       subject: packAdmin.subject,
       html: packAdmin.html,
     });
-    if (error) throw new Error(error.message || String(error));
     sent.push(na);
   }
   if (nb.includes("@")) {
-    const { error } = await resend.emails.send({
+    await sendResendHtmlWithFallback(resend, {
       from,
-      to: [nb],
+      to: nb,
       subject: packApplicant.subject,
       html: packApplicant.html,
     });
-    if (error) throw new Error(error.message || String(error));
     sent.push(nb);
   }
   return sent;
@@ -381,17 +378,29 @@ module.exports = async (req, res) => {
         res.statusCode = 400;
         return res.end(JSON.stringify({ error: "Trūkst derīga to" }));
       }
-      const emailBody = { from, to: [to], subject, html };
-      if (text) emailBody.text = text;
       const ccFiltered = cc.filter((em) => em.toLowerCase() !== to.toLowerCase());
-      if (ccFiltered.length) emailBody.cc = ccFiltered;
-      const { error } = await resend.emails.send(emailBody);
-      if (error) {
-        res.statusCode = 502;
-        return res.end(JSON.stringify({ error: error.message || String(error) }));
-      }
+      const relay = await sendResendHtmlWithFallback(resend, {
+        from,
+        to,
+        subject,
+        html,
+        text: text || undefined,
+        cc: ccFiltered,
+      });
       res.statusCode = 200;
-      return res.end(JSON.stringify({ ok: true, success: true, sent: [to] }));
+      return res.end(
+        JSON.stringify({
+          ok: true,
+          success: true,
+          sent: [to],
+          ...(relay.usedTestRelay
+            ? {
+                usedTestRelay: true,
+                hint: "Resend testa režīms — vēstule nosūtīta uz Resend konta e-pastu ar plānoto adresātu sarakstu.",
+              }
+            : {}),
+        }),
+      );
     }
 
     if (action === "cits_token_approved_emails") {

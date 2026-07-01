@@ -161,27 +161,82 @@ function isResendFromOrDomainError(parsed: unknown): boolean {
   );
 }
 
+function isResendTestingOnlyError(parsed: unknown): boolean {
+  return resendErrorText(parsed).toLowerCase().includes("only send testing emails");
+}
+
+function extractResendTestRecipient(parsed: unknown): string {
+  const m = resendErrorText(parsed);
+  const hit = m.match(/your own email address \(([^)]+)\)/i);
+  if (hit?.[1]) return sanitizeHeaderValue(hit[1]);
+  return sanitizeHeaderValue(
+    Deno.env.get("RESEND_TEST_TO") || Deno.env.get("RESEND_ACCOUNT_EMAIL") || "",
+  );
+}
+
+function buildTestRelayEmailBody(
+  emailBody: Record<string, unknown>,
+  testTo: string,
+): Record<string, unknown> {
+  const origTo = emailBody.to;
+  const origCc = emailBody.cc;
+  const innerHtml = String(emailBody.html ?? "");
+  const innerText = String(emailBody.text ?? "");
+  const notice = `<p style="background:#fef3c7;padding:10px;border-radius:8px;font-size:14px;"><strong>PDD (Resend testa režīms):</strong> Domēns vēl nav verificēts — vēstule novirzīta uz <strong>${escapeHtml(
+    testTo,
+  )}</strong>.<br/>Plānotie TO: ${escapeHtml(JSON.stringify(origTo))}<br/>CC: ${escapeHtml(
+    JSON.stringify(origCc ?? []),
+  )}</p>`;
+  const relay: Record<string, unknown> = {
+    from: FALLBACK_FROM,
+    to: [testTo],
+    subject: `[PDD] ${String(emailBody.subject ?? "Ziņojums")}`,
+    html: notice + (innerHtml || `<p>${escapeHtml(innerText)}</p>`),
+  };
+  if (innerText) {
+    relay.text =
+      `PDD (Resend testa režīms). Plānotie TO: ${JSON.stringify(origTo)}; CC: ${JSON.stringify(origCc ?? [])}\n\n` +
+      innerText;
+  }
+  return relay;
+}
+
 async function sendViaResendWithFromFallback(
   resendApiKey: string,
   emailBody: Record<string, unknown>,
   configuredFrom: string,
-): Promise<{ ok: boolean; status: number; parsed: unknown; usedFallbackFrom?: boolean }> {
+): Promise<{ ok: boolean; status: number; parsed: unknown; usedFallbackFrom?: boolean; usedTestRelay?: boolean }> {
   let sent = await sendViaResend(resendApiKey, emailBody);
   if (sent.ok) return sent;
   const errMsg = resendErrorText(sent.parsed).toLowerCase();
-  const needsFallback =
+  const needsFromFallback =
     !sent.ok &&
     (errMsg.includes("domain is not verified") ||
       errMsg.includes("only send testing emails") ||
       errMsg.includes("not verified"));
   const fromStr = String(emailBody.from ?? configuredFrom).toLowerCase();
-  if (needsFallback && !fromStr.includes("@resend.dev")) {
+  if (needsFromFallback && !fromStr.includes("@resend.dev")) {
     const retryBody: Record<string, unknown> = { ...emailBody, from: FALLBACK_FROM };
     delete retryBody.cc;
     const retry = await sendViaResend(resendApiKey, retryBody);
     if (retry.ok) return { ...retry, usedFallbackFrom: true };
-    return retry;
+    sent = retry;
   }
+
+  if (!sent.ok && isResendTestingOnlyError(sent.parsed)) {
+    const testTo = extractResendTestRecipient(sent.parsed);
+    if (testTo) {
+      const relay = await sendViaResend(
+        resendApiKey,
+        buildTestRelayEmailBody(emailBody, testTo),
+      );
+      if (relay.ok) {
+        return { ...relay, usedFallbackFrom: true, usedTestRelay: true };
+      }
+      sent = relay;
+    }
+  }
+
   return sent;
 }
 
@@ -264,9 +319,12 @@ Deno.serve(async (req: Request) => {
           ...(sent.usedFallbackFrom
             ? {
                 usedFallbackFrom: true,
-                hint: "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
+                hint: sent.usedTestRelay
+                  ? "Resend testa režīms — vēstule nosūtīta uz Resend konta e-pastu ar plānoto adresātu sarakstu."
+                  : "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
               }
             : {}),
+          ...(sent.usedTestRelay ? { usedTestRelay: true } : {}),
         },
         200,
       );
@@ -339,9 +397,12 @@ Deno.serve(async (req: Request) => {
         ...(sent.usedFallbackFrom
           ? {
               usedFallbackFrom: true,
-              hint: "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
+              hint: sent.usedTestRelay
+                ? "Resend testa režīms — vēstule nosūtīta uz Resend konta e-pastu ar plānoto adresātu sarakstu."
+                : "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
             }
           : {}),
+        ...(sent.usedTestRelay ? { usedTestRelay: true } : {}),
       },
       200,
     );
