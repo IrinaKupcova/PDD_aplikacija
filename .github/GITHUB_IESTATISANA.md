@@ -45,6 +45,18 @@ Darbplūsma: `IaD monthly reminders` — **katru mēneša 1. datumu** automātis
 
 Tests: Actions → **IaD monthly reminders** → Run workflow → force: `true`.
 
+## 2c. Datubāzes migrācijas (Procesu vadība u.c.)
+
+Darbplūsma: `Supabase DB migrations` — pēc push uz `main` piemēro jaunus failus `supabase/migrations/`.
+
+| Nosaukums (precīzi) | No kurienes |
+|---------------------|-------------|
+| `SUPABASE_ACCESS_TOKEN` | Supabase Account → Access Tokens (kā 2. sadaļā) |
+| `SUPABASE_PROJECT_REF` | Project Settings → General → Reference ID |
+| `SUPABASE_DB_PASSWORD` | Supabase → Project Settings → Database → Database password |
+
+Bez `SUPABASE_DB_PASSWORD` migrācijas netiek palaistas automātiski — tās var ielikt arī manuāli Supabase SQL Editor.
+
 ## 3. GitHub Pages
 
 Repozitorijs: **Settings** → **Pages** → **Build and deployment**: **GitHub Actions**.

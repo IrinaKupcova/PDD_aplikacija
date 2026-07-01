@@ -471,14 +471,14 @@
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=20260422l"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202606204"></script>
+      <script defer src="./Navigacija.js?v=202606205"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202606204"></script>
-      <script defer src="./ProcesuVadibaPieslegums.js?v=202606204"></script>
+      <script defer src="./ProcesuVadiba.js?v=202606205"></script>
+      <script defer src="./ProcesuVadibaPieslegums.js?v=202606205"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -8592,7 +8592,7 @@
                 if (view === "procesuVadiba") {
                   const PvPanel = getProcesuVadibaPanel();
                   return PvPanel
-                    ? html`<${PvPanel} embedded=${true} />`
+                    ? html`<${PvPanel} embedded=${true} supabase=${supabase} />`
                     : html`<section class="list-panel"><p>Procesu vadības modulis nav ielādēts.</p></section>`;
                 }
                 return null;

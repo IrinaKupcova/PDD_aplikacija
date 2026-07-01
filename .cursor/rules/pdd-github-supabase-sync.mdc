@@ -1,0 +1,26 @@
+---
+description: Pēc izmaiņām PDD projektā vienmēr sinhronizē ar GitHub un Supabase
+alwaysApply: true
+---
+
+# PDD — GitHub un Supabase sinhronizācija
+
+Pēc katra būtiska koda vai migrācijas labojuma **pats** nodrošini sinhronizāciju:
+
+## GitHub
+1. Pārbaudi `git status` un `git diff`.
+2. Ja ir izmaiņas, veic `git add`, `git commit` un `git push` uz `main` (vai palaid `node Push.js`).
+3. Necommito `.env`, atslēgas vai citus sensitīvus failus.
+
+## Supabase
+1. Ja mainīta datu shēma — pievieno jaunu failu `supabase/migrations/` (nevis labo vecos).
+2. Pēc push uz `main` darbplūsma `Supabase DB migrations` pati piemēro migrācijas (ja GitHub Secrets ir iestatīti).
+3. Ja mainītas Edge funkcijas — push aktivizē `Supabase Edge — sendEmail + Resend`.
+4. Ja modulis glabā datus — izmanto Supabase tabulu + localStorage rezerves kopiju (kā Saliedēšana / Procesu vadība).
+
+## Deploy
+- Push uz `main` automātiski deployo GitHub Pages (`Deploy GitHub Pages`).
+- Pēc push atgādini lietotājam: **Ctrl+F5** pārlūkā.
+
+## Ja push neizdodas
+- Nepaslēp kļūdu; pasaki, kas trūkst (auth, secrets, konflikts).

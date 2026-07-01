@@ -5,6 +5,9 @@
 (function (root) {
   const LS_KEY = "pdd_procesu_vadiba_v2";
   const MODULE_VERSION = 2;
+  const REMOTE_TABLE = "Procesu_vadiba";
+  const REMOTE_ROW_ID = "main";
+  const REMOTE_SAVE_MS = 700;
 
   const STATUS_PRESETS = ["Nav sākts", "Plānots", "Procesā", "Gaida atbildi", "Pabeigts", "Atcelts"];
   const REGISTRY_COLUMN_TYPES = [
@@ -47,8 +50,76 @@
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({ ...state, updatedAt: new Date().toISOString() }));
     } catch (e) {
-      console.warn("[Procesu vadība] Neizdevās saglabāt", e);
+      console.warn("[Procesu vadība] Neizdevās saglabāt lokāli", e);
     }
+  }
+
+  function stateTimestamp(state) {
+    const raw = state?.updatedAt || state?.updated_at || "";
+    const t = Date.parse(String(raw));
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  function pickNewerState(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+    return stateTimestamp(a) >= stateTimestamp(b) ? a : b;
+  }
+
+  async function ensureDbSession(sb) {
+    if (!sb) return false;
+    try {
+      const fn = root.__PDD_ENSURE_DB_SESSION__;
+      if (typeof fn === "function") await fn();
+      return true;
+    } catch (e) {
+      console.warn("[Procesu vadība] DB sesija", e);
+      return false;
+    }
+  }
+
+  async function fetchRemoteState(sb) {
+    if (!sb) return null;
+    await ensureDbSession(sb);
+    const { data, error } = await sb
+      .from(REMOTE_TABLE)
+      .select("state, updated_at, updated_by")
+      .eq("id", REMOTE_ROW_ID)
+      .maybeSingle();
+    if (error) {
+      console.warn("[Procesu vadība] DB lasīšana", error);
+      return null;
+    }
+    if (!data?.state || typeof data.state !== "object") return null;
+    return migrateState({
+      ...data.state,
+      updatedAt: data.updated_at || data.state.updatedAt,
+      updatedBy: data.updated_by || data.state.updatedBy,
+    });
+  }
+
+  async function saveRemoteState(sb, state) {
+    if (!sb || !state) return { ok: false, reason: "no_data" };
+    await ensureDbSession(sb);
+    const updatedAt = new Date().toISOString();
+    const email =
+      String(
+        root.__PDD_SESSION_EMAIL__ ||
+          root.sessionStorage?.getItem?.("pdd_local_email") ||
+          "",
+      ).trim() || null;
+    const payload = {
+      id: REMOTE_ROW_ID,
+      state: { ...state, updatedAt },
+      updated_at: updatedAt,
+      updated_by: email,
+    };
+    const { error } = await sb.from(REMOTE_TABLE).upsert(payload, { onConflict: "id" });
+    if (error) {
+      console.warn("[Procesu vadība] DB saglabāšana", error);
+      return { ok: false, error };
+    }
+    return { ok: true, updatedAt };
   }
 
   function defaultRegistryColumns() {
@@ -331,14 +402,68 @@
   }
 
   function createProcesuVadibaModule(html, React) {
-    const { useState, useEffect, useCallback, useMemo } = React;
+    const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
-    function usePersistedState() {
+    function usePersistedState(supabase) {
       const [state, setState] = useState(() => loadState());
+      const [syncStatus, setSyncStatus] = useState("local");
+      const saveTimerRef = useRef(null);
+      const remoteReadyRef = useRef(false);
+      const stateRef = useRef(state);
+
+      useEffect(() => {
+        stateRef.current = state;
+      }, [state]);
+
+      useEffect(() => {
+        let cancelled = false;
+        (async () => {
+          const sb = supabase ?? root.__PDD_SUPABASE__ ?? null;
+          if (!sb) {
+            if (!cancelled) setSyncStatus("local");
+            remoteReadyRef.current = true;
+            return;
+          }
+          try {
+            const remote = await fetchRemoteState(sb);
+            if (cancelled) return;
+            const local = loadState();
+            const merged = pickNewerState(remote, local);
+            setState(merged);
+            saveState(merged);
+            setSyncStatus("synced");
+          } catch (e) {
+            console.warn("[Procesu vadība] sākotnējā sinhronizācija", e);
+            if (!cancelled) setSyncStatus("error");
+          } finally {
+            if (!cancelled) remoteReadyRef.current = true;
+          }
+        })();
+        return () => {
+          cancelled = true;
+        };
+      }, [supabase]);
+
       useEffect(() => {
         saveState(state);
-      }, [state]);
-      return [state, setState];
+        if (!remoteReadyRef.current) return undefined;
+        const sb = supabase ?? root.__PDD_SUPABASE__ ?? null;
+        if (!sb) {
+          setSyncStatus("local");
+          return undefined;
+        }
+        setSyncStatus("saving");
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => {
+          void (async () => {
+            const out = await saveRemoteState(sb, stateRef.current);
+            setSyncStatus(out?.ok ? "synced" : "error");
+          })();
+        }, REMOTE_SAVE_MS);
+        return () => clearTimeout(saveTimerRef.current);
+      }, [state, supabase]);
+
+      return [state, setState, syncStatus];
     }
 
     function StatusPill({ value }) {
@@ -786,12 +911,21 @@
       `;
     }
 
-    return function ProcesuVadibaApp({ embedded }) {
-      const [state, setState] = usePersistedState();
+    return function ProcesuVadibaApp({ embedded, supabase }) {
+      const [state, setState, syncStatus] = usePersistedState(supabase);
 
       useEffect(() => {
         ensureStyles();
       }, []);
+
+      const syncLabel =
+        syncStatus === "synced"
+          ? "Sinhronizēts ar Supabase"
+          : syncStatus === "saving"
+            ? "Saglabā Supabase…"
+            : syncStatus === "error"
+              ? "DB kļūda — dati lokāli"
+              : "Tikai lokāli";
 
       const phases = state.phases || [];
       const activePhase = useMemo(
@@ -838,6 +972,7 @@
               <div class="pv-brand">
                 <h2>Procesu vadība</h2>
                 <p>Posmi · Gantt · pārvalžu apkopojums</p>
+                <p style="margin:0.35rem 0 0;font-size:0.72rem;opacity:0.9">${syncLabel}</p>
               </div>
               <button
                 type="button"
@@ -898,5 +1033,7 @@
     createProcesuVadibaModule,
     loadState,
     saveState,
+    fetchRemoteState,
+    saveRemoteState,
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

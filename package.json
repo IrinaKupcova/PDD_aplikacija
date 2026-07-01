@@ -9,7 +9,8 @@
     "deploy:send-email": "supabase functions deploy sendEmail --project-ref fdnkvecgqetmwilwolgt --no-verify-jwt",
     "deploy:send-iad-email": "supabase functions deploy sendIadEmail --project-ref fdnkvecgqetmwilwolgt --no-verify-jwt",
     "deploy:all-email": "npm run deploy:send-iad-email && npm run deploy:send-email",
-    "deploy:resend-email": "supabase functions deploy resend-email --no-verify-jwt"
+    "deploy:resend-email": "supabase functions deploy resend-email --no-verify-jwt",
+    "push": "node Push.js"
   },
   "devDependencies": {
     "supabase": "^2.0.0"
