@@ -216,6 +216,12 @@
       p.tools = Array.isArray(p.tools) ? p.tools : [];
       p.registries = p.registries && typeof p.registries === "object" ? p.registries : {};
     }
+    if (s.screen !== "overview" && s.screen !== "phase") s.screen = "overview";
+    if (s.screen === "phase" && s.activePhaseId && !s.phases.some((p) => p.id === s.activePhaseId)) {
+      s.screen = "overview";
+      s.activePhaseId = null;
+      s.activeToolId = null;
+    }
     return s;
   }
 
@@ -407,7 +413,7 @@
   }
 
   function createProcesuVadibaModule(html, React) {
-    const { useState, useEffect, useCallback, useMemo, useRef } = React;
+    const { useState, useEffect, useCallback, useMemo, useRef, createElement: ce } = React;
 
     function usePersistedState() {
       const [state, setState] = useState(() => loadState());
@@ -535,7 +541,7 @@
       function renderCell(row, col) {
         const val = row.cells?.[col.id] ?? "";
         if (readOnly) {
-          if (col.type === "status") return html`<${StatusPill} value=${val} />`;
+          if (col.type === "status") return ce(StatusPill, { value: val });
           return html`<span>${String(val || "—")}</span>`;
         }
         if (col.type === "status" || col.type === "choice") {
@@ -676,7 +682,7 @@
               return html`
                 <div class="pv-gantt-row ${p.depth ? "sub" : ""}" key=${p.id}>
                   <div class="pv-gantt-label">
-                    <${PhaseLink} phase=${p} onGo=${onGoPhase} />
+                    ${ce(PhaseLink, { phase: p, onGo: onGoPhase })}
                   </div>
                   <div class="pv-gantt-track">
                     <div class="pv-gantt-bar" style=${{ left: st.left, width: st.width }}>
@@ -784,7 +790,7 @@
               <button type="button" class="pv-btn primary" onClick=${addPhase}>+ Pievienot posmu</button>
             </div>
           </div>
-          <${GlobalGantt} phases=${phases} onGoPhase=${onGoPhase} onPatchPhase=${patchPhase} />
+          ${ce(GlobalGantt, { phases, onGoPhase, onPatchPhase })}
         </div>
       `;
     }
@@ -820,7 +826,7 @@
           <nav class="pv-breadcrumb" aria-label="Navigācija">
             <button type="button" class="pv-link" onClick=${onGoOverview}>Procesu vadība</button>
             <span>›</span>
-            ${parent ? html`<${PhaseLink} phase=${parent} onGo=${onGoPhase} />` : null}
+            ${parent ? ce(PhaseLink, { phase: parent, onGo: onGoPhase }) : null}
             ${parent ? html`<span>›</span>` : null}
             <span><strong>${phase.title}</strong></span>
           </nav>
@@ -877,7 +883,7 @@
                   ${children.map(
                     (c) => html`
                       <div key=${c.id} style="margin-bottom:0.45rem">
-                        <${PhaseLink} phase=${c} onGo=${onGoPhase} />
+                        ${ce(PhaseLink, { phase: c, onGo: onGoPhase })}
                         <span style="font-size:0.78rem;color:var(--pv-muted);margin-left:0.35rem">
                           ${c.progress ?? 0}%
                         </span>
@@ -911,14 +917,12 @@
           </div>
 
           ${activeTool
-            ? html`
-                <${RegistryList}
-                  phase=${phase}
-                  tool=${activeTool}
-                  readOnly=${false}
-                  onPatchPhase=${(patch) => patchPhase(phase.id, patch)}
-                />
-              `
+            ? ce(RegistryList, {
+                phase,
+                tool: activeTool,
+                readOnly: false,
+                onPatchPhase: (patch) => patchPhase(phase.id, patch),
+              })
             : null}
         </div>
       `;
@@ -1016,26 +1020,22 @@
             </aside>
             <main class="pv-main">
               ${state.screen === "overview"
-                ? html`
-                    <${OverviewScreen}
-                      state=${state}
-                      setState=${setState}
-                      phases=${phases}
-                      onGoPhase=${goPhase}
-                      patchPhase=${patchPhase}
-                    />
-                  `
-                : html`
-                    <${PhaseSpace}
-                      phase=${activePhase}
-                      phases=${phases}
-                      activeToolId=${state.activeToolId}
-                      onGoOverview=${goOverview}
-                      onGoPhase=${goPhase}
-                      onSelectTool=${(toolId) => setState((p) => ({ ...p, activeToolId: toolId }))}
-                      patchPhase=${patchPhase}
-                    />
-                  `}
+                ? ce(OverviewScreen, {
+                    state,
+                    setState,
+                    phases,
+                    onGoPhase: goPhase,
+                    patchPhase,
+                  })
+                : ce(PhaseSpace, {
+                    phase: activePhase,
+                    phases,
+                    activeToolId: state.activeToolId,
+                    onGoOverview: goOverview,
+                    onGoPhase: goPhase,
+                    onSelectTool: (toolId) => setState((p) => ({ ...p, activeToolId: toolId })),
+                    patchPhase,
+                  })}
             </main>
           </div>
         </div>
@@ -1049,6 +1049,10 @@
     saveState,
     fetchRemoteState,
     saveRemoteState,
+    resetState() {
+      if (typeof localStorage !== "undefined") localStorage.removeItem(LS_KEY);
+      return defaultState();
+    },
     READY: true,
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

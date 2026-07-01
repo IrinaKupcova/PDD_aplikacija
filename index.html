@@ -477,8 +477,8 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202606208"></script>
-      <script defer src="./ProcesuVadibaPieslegums.js?v=202606208"></script>
+      <script defer src="./ProcesuVadiba.js?v=202606210"></script>
+      <script defer src="./ProcesuVadibaPieslegums.js?v=202606210"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -1343,6 +1343,44 @@
           hasFactory: typeof globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule === "function",
           hasPanel: Boolean(getProcesuVadibaPanel()),
         });
+        function ProcesuVadibaHost({ loadTick = 0 }) {
+          const hostRef = useRef(null);
+          const rootRef = useRef(null);
+          useEffect(() => {
+            const el = hostRef.current;
+            if (!el) return undefined;
+            const factory = globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule;
+            if (!factory) {
+              el.innerHTML =
+                '<section class="list-panel"><p><strong>Procesu vadība ielādējas…</strong> Pagaidi un pārlādē ar Ctrl+F5.</p></section>';
+              return undefined;
+            }
+            let Panel = getProcesuVadibaPanel();
+            if (!Panel) {
+              try {
+                Panel = factory(html, React);
+                cachedProcesuVadibaPanel = Panel;
+              } catch (e) {
+                console.error("[Procesu vadība] mount", e);
+                el.innerHTML =
+                  '<section class="list-panel"><p>Procesu vadības modulis neizdevās ielādēt. Skatīt konsoli.</p></section>';
+                return undefined;
+              }
+            }
+            if (!rootRef.current) rootRef.current = createRoot(el);
+            rootRef.current.render(React.createElement(Panel));
+            console.info("[Procesu vadība] ielādēts");
+            return () => {
+              try {
+                rootRef.current?.unmount();
+              } catch {
+                /* ignore */
+              }
+              rootRef.current = null;
+            };
+          }, [loadTick]);
+          return html`<div ref=${hostRef} class="pv-mount-host" style=${{ minHeight: "70vh", width: "100%" }}></div>`;
+        }
         const AppShellWithNav =
           globalThis.PDD_NAV?.createAppShellWithNav?.(html) ??
           (({ header, children }) => html`
@@ -1741,27 +1779,13 @@
             const edgeMsg = String(
               out?.edge?.body?.details?.message || out?.edge?.body?.error || "",
             ).trim();
-            const isInvalidKey = /api key is invalid|missing_resend_api_key|no_pdd_resend_api/i.test(
-              reason + edgeMsg + String(out?.pddApi?.reason || ""),
-            );
-            const isDomainUnverified = /domain is not verified|not verified/i.test(reason + edgeMsg);
-            const isTestingOnly = /only send testing emails/i.test(reason + edgeMsg);
-            alert(
-              "Automātiskais IAD e-pasta tests neizdevās.\n\n" +
-                (isInvalidKey
-                  ? "Serverī RESEND_API_KEY nav derīga. Labo:\n" +
-                    "1) resend.com → API Keys\n" +
-                    "2) Supabase → Project Settings → Edge Functions → Secrets → RESEND_API_KEY\n" +
-                    "3) GitHub → Actions → „Supabase Edge — sendEmail + Resend” → Run workflow\n\n" +
-                    "Ja lieto failu no diska (file://), iestati arī Vercel api/pdd-resend vai atver lapu caur GitHub Pages."
-                  : isTestingOnly || isDomainUnverified
-                    ? formatResendSetupHint(reason + edgeMsg) ||
-                      "RESEND_FROM/domēns — skaties resend.com/domains"
-                    : reason || edgeMsg || "Nezināma kļūda") +
-                "\n\nPārbaudi arī RESEND_FROM.",
+            console.warn(
+              "[PDD_TEST_IAD_EMAIL] tests neizdevās:",
+              reason || edgeMsg || "Nezināma kļūda",
+              out,
             );
           } else {
-            alert("Tests veiksmīgs — pārbaudi iesūtni: " + to);
+            console.info("[PDD_TEST_IAD_EMAIL] tests veiksmīgs — pārbaudi iesūtni:", to);
           }
           return out;
         };
@@ -1835,13 +1859,9 @@
           }
           console.info("[PDD_DIAGNOSE_EMAIL]", report);
           if (!report.resendKeyValid) {
-            alert(
-              "E-pasta serveris: RESEND_API_KEY Supabase ir NEDERĪGA vai trūkst.\n\n" +
-                report.fix +
-                "\n\n(Detalizēti konsolē — PDD_DIAGNOSE_EMAIL)",
-            );
+            console.warn("[PDD_DIAGNOSE_EMAIL] RESEND_API_KEY nederīga vai trūkst:", report.fix, report);
           } else {
-            alert("E-pasta serveris izskatās kārtībā. Mēģini: await PDD_TEST_IAD_EMAIL('tavs@epasts.lv')");
+            console.info("[PDD_DIAGNOSE_EMAIL] serveris izskatās kārtībā");
           }
           return report;
         };
@@ -7743,6 +7763,7 @@
           }, [session?.user, profile]);
           const [view, setView] = useState("home");
           const viewRef = useRef("home");
+          const [pvLoadTick, setPvLoadTick] = useState(0);
           const [promSub, setPromSub] = useState("calendar");
           const [navPast, setNavPast] = useState([]);
           const [darbaUzdevumiFocus, setDarbaUzdevumiFocus] = useState(null);
@@ -8028,6 +8049,19 @@
               if (globalThis.__PDD_CHANGE_VIEW__ === handleChangeView) delete globalThis.__PDD_CHANGE_VIEW__;
             };
           }, [handleChangeView]);
+          useEffect(() => {
+            if (view !== "procesuVadiba") return undefined;
+            if (getProcesuVadibaPanel()) return undefined;
+            let tries = 0;
+            const id = setInterval(() => {
+              tries += 1;
+              if (globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule || tries > 40) {
+                setPvLoadTick((t) => t + 1);
+                clearInterval(id);
+              }
+            }, 150);
+            return () => clearInterval(id);
+          }, [view, pvLoadTick]);
           const handlePromSubChange = useCallback((sub) => {
             setNavPast((p) => [...p, { view, promSub }]);
             setPromSub(sub);
@@ -8592,10 +8626,7 @@
                     : html`<section class="list-panel"><p>Saliedēšanas modulis nav ielādēts.</p></section>`;
                 }
                 if (view === "procesuVadiba") {
-                  const PvPanel = getProcesuVadibaPanel();
-                  return PvPanel
-                    ? html`<${PvPanel} />`
-                    : html`<section class="list-panel"><p>Procesu vadības modulis nav ielādēts. Pārlādē ar Ctrl+F5.</p></section>`;
+                  return html`<${ProcesuVadibaHost} loadTick=${pvLoadTick} />`;
                 }
                 return null;
               })()}
