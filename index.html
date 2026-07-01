@@ -49,6 +49,19 @@
           max-width: 1320px;
           margin: 0 auto;
         }
+        .app-layout:has(.pv-embed-host) {
+          max-width: none;
+          width: 100%;
+        }
+        .app-main:has(.pv-embed-host) {
+          max-width: none;
+          padding-left: 0.65rem;
+          padding-right: 0.65rem;
+        }
+        .pv-embed-host {
+          width: 100%;
+          max-width: none;
+        }
         .app-nav {
           flex: 0 0 200px;
           border-right: 1px solid var(--border);
@@ -477,8 +490,8 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202606247"></script>
-      <script defer src="./ProcesuVadibaPieslegums.js?v=202606247"></script>
+      <script defer src="./ProcesuVadiba.js?v=202606249"></script>
+      <script defer src="./ProcesuVadibaPieslegums.js?v=202606249"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";

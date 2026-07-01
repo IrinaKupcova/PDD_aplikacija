@@ -611,8 +611,13 @@
   function parseColumnOptions(str) {
     return String(str || "")
       .split(/[;|]/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+      .filter((s) => s.length > 0);
+  }
+
+  function columnOptionsForCell(col) {
+    const opts = col?.options;
+    if (!Array.isArray(opts)) return col?.type === "status" ? [...STATUS_PRESETS] : [];
+    return opts.filter((o) => String(o).length > 0);
   }
 
   function tableColumnDisplayName(name, type) {
@@ -631,7 +636,9 @@
       width: Number(col.width) || 140,
     };
     if (type === "status" || type === "choice") {
-      out.options = Array.isArray(col.options) && col.options.length ? [...col.options] : defaultOptionsForColumnType(type);
+      out.options = Array.isArray(col.options)
+        ? col.options.map((o) => String(o))
+        : defaultOptionsForColumnType(type);
     }
     return out;
   }
@@ -665,7 +672,7 @@
       id: uid(),
       name: label,
       type: t,
-      options: defaultOptionsForColumnType(t),
+      options: t === "choice" ? [] : defaultOptionsForColumnType(t),
     });
   }
 
@@ -1549,9 +1556,9 @@ ${body}
   }
 
   function ensureStyles() {
-    if (typeof document === "undefined" || document.getElementById("pdd-pv-styles-v8")) return;
+    if (typeof document === "undefined" || document.getElementById("pdd-pv-styles-v9")) return;
     const el = document.createElement("style");
-    el.id = "pdd-pv-styles-v8";
+    el.id = "pdd-pv-styles-v9";
     el.textContent = `
       .pv-root {
         --pv-bg: #e8f8f3;
@@ -1569,7 +1576,7 @@ ${body}
       }
       .pv-shell {
         display: grid;
-        grid-template-columns: minmax(240px, 270px) minmax(0, 1fr);
+        grid-template-columns: minmax(210px, 240px) minmax(0, 1fr);
         grid-template-rows: 1fr;
         align-items: stretch;
         min-height: calc(100vh - 80px);
@@ -1643,8 +1650,10 @@ ${body}
         width: 100%; border: 1px dashed #047857; background: rgba(255,255,255,0.4);
         color: #01171d; border-radius: 10px; padding: 0.5rem; font: inherit; cursor: pointer;
       }
-      .pv-main { padding: 1rem 1.5rem 2rem; overflow: auto; min-width: 0; width: 100%; }
-      .pv-main.pv-main-overview { padding: 0.75rem 1rem 1rem; display: flex; flex-direction: column; min-height: 0; }
+      .pv-main { padding: 0.85rem 1rem 1.75rem; overflow: auto; min-width: 0; width: 100%; }
+      .pv-main.pv-main-overview { padding: 0.65rem 0.85rem 1rem; display: flex; flex-direction: column; min-height: 0; }
+      .pv-card { max-width: none; }
+      .pv-content-block-card { max-width: none; }
       .pv-screen-overview { flex: 1; display: flex; flex-direction: column; min-height: 0; }
       .pv-screen-overview .pv-card { flex: 1; display: flex; flex-direction: column; margin-bottom: 0; min-height: 0; }
       .pv-screen-overview .pv-gantt-global { flex: 1; min-height: 320px; }
@@ -1743,8 +1752,22 @@ ${body}
         position: absolute; left: 0; top: 0; bottom: 0;
         background: rgba(1, 23, 29, 0.2); border-radius: 5px 0 0 5px;
       }
-      .pv-table-wrap { overflow: auto; border: 1px solid #c5ebe3; border-radius: 10px; }
-      .pv-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; min-width: 720px; }
+      .pv-table-wrap { overflow: auto; border: 1px solid #c5ebe3; border-radius: 10px; width: 100%; }
+      .pv-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; min-width: 520px; table-layout: auto; }
+      .pv-table.pv-table-quick { min-width: 0; }
+      .pv-table-quick td, .pv-table-quick th { vertical-align: top; }
+      .pv-table-quick .pv-table input,
+      .pv-table-quick .pv-table select,
+      .pv-table-quick .pv-table textarea {
+        padding: 0.38rem 0.48rem;
+        font-size: 0.86rem;
+        min-height: 2rem;
+      }
+      .pv-table-quick-hint {
+        font-size: 0.74rem;
+        color: #0f766e;
+        margin: 0 0 0.5rem;
+      }
       .pv-table th, .pv-table td { border-bottom: 1px solid #e0f2ee; padding: 0.42rem 0.5rem; text-align: left; }
       .pv-table th { background: #e8f8f3; color: #065f46; font-weight: 600; vertical-align: top; }
       .pv-table textarea {
@@ -1763,7 +1786,9 @@ ${body}
       .pv-col-move-btn:not(:disabled):hover { background: #f0fdf9; border-color: #0d9488; }
       .pv-row-actions { display: flex; gap: 0.2rem; align-items: center; white-space: nowrap; }
       .pv-col-type-label { font-size: 0.68rem; color: #0f766e; font-weight: 500; }
-      .pv-col-options-input { font-size: 0.72rem !important; }
+      .pv-choice-options { margin-top: 0.35rem; padding-top: 0.35rem; border-top: 1px dashed #c5ebe3; }
+      .pv-choice-opt-row { display: flex; gap: 0.25rem; align-items: center; margin-bottom: 0.25rem; }
+      .pv-choice-opt-row input { flex: 1; min-width: 0; }
       .pv-cell-multiline { white-space: pre-wrap; font-size: 0.82rem; }
       .pv-table tr:hover td { background: #f0fdf9; }
       .pv-table input, .pv-table select {
@@ -2229,6 +2254,46 @@ ${body}
       `;
     }
 
+    function ChoiceOptionsEditor({ options, onChange, label }) {
+      const list = Array.isArray(options) ? options : [];
+
+      function patchAt(i, val) {
+        onChange(list.map((o, idx) => (idx === i ? val : o)));
+      }
+
+      function addOption() {
+        onChange([...list, ""]);
+      }
+
+      function removeAt(i) {
+        onChange(list.filter((_, idx) => idx !== i));
+      }
+
+      return html`
+        <div class="pv-choice-options">
+          <div class="meta" style=${{ marginBottom: "0.25rem" }}>${label || "Izvēles opcijas"}</div>
+          ${list.length
+            ? list.map(
+                (opt, i) => html`
+                  <div class="pv-choice-opt-row" key=${`opt-${i}`}>
+                    <input
+                      type="text"
+                      value=${opt}
+                      placeholder="Opcijas nosaukums…"
+                      onInput=${(e) => patchAt(i, e.target.value)}
+                    />
+                    <button type="button" class="pv-col-move-btn" title="Dzēst opciju" onClick=${() => removeAt(i)}>✕</button>
+                  </div>
+                `,
+              )
+            : html`<p class="meta" style=${{ margin: "0 0 0.35rem" }}>Vēl nav opciju.</p>`}
+          <button type="button" class="pv-btn" style=${{ marginTop: "0.2rem", fontSize: "0.76rem" }} onClick=${addOption}>
+            + Pievienot opciju
+          </button>
+        </div>
+      `;
+    }
+
     function TableCellDisplay({ col, value, workPlanSections }) {
       const team = useMemo(() => getTeamUsers(), []);
       const display = formatTableCellDisplay(value, col, workPlanSections, team);
@@ -2251,7 +2316,7 @@ ${body}
 
       const type = col?.type || "text";
       if (type === "status" || type === "choice") {
-        const opts = col.options?.length ? col.options : type === "status" ? STATUS_PRESETS : [];
+        const opts = columnOptionsForCell(col);
         return html`
           <select value=${String(val)} onChange=${(e) => onChange(e.target.value)}>
             <option value="">—</option>
@@ -2301,7 +2366,7 @@ ${body}
       }
       if (type === "multiline") {
         return html`
-          <textarea value=${String(val)} onInput=${(e) => onChange(e.target.value)} rows=${2}></textarea>
+          <textarea onInput=${(e) => onChange(e.target.value)} rows=${2}>${String(val)}</textarea>
         `;
       }
       return html`
@@ -2318,6 +2383,9 @@ ${body}
             if (x.id !== col.id) return x;
             if (patch.name !== undefined) {
               return { ...migrateTableColumn({ ...x, ...patch }), name: patch.name };
+            }
+            if (patch.options !== undefined) {
+              return { ...migrateTableColumn({ ...x, ...patch }), options: patch.options };
             }
             return migrateTableColumn({ ...x, ...patch });
           }),
@@ -2349,14 +2417,11 @@ ${body}
             <button type="button" class="pv-col-move-btn" title="Dzēst kolonnu" onClick=${removeCol}>✕</button>
           </div>
           ${showOptions
-            ? html`
-                <input
-                  class="pv-col-options-input"
-                  value=${(col.options || []).join("; ")}
-                  placeholder=${col.type === "status" ? "Statusu opcijas (;)" : "Izvēles opcijas (;)"}
-                  onInput=${(e) => patchCol({ options: parseColumnOptions(e.target.value) })}
-                />
-              `
+            ? ce(ChoiceOptionsEditor, {
+                options: col.options || [],
+                label: col.type === "status" ? "Statusu opcijas" : "Izvēles opcijas",
+                onChange: (options) => patchCol({ options }),
+              })
             : null}
         </div>
       `;
@@ -2424,18 +2489,49 @@ ${body}
     }
 
     function ContentBlockEditor({ block, onSave, onRemove, parentTitle, workPlanSections }) {
-      const [editing, setEditing] = useState(() => isNewContentBlock(block));
+      const isTableQuick = block.type === "table";
+      const [editing, setEditing] = useState(() => isNewContentBlock(block) && !isTableQuick);
       const [draft, setDraft] = useState(() => blockDraftFrom(block));
+      const tableSaveTimerRef = useRef(null);
 
       useEffect(() => {
-        if (!editing) setDraft(blockDraftFrom(block));
-      }, [block, editing]);
+        if (!isTableQuick && !editing) setDraft(blockDraftFrom(block));
+      }, [block, editing, isTableQuick]);
+
+      useEffect(() => {
+        setDraft(blockDraftFrom(block));
+      }, [block.id]);
+
+      useEffect(
+        () => () => {
+          if (tableSaveTimerRef.current) clearTimeout(tableSaveTimerRef.current);
+        },
+        [],
+      );
 
       const viewBlock = block;
       const editBlock = draft;
+      const activeBlock = isTableQuick || editing ? editBlock : viewBlock;
+
+      function queueTableSave(next) {
+        clearTimeout(tableSaveTimerRef.current);
+        tableSaveTimerRef.current = setTimeout(() => {
+          onSave(normalizeTableBlock(next));
+        }, 350);
+      }
 
       function patch(p) {
-        setDraft((d) => ({ ...d, ...p }));
+        setDraft((d) => {
+          const next = { ...d, ...p };
+          if (isTableQuick) queueTableSave(next);
+          return next;
+        });
+      }
+
+      function flushTableSave() {
+        if (!isTableQuick) return;
+        clearTimeout(tableSaveTimerRef.current);
+        onSave(normalizeTableBlock(draft));
       }
 
       async function onPickFile(kind, e) {
@@ -2497,6 +2593,7 @@ ${body}
             : null}
           ${b.type === "table"
             ? html`
+                <p class="pv-table-quick-hint">Tabula — šūnas, rindas un kolonnas rediģējamas uzreiz; izmaiņas saglabājas automātiski.</p>
                 <div class="pv-toolbar">
                   <button type="button" class="pv-btn" onClick=${() => patch({ rows: [...(b.rows || []), { id: uid(), cells: {} }] })}>+ Rinda</button>
                   <select
@@ -2514,7 +2611,7 @@ ${body}
                   </select>
                 </div>
                 <div class="pv-table-wrap">
-                  <table class="pv-table">
+                  <table class="pv-table pv-table-quick">
                     <thead>
                       <tr>
                         ${normalizeTableBlock(b).columns.map(
@@ -2624,33 +2721,36 @@ ${body}
         `;
       }
 
-      const exportBlock = editing ? draft : block;
+      const exportBlock = isTableQuick || editing ? draft : block;
 
       return html`
-        <div class=${`pv-content-block ${editing ? "is-editing" : "is-view"}`}>
+        <div class=${`pv-content-block ${isTableQuick ? "is-table-quick" : editing ? "is-editing" : "is-view"}`}>
           <div class="pv-content-block-head">
             <span class="pv-content-preview-type">${contentBlockTypeLabel(block.type)}</span>
-            ${editing
+            ${isTableQuick || editing
               ? html`
                   <input
                     type="text"
-                    value=${editBlock.title || ""}
+                    value=${activeBlock.title || ""}
                     onInput=${(e) => patch({ title: e.target.value })}
+                    onBlur=${isTableQuick ? flushTableSave : undefined}
                     placeholder="Bloka nosaukums…"
                   />
                 `
               : html`<span class="pv-content-block-title">${viewBlock.title || contentBlockTypeLabel(viewBlock.type)}</span>`}
           </div>
 
-          ${editing ? renderEditBody(editBlock) : ce(ContentBlockViewBody, { block: viewBlock, workPlanSections })}
+          ${isTableQuick || editing ? renderEditBody(editBlock) : ce(ContentBlockViewBody, { block: viewBlock, workPlanSections })}
 
           <div class="pv-content-block-footer">
-            ${editing
-              ? html`
-                  <button type="button" class="pv-btn primary" onClick=${handleSave}>Saglabāt</button>
-                  <button type="button" class="pv-btn" onClick=${handleCancel}>Atcelt</button>
-                `
-              : html`<button type="button" class="pv-btn" onClick=${() => setEditing(true)}>Labot</button>`}
+            ${isTableQuick
+              ? html`<span class="meta">Automātiski saglabāts</span>`
+              : editing
+                ? html`
+                    <button type="button" class="pv-btn primary" onClick=${handleSave}>Saglabāt</button>
+                    <button type="button" class="pv-btn" onClick=${handleCancel}>Atcelt</button>
+                  `
+                : html`<button type="button" class="pv-btn" onClick=${() => setEditing(true)}>Labot</button>`}
             <button type="button" class="pv-btn" onClick=${() => exportContentBlockExcel(exportBlock)}>⬇ Excel</button>
             <button type="button" class="pv-btn" onClick=${() => exportContentBlockPdf(exportBlock, parentTitle)}>⬇ PDF</button>
             <button type="button" class="pv-btn danger" onClick=${onRemove}>Dzēst bloku</button>
