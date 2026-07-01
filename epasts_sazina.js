@@ -12,7 +12,8 @@
   */
 
   const APPROVAL_LINK = "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
-  const MANAGER_NOTIFY_EMAIL = "katrina.jirgensone@vid.gov.lv";
+  /** Obligātais saskaņotājs — Cits (ar vadītāja saskaņojumu). */
+  const MANAGER_NOTIFY_EMAIL = "katrina.jurgensone@vid.gov.lv";
   const MANAGER_NOTIFY_COPY_EMAIL = "irina.kupcova@vid.gov.lv";
   const DEFAULT_FROM_VID = "PDD <prombutnes@vid.gov.lv>";
 
@@ -184,17 +185,21 @@ async function sendCitsPendingNotificationFromApi(resend, fromEmail, { start, en
   `;
 
   const managerSubject = "PDD: Cits — jauns pieteikums (gaida apstiprinājumu)";
-  const notifyTo = uniqEmails([MANAGER_NOTIFY_EMAIL, MANAGER_NOTIFY_COPY_EMAIL]);
-  if (!notifyTo.length) throw new Error("Nav paziņojuma saņēmēju.");
+  if (!MANAGER_NOTIFY_EMAIL.includes("@")) throw new Error("Nav saskaņotāja e-pasta.");
 
   const sent = [];
-  for (const to of notifyTo) {
-    await sendResendHtml(resend, { from: fromEmail, to, subject: managerSubject, html: htmlManager });
-    sent.push(to);
-  }
+  await sendResendHtmlWithFallback(resend, {
+    from: fromEmail,
+    to: MANAGER_NOTIFY_EMAIL,
+    cc: [MANAGER_NOTIFY_COPY_EMAIL],
+    subject: managerSubject,
+    html: htmlManager,
+  });
+  sent.push(MANAGER_NOTIFY_EMAIL);
 
   const appEm = String(applicantEmail || "").trim();
-  const inNotifyList = notifyTo.some((e) => norm(appEm) === norm(e));
+  const inNotifyList =
+    norm(appEm) === norm(MANAGER_NOTIFY_EMAIL) || norm(appEm) === norm(MANAGER_NOTIFY_COPY_EMAIL);
   if (appEm.includes("@") && !inNotifyList) {
     const appUrl = String(link || "").trim() || APPROVAL_LINK;
     const htmlApp = `

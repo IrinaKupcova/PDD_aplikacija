@@ -44,7 +44,7 @@
       const v = String(localStorage.getItem(LS_EMAIL_DELIVERY_KEY) || "").trim().toLowerCase();
       if (v === EMAIL_DELIVERY_RESEND) return EMAIL_DELIVERY_RESEND;
     }
-    return EMAIL_DELIVERY_OUTLOOK;
+    return EMAIL_DELIVERY_RESEND;
   }
 
   function usesOutlookComposeDelivery() {
@@ -1484,21 +1484,8 @@
     if (!isValidEmail(email)) return { ok: false, reason: "invalid_email" };
     const ccList = uniqEmails([...(Array.isArray(cc) ? cc : []), ...getControlCcFor(email)]);
     const inBrowser = typeof window !== "undefined" && typeof document !== "undefined";
-    const bodyText = String(text ?? "").trim();
-    const panelText = String(messageText ?? "").trim() || bodyText.replace(/\n\nAtvērt aplikācijā:.*$/s, "").trim();
-    const panelTitle =
-      kind === "reminder" ? "IaD mēneša atgādinājums" : "IaD informēšana — nosūti e-pastu";
 
     if (inBrowser && autoOpen) {
-      openEmailDraftPanel({
-        to: email,
-        cc: ccList,
-        subject,
-        text: panelText,
-        title: panelTitle,
-        url,
-        deliveryMode: EMAIL_DELIVERY_OUTLOOK,
-      });
       await recordInformeshanaSend({
         row,
         to: email,
@@ -2136,7 +2123,6 @@
       });
     }
 
-    if (draftQueue.length) openEmailDraftQueue(draftQueue);
     return results;
   }
 
@@ -2273,7 +2259,6 @@
     const active = filterActiveIadRows(rows);
     const results = [];
     const outlookMode = usesOutlookComposeDelivery();
-    const inBrowser = typeof window !== "undefined";
 
     for (const row of active) {
       const rowKey = rowStableId(row);
@@ -2340,10 +2325,6 @@
       }
     }
 
-    if (inBrowser && outlookMode) {
-      void refreshPendingComposeBanner(sb);
-    }
-
     return { ok: true, stamp, count: active.length, results };
   }
 
@@ -2368,10 +2349,6 @@
       void runInformeshanaTick()
         .then((out) => {
           logInformeshanaTickResult(out, label);
-          if (usesOutlookComposeDelivery()) {
-            const sb = getSupabaseClientForBrowser();
-            if (sb) void refreshPendingComposeBanner(sb);
-          }
         })
         .catch((e) => {
           console.warn("[PDD_INFORMESHANA]", e);

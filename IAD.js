@@ -2385,25 +2385,8 @@
                 const alertMsg = api.buildInformeshanaAlertMessage
                   ? api.buildInformeshanaAlertMessage(detail, fails)
                   : "Automātiskā sūtīšana neizdevās.";
-                const firstFail = fails[0];
-                const openDraft = globalThis.PDD_OPEN_EMAIL_DRAFT__ || api?.openEmailDraftPanel;
-                if (typeof openDraft === "function" && firstFail?.email && rowForInform) {
-                  const subj = api.buildWelcomeSubject
-                    ? api.buildWelcomeSubject(rowForInform)
-                    : "PDD: IAD ieteikums";
-                  const txt = api.buildWelcomeText ? api.buildWelcomeText(rowForInform) : "";
-                  const url = api.buildIadDeepLink ? api.buildIadDeepLink(rowForInform) : "";
-                  openDraft({
-                    to: firstFail.email,
-                    subject: subj,
-                    text: txt,
-                    title: "IAD pievienošana — nosūti manuāli",
-                    url,
-                  });
-                }
                 alert(
-                  "IAD saglabāts, bet automātiskais paziņojums netika nosūtīts.\n" +
-                    "Atvēra sagatavoto vēstuli — nokopē un nosūti pa e-pastu.\n\n" +
+                  "IAD saglabāts, bet automātiskais paziņojums netika nosūtīts.\n\n" +
                     alertMsg +
                     (detail ? `\n\n${detail}` : "\n\nSkaties F12 → Console."),
                 );

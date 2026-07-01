@@ -121,7 +121,8 @@ Deno.serve(async (req) => {
       <p>Ja saite nedarbojas, ielīmē pārlūkā:<br/><code>${link}</code></p>
     `;
 
-    const managerTo = String(row.notify_email || "").trim();
+    const KATRINA_SASKANOSANA_EMAIL = "katrina.jurgensone@vid.gov.lv";
+    const managerTo = KATRINA_SASKANOSANA_EMAIL;
     const applicantTo = pickApplicantEmail(p);
     const sendApplicantCopy =
       applicantTo.includes("@") &&

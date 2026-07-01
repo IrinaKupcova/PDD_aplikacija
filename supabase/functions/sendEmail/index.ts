@@ -13,7 +13,9 @@ const DEFAULT_FROM = "PDD <prombutnes@vid.gov.lv>";
 
 const DEFAULT_APPROVAL_URL =
   "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
-const DEFAULT_TO = "katrina.jirgensone@vid.gov.lv";
+/** Cits saskaņojums — vienmēr uz vadītāju (neatkarīgi no RESEND_TO). */
+const KATRINA_SASKANOSANA_EMAIL = "katrina.jurgensone@vid.gov.lv";
+const DEFAULT_TO = KATRINA_SASKANOSANA_EMAIL;
 const DEFAULT_CC = "irina.kupcova@vid.gov.lv";
 
 function sanitizeHeaderValue(v: unknown): string {
@@ -33,6 +35,18 @@ function parseEmailList(raw: string | undefined | null, fallback: string): strin
     .split(/[,;]+/)
     .map((x) => x.trim())
     .filter((x) => x.length > 0);
+}
+
+function uniqEmails(list: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of list) {
+    const em = sanitizeHeaderValue(raw).toLowerCase();
+    if (!em.includes("@") || seen.has(em)) continue;
+    seen.add(em);
+    out.push(sanitizeHeaderValue(raw));
+  }
+  return out;
 }
 
 /** RESEND_TO var būt vairākas adreses: ar `; ` vai `,` (ar vai bez atstarpes). */
@@ -293,12 +307,13 @@ Deno.serve(async (req: Request) => {
   try {
     const emailBody: Record<string, unknown> = {
       from,
-      to: toList,
+      to: [KATRINA_SASKANOSANA_EMAIL],
       subject,
       html,
     };
-    if (allowCc && ccList.length > 0) {
-      emailBody.cc = ccList;
+    const ccForCits = uniqEmails([...ccList, ...toList.filter((e) => e.toLowerCase() !== KATRINA_SASKANOSANA_EMAIL.toLowerCase())]);
+    if (allowCc && ccForCits.length > 0) {
+      emailBody.cc = ccForCits;
     }
 
     const sent = await sendViaResendDirect(resendApiKey, emailBody);

@@ -465,8 +465,8 @@
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
       <script defer src="./Komanda.js?v=202606182"></script>
-      <script defer src="./Informeshana.js?v=202606193"></script>
-      <script defer src="./IAD.js?v=202606193"></script>
+      <script defer src="./Informeshana.js?v=202606195"></script>
+      <script defer src="./IAD.js?v=202606195"></script>
       <script defer src="./Saliedesana.js?v=2026051320"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=20260422l"></script>
@@ -600,8 +600,8 @@
           return true;
         }
         /** Pamata e-pasts paziņojumiem, kad nav aktīva aizvietotāja (saskaņā ar PDD iestatījumiem). */
-        const DEFAULT_MANAGER_EMAIL = "katrina.jirgensone@vid.gov.lv";
-        const DEFAULT_MANAGER_NAME = "Katrīna Jirgensone";
+        const DEFAULT_MANAGER_EMAIL = "katrina.jurgensone@vid.gov.lv";
+        const DEFAULT_MANAGER_NAME = "Katrīna Jurgensone";
         /** Dropdown: nav DB p.i. — apstiprinājumi uz pamatvadītāju. */
         const DEPUTY_OPT_MANAGER = "__vaditajs__";
         /** Supabase public.users kolonnas (kā tabulas skatā). */
@@ -1436,7 +1436,7 @@
           return "";
         }
 
-        async function callSendPddEmail({ name, veids, type }) {
+        async function callSendPddEmail({ name, veids, type, to }) {
           if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !supabase) return { skipped: true };
           const cfg = loadConfig();
           const apiKey = sanitizeHttpHeaderValue(cfg.key || "");
@@ -1456,6 +1456,7 @@
             name,
             veids,
             ...(String(type || "").trim() ? { type: String(type).trim() } : {}),
+            ...(String(to || "").includes("@") ? { to: String(to).trim() } : {}),
           };
 
           async function tryFetchWithBearer(url, bearer) {
@@ -1727,18 +1728,8 @@
             );
             const isDomainUnverified = /domain is not verified|not verified/i.test(reason + edgeMsg);
             const isTestingOnly = /only send testing emails/i.test(reason + edgeMsg);
-            const openDraft = globalThis.PDD_OPEN_EMAIL_DRAFT__ || api?.openEmailDraftPanel;
-            if (typeof openDraft === "function") {
-              openDraft({
-                to,
-                subject: api.buildWelcomeSubject ? api.buildWelcomeSubject(row) : "PDD: IAD tests",
-                text: api.buildWelcomeText ? api.buildWelcomeText(row) : "IAD tests",
-                title: "IAD e-pasts — nosūti manuāli",
-                url,
-              });
-            }
             alert(
-              "Automātiskais tests neizdevās — atvēra sagatavoto vēstuli (nokopē un nosūti pa e-pastu).\n\n" +
+              "Automātiskais IAD e-pasta tests neizdevās.\n\n" +
                 (isInvalidKey
                   ? "Serverī RESEND_API_KEY nav derīga. Labo:\n" +
                     "1) resend.com → API Keys\n" +
@@ -1842,7 +1833,7 @@
           if (m.includes("only send testing emails")) {
             return (
               "Resend testa kontā e-pastus var sūtīt tikai uz Resend konta e-pastu.\n\n" +
-              "Lai sūtītu uz katrina.jirgensone@vid.gov.lv un citiem:\n" +
+              "Lai sūtītu uz katrina.jurgensone@vid.gov.lv un citiem:\n" +
               "1) resend.com → Domains → verificē vid.gov.lv\n" +
               "2) Supabase Secrets → RESEND_FROM = PDD <prombutnes@vid.gov.lv>\n" +
               "3) Actions → „Supabase Edge — sendEmail + Resend” → Run workflow"
@@ -1862,7 +1853,7 @@
         }
 
         function openManualCitsEmailFallback({ name, veids, startDate, endDate, link }) {
-          const to = "katrina.jirgensone@vid.gov.lv";
+          const to = DEFAULT_MANAGER_EMAIL;
           const cc = ["irina.kupcova@vid.gov.lv"];
           const subject = "Jauns pieteikums";
           const lines = [
@@ -4042,9 +4033,9 @@
             setBusy(true);
             try {
               if (isCitsFlow) {
-                const to = notifyEmail;
-                if (!to || !String(to).includes("@")) {
-                  alert("Nav derīga e-pasta adrese saskaņotājam (vadītājs vai apstiprinātājs).");
+                const to = DEFAULT_MANAGER_EMAIL;
+                if (!to.includes("@")) {
+                  alert("Nav derīga e-pasta adrese saskaņotājam (Katrīna Jurgensone).");
                   return;
                 }
                 const nowIso = new Date().toISOString();
@@ -4089,6 +4080,7 @@
                   name: employeeNameForEmail,
                   veids: String(typeObj?.name || "Cits"),
                   type: "cits",
+                  to,
                 });
                 const resendResult = emailResult?.ok
                   ? { skipped: true, reason: "edge_ok" }
@@ -4296,7 +4288,7 @@
               >
                 <p style=${{ margin: 0, fontSize: "0.82rem", color: "var(--muted)", flex: "1 1 auto" }}>
                   <strong>Cits (ar vadītāja saskaņojumu)</strong> — obligāta e-pasta saskaņošana: pieprasījums un saite uz
-                  <strong> katrina.jirgensone@vid.gov.lv</strong>. Pārējie veidi tiek ierakstīti kā apstiprināti un
+                  <strong> katrina.jurgensone@vid.gov.lv</strong>. Pārējie veidi tiek ierakstīti kā apstiprināti un
                   uzreiz redzami kalendārā (bez atsevišķa akcepta soļa šeit).
                 </p>
                 <button
@@ -7231,7 +7223,7 @@
             () => effectiveDeputyUserId(deputyUserId, deputyValidFrom, deputyValidTo),
             [deputyUserId, deputyValidFrom, deputyValidTo]
           );
-          const notifyEmail = "katrina.jirgensone@vid.gov.lv";
+          const notifyEmail = DEFAULT_MANAGER_EMAIL;
           const canApprove = userCanApproveAbsences(role, userId, deputyEffectiveId);
           const refresh = useCallback(async () => {
             setError(null);
