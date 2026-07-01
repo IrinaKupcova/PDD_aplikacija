@@ -208,7 +208,9 @@
   }
 
   function migrateState(s) {
-    if (!s || s.version !== MODULE_VERSION || !Array.isArray(s.phases)) return defaultState();
+    if (!s || s.version !== MODULE_VERSION || !Array.isArray(s.phases) || s.phases.length === 0) {
+      return defaultState();
+    }
     for (const p of s.phases) {
       p.tools = Array.isArray(p.tools) ? p.tools : [];
       p.registries = p.registries && typeof p.registries === "object" ? p.registries : {};
@@ -404,34 +406,9 @@
   }
 
   function createProcesuVadibaModule(html, React) {
-    const { useState, useEffect, useCallback, useMemo, useRef, Component } = React;
+    const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
-    class PvErrorBoundary extends Component {
-      constructor(props) {
-        super(props);
-        this.state = { error: null };
-      }
-      static getDerivedStateFromError(error) {
-        return { error };
-      }
-      render() {
-        if (this.state.error) {
-          const msg = String(this.state.error?.message || this.state.error || "Nezināma kļūda");
-          return html`
-            <section class="list-panel" style="min-height:40vh;padding:1.25rem">
-              <h2 style="margin:0 0 0.5rem">Procesu vadība — kļūda</h2>
-              <p style="margin:0;color:#7f1d1d">${msg}</p>
-              <p style="margin:0.75rem 0 0;font-size:0.9rem;color:#1f4d47">
-                Mēģini Ctrl+F5. Ja problēma paliek, pārbaudi konsoli (F12).
-              </p>
-            </section>
-          `;
-        }
-        return this.props.children;
-      }
-    }
-
-    function usePersistedState(supabase) {
+    function usePersistedState() {
       const [state, setState] = useState(() => loadState());
       const [syncStatus, setSyncStatus] = useState("local");
       const saveTimerRef = useRef(null);
@@ -447,7 +424,7 @@
         let cancelled = false;
         const timer = setTimeout(() => {
           void (async () => {
-            const sb = supabase ?? root.__PDD_SUPABASE__ ?? null;
+            const sb = root.__PDD_SUPABASE__ ?? null;
             if (!sb) {
               if (!cancelled) {
                 setSyncStatus("local");
@@ -476,12 +453,12 @@
           cancelled = true;
           clearTimeout(timer);
         };
-      }, [supabase]);
+      }, []);
 
       useEffect(() => {
         saveState(state);
         if (!remoteReadyRef.current) return undefined;
-        const sb = supabase ?? root.__PDD_SUPABASE__ ?? null;
+        const sb = root.__PDD_SUPABASE__ ?? null;
         if (!sb) {
           setSyncStatus("local");
           return undefined;
@@ -496,7 +473,7 @@
           })();
         }, REMOTE_SAVE_MS);
         return () => clearTimeout(saveTimerRef.current);
-      }, [state, supabase]);
+      }, [state]);
 
       return [state, setState, syncStatus];
     }
@@ -797,7 +774,7 @@
                 type="text"
                 placeholder="Jauna posma nosaukums…"
                 value=${newTitle}
-                onInput=${(e) => setNewTitle(e.target.value)}
+                onChange=${(e) => setNewTitle(e.target.value)}
               />
               <select class="pv-btn" value=${newParent} onChange=${(e) => setNewParent(e.target.value)}>
                 <option value="">Galvenais posms</option>
@@ -946,12 +923,9 @@
       `;
     }
 
-    function ProcesuVadibaApp({ embedded, supabase }) {
-      const [state, setState, syncStatus] = usePersistedState(supabase);
-
-      useEffect(() => {
-        ensureStyles();
-      }, []);
+    return function ProcesuVadibaPanel() {
+      ensureStyles();
+      const [state, setState, syncStatus] = usePersistedState();
 
       const syncLabel =
         syncStatus === "synced"
@@ -1060,14 +1034,6 @@
             </main>
           </div>
         </div>
-      `;
-    }
-
-    return function ProcesuVadibaPanel(props) {
-      return html`
-        <${PvErrorBoundary}>
-          <${ProcesuVadibaApp} embedded=${props?.embedded} supabase=${props?.supabase} />
-        </${PvErrorBoundary}>
       `;
     };
   }

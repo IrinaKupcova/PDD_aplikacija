@@ -477,8 +477,8 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202606206"></script>
-      <script defer src="./ProcesuVadibaPieslegums.js?v=202606206"></script>
+      <script src="./ProcesuVadiba.js?v=202606207"></script>
+      <script defer src="./ProcesuVadibaPieslegums.js?v=202606207"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -1329,17 +1329,8 @@
           return cachedSaliedesanaPanel;
         }
         function getProcesuVadibaPanel() {
-          if (cachedProcesuVadibaPanel) return cachedProcesuVadibaPanel;
-          const factory = globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule;
-          if (typeof factory !== "function") {
-            console.warn("[Procesu vadība] ProcesuVadiba.js nav ielādēts — pārlādē lapu ar Ctrl+F5");
-            return null;
-          }
-          try {
-            const panel = factory(html, React);
-            if (panel) cachedProcesuVadibaPanel = panel;
-          } catch (e) {
-            console.error("[Procesu vadība] Neizdevās inicializēt moduli", e);
+          if (!cachedProcesuVadibaPanel && globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule) {
+            cachedProcesuVadibaPanel = globalThis.PDD_PROCESU_VADIBA.createProcesuVadibaModule(html, React);
           }
           return cachedProcesuVadibaPanel;
         }
@@ -8594,14 +8585,8 @@
                 if (view === "procesuVadiba") {
                   const PvPanel = getProcesuVadibaPanel();
                   return PvPanel
-                    ? html`<section class="list-panel" style=${{ minHeight: "70vh" }}><${PvPanel} embedded=${true} supabase=${supabase} /></section>`
-                    : html`<section class="list-panel" style=${{ minHeight: "40vh", padding: "1.25rem" }}>
-                        <h2 style=${{ margin: "0 0 0.5rem" }}>Procesu vadība</h2>
-                        <p>Modulis nav ielādēts. Pārlādē lapu ar <strong>Ctrl+F5</strong>.</p>
-                        <p style=${{ color: "var(--muted)", fontSize: "0.9rem" }}>
-                          Ja problēma paliek, pārbaudi, vai fails <code>ProcesuVadiba.js</code> ir pieejams.
-                        </p>
-                      </section>`;
+                    ? html`<${PvPanel} />`
+                    : html`<section class="list-panel"><p>Procesu vadības modulis nav ielādēts. Pārlādē ar Ctrl+F5.</p></section>`;
                 }
                 return null;
               })()}
