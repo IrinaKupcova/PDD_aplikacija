@@ -477,8 +477,8 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202606210"></script>
-      <script defer src="./ProcesuVadibaPieslegums.js?v=202606210"></script>
+      <script defer src="./ProcesuVadiba.js?v=202606211"></script>
+      <script defer src="./ProcesuVadibaPieslegums.js?v=202606211"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -1379,7 +1379,9 @@
               rootRef.current = null;
             };
           }, [loadTick]);
-          return html`<div ref=${hostRef} class="pv-mount-host" style=${{ minHeight: "70vh", width: "100%" }}></div>`;
+          return html`<div ref=${hostRef} class="pv-mount-host" style=${{ minHeight: "70vh", width: "100%" }}>
+            <p style="padding:1rem;color:#0f3d38;margin:0">Ielādē Procesu vadību…</p>
+          </div>`;
         }
         const AppShellWithNav =
           globalThis.PDD_NAV?.createAppShellWithNav?.(html) ??
@@ -8626,7 +8628,7 @@
                     : html`<section class="list-panel"><p>Saliedēšanas modulis nav ielādēts.</p></section>`;
                 }
                 if (view === "procesuVadiba") {
-                  return html`<${ProcesuVadibaHost} loadTick=${pvLoadTick} />`;
+                  return React.createElement(ProcesuVadibaHost, { loadTick: pvLoadTick });
                 }
                 return null;
               })()}
