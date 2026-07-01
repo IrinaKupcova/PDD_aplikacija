@@ -257,6 +257,147 @@
     return out;
   }
 
+  function flattenPhasesWithNumbers(phases) {
+    const list = Array.isArray(phases) ? phases : [];
+    const roots = list.filter((p) => !p.parentId).sort((a, b) => a.order - b.order);
+    const out = [];
+    let rootNum = 0;
+    for (const r of roots) {
+      rootNum += 1;
+      out.push({ ...r, depth: 0, num: String(rootNum) });
+      const kids = list.filter((c) => c.parentId === r.id).sort((a, b) => a.order - b.order);
+      kids.forEach((c, idx) => out.push({ ...c, depth: 1, num: `${rootNum}.${idx + 1}` }));
+    }
+    return out;
+  }
+
+  function phaseVisualState(phase) {
+    const status = String(phase?.status || "").trim();
+    const done = /pabeigts/i.test(status);
+    const cancelled = /atcelts/i.test(status);
+    const muted = done || cancelled;
+    const end = String(phase?.end || "").slice(0, 10);
+    const today = todayIso();
+    const overdue =
+      !muted && end && end < today && Number(phase?.progress ?? 0) < 100;
+    const inProgress =
+      !muted &&
+      !overdue &&
+      (/procesā|gaida atbildi/i.test(status) ||
+        (Number(phase?.progress ?? 0) > 0 && Number(phase?.progress ?? 0) < 100));
+    return { muted, overdue, inProgress, done, cancelled };
+  }
+
+  function ganttBarClass(phase) {
+    const v = phaseVisualState(phase);
+    if (v.muted) return "muted";
+    if (v.overdue) return "overdue";
+    if (v.inProgress) return "active";
+    return "planned";
+  }
+
+  function phaseRowClass(phase) {
+    const v = phaseVisualState(phase);
+    return v.muted ? "pv-muted-row" : v.overdue ? "pv-overdue-row" : "";
+  }
+
+  function escapeCsv(val) {
+    const s = String(val ?? "").replace(/"/g, '""');
+    return /[",;\n\r]/.test(s) ? `"${s}"` : s;
+  }
+
+  function downloadTextFile(filename, content, mime) {
+    if (typeof document === "undefined") return;
+    const blob = new Blob([content], { type: mime });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function buildPhaseExportLines(phases) {
+    const lines = [
+      ["Nr", "Līmenis", "Nosaukums", "Apraksts", "Sākums", "Beigas", "Progress %", "Statuss"].join(";"),
+    ];
+    for (const p of flattenPhasesWithNumbers(phases)) {
+      lines.push(
+        [
+          p.num,
+          p.depth ? "Apakšposms" : "Posms",
+          p.title,
+          p.description,
+          p.start,
+          p.end,
+          p.progress ?? 0,
+          p.status,
+        ]
+          .map(escapeCsv)
+          .join(";"),
+      );
+      for (const tool of p.tools || []) {
+        const reg = p.registries?.[tool.id];
+        if (!reg?.rows?.length) continue;
+        for (const row of reg.rows) {
+          const cells = (reg.columns || []).map((c) => row.cells?.[c.id] ?? "");
+          lines.push(
+            [p.num, `Reģistrs: ${tool.title}`, ...cells].map(escapeCsv).join(";"),
+          );
+        }
+      }
+    }
+    return lines.join("\n");
+  }
+
+  function exportProcesuVadibaExcel(phases) {
+    const csv = `\uFEFF${buildPhaseExportLines(phases)}`;
+    downloadTextFile(`procesu-vadiba-${todayIso()}.csv`, csv, "text/csv;charset=utf-8");
+  }
+
+  function exportProcesuVadibaPdf(phases) {
+    if (typeof window === "undefined") return;
+    const numbered = flattenPhasesWithNumbers(phases);
+    const rows = numbered
+      .map((p) => {
+        const v = phaseVisualState(p);
+        const tone = v.muted ? "muted" : v.overdue ? "overdue" : v.inProgress ? "active" : "";
+        return `<tr class="${tone}"><td>${p.num}</td><td>${p.depth ? "Apakšposms" : "Posms"}</td><td>${String(p.title || "").replace(/</g, "&lt;")}</td><td>${p.start || "—"}</td><td>${p.end || "—"}</td><td>${p.progress ?? 0}%</td><td>${p.status || "—"}</td></tr>`;
+      })
+      .join("");
+    const html = `<!DOCTYPE html><html lang="lv"><head><meta charset="UTF-8"/><title>Procesu vadība</title>
+<style>
+body{font-family:Segoe UI,system-ui,sans-serif;padding:1.5rem;color:#01171d}
+h1{margin:0 0 .25rem;font-size:1.2rem}p{color:#1f4d47;font-size:.85rem}
+table{width:100%;border-collapse:collapse;margin-top:1rem;font-size:.82rem}
+th,td{border:1px solid #c5ebe3;padding:.35rem .45rem;text-align:left}
+th{background:#e8f8f3}
+tr.muted td{color:#9ca3af;background:#f9fafb}
+tr.overdue td{background:#fdf2f2}
+tr.active td{background:#f0fdf9}
+@media print{body{padding:.5rem}}
+</style></head><body>
+<h1>Procesu vadība — eksports</h1>
+<p>Datums: ${todayIso()}</p>
+<table><thead><tr><th>Nr</th><th>Līmenis</th><th>Nosaukums</th><th>Sākums</th><th>Beigas</th><th>%</th><th>Statuss</th></tr></thead>
+<tbody>${rows}</tbody></table></body></html>`;
+    const win = window.open("", "_blank");
+    if (!win) {
+      alert("Atļauj uznirstošos logus, lai eksportētu PDF.");
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => {
+      try {
+        win.print();
+      } catch {
+        /* ignore */
+      }
+    }, 350);
+  }
+
   function ganttRange(phases) {
     const list = Array.isArray(phases) ? phases : [];
     const dates = list.flatMap((p) => [p.start, p.end]).filter(Boolean);
@@ -334,9 +475,9 @@
   }
 
   function ensureStyles() {
-    if (typeof document === "undefined" || document.getElementById("pdd-pv-styles-v3")) return;
+    if (typeof document === "undefined" || document.getElementById("pdd-pv-styles-v4")) return;
     const el = document.createElement("style");
-    el.id = "pdd-pv-styles-v3";
+    el.id = "pdd-pv-styles-v4";
     el.textContent = `
       .pv-root {
         --pv-bg: #e8f8f3;
@@ -432,8 +573,12 @@
       }
       .pv-gantt-bar {
         position: absolute; top: 3px; bottom: 3px; border-radius: 5px;
-        background: linear-gradient(90deg, #0d9488, #34d399); min-width: 6px;
+        background: linear-gradient(90deg, #6b9e94, #8fbdb4); min-width: 6px;
       }
+      .pv-gantt-bar.active { background: linear-gradient(90deg, #0d9488, #34a88a); }
+      .pv-gantt-bar.overdue { background: linear-gradient(90deg, #b88484, #c9a0a0); }
+      .pv-gantt-bar.muted { background: linear-gradient(90deg, #d1d5db, #e5e7eb); }
+      .pv-gantt-bar.planned { background: linear-gradient(90deg, #7ab8ad, #9fd4cb); }
       .pv-gantt-bar .fill {
         position: absolute; left: 0; top: 0; bottom: 0;
         background: rgba(1, 23, 29, 0.2); border-radius: 5px 0 0 5px;
@@ -504,6 +649,22 @@
       .pv-edit-grid textarea { min-height: 88px; resize: vertical; }
       .pv-edit-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.75rem; }
       .pv-gantt-subtitle { margin: 0 0 0.5rem; font-size: 0.8rem; color: var(--pv-muted); }
+      .pv-muted-row, .pv-phase-item.pv-muted-row, .pv-phase-row.pv-muted-row { opacity: 0.52; color: #6b7280; }
+      .pv-muted-row .pv-gantt-label, .pv-muted-row strong { color: #9ca3af; font-weight: 500; }
+      .pv-overdue-row strong { color: #9f4f4f; }
+      .pv-phase-num {
+        display: inline-block; min-width: 1.8rem; font-size: 0.76rem; font-weight: 700;
+        color: #047857; margin-right: 0.35rem;
+      }
+      .pv-muted-row .pv-phase-num { color: #9ca3af; }
+      .pv-export-bar { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem; }
+      .pv-card-compact { padding: 0.75rem 1rem; }
+      .pv-phase-summary-row {
+        display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.65rem;
+      }
+      .pv-phase-summary-row .meta { font-size: 0.78rem; color: var(--pv-muted); margin-top: 0.2rem; }
+      .pv-status-pill.muted { background: #f3f4f6; color: #9ca3af; }
+      .pv-status-pill.overdue { background: #fce8e8; color: #9f4f4f; }
     `;
     document.head.appendChild(el);
   }
@@ -584,7 +745,9 @@
 
     function StatusPill({ value }) {
       const v = String(value ?? "").trim() || "—";
-      const cls = /pabeigts/i.test(v) ? "done" : /procesā/i.test(v) ? "work" : "wait";
+      const muted = /pabeigts|atcelts/i.test(v);
+      const overdue = !muted && false;
+      const cls = muted ? "muted" : /pabeigts/i.test(v) ? "done" : /procesā/i.test(v) ? "work" : overdue ? "overdue" : "wait";
       return html`<span class="pv-status-pill ${cls}">${v}</span>`;
     }
 
@@ -778,13 +941,16 @@
             ${list.length
               ? list.map((p) => {
                   const st = barStyle(p);
+                  const tone = ganttBarClass(p);
+                  const rowCls = `${p.depth ? "sub" : ""} ${phaseRowClass(p)}`.trim();
                   return html`
-                    <div class="pv-gantt-row ${p.depth ? "sub" : ""}" key=${p.id}>
+                    <div class="pv-gantt-row ${rowCls}" key=${p.id}>
                       <div class="pv-gantt-label">
+                        <span class="pv-phase-num">${p.num || ""}</span>
                         ${onGoPhase ? ce(PhaseLink, { phase: p, onGo: onGoPhase }) : html`<span>${p.title}</span>`}
                       </div>
                       <div class="pv-gantt-track">
-                        <div class="pv-gantt-bar" style=${{ left: st.left, width: st.width }}>
+                        <div class="pv-gantt-bar ${tone}" style=${{ left: st.left, width: st.width }}>
                           <div class="fill" style=${{ width: `${st.pr}%` }}></div>
                         </div>
                       </div>
@@ -807,16 +973,18 @@
 
     function GlobalGantt({ phases, onGoPhase, onPatchPhase }) {
       return ce(GanttChart, {
-        items: flattenPhases(phases),
+        items: flattenPhasesWithNumbers(phases),
         onGoPhase,
         onPatchPhase,
         title: "Kopējais Gantt — visa Procesu vadība",
-        subtitle: "Visi galvenie posmi un apakšposmi vienā laika līnijā.",
+        subtitle: "Zaļš — izpildē, blāvi sarkans — kavē, pelēks — pabeigts/atcelts.",
       });
     }
 
     function PhaseGantt({ phase, phases, onGoPhase, onPatchPhase }) {
-      const items = phaseGanttItems(phase, phases);
+      const raw = phaseGanttItems(phase, phases);
+      const numMap = new Map(flattenPhasesWithNumbers(phases).map((p) => [p.id, p.num]));
+      const items = raw.map((p) => ({ ...p, num: numMap.get(p.id) || "" }));
       const isRoot = phase && !phase.parentId;
       return ce(GanttChart, {
         items,
@@ -829,10 +997,31 @@
       });
     }
 
-    function PhaseEditForm({ phase, onPatch, onDelete, isSub }) {
+    function PhaseEditForm({ phase, onPatch, onDelete, isSub, open, onToggle }) {
+      const v = phaseVisualState(phase);
+      if (!open) {
+        return html`
+          <div class="pv-card pv-card-compact">
+            <div class="pv-phase-summary-row">
+              <div>
+                <strong>${phase.title}</strong>
+                <div class="meta">
+                  ${phase.start || "—"} — ${phase.end || "—"} · ${phase.progress ?? 0}% · ${phase.status || "—"}
+                  ${v.overdue ? " · Kavē" : ""}
+                </div>
+              </div>
+              <button type="button" class="pv-btn" onClick=${onToggle}>Labot</button>
+            </div>
+          </div>
+        `;
+      }
+
       return html`
         <div class="pv-card">
-          <h3>${isSub ? "Apakšposma labošana" : "Posma labošana"}</h3>
+          <div class="pv-phase-summary-row" style=${{ marginBottom: "0.75rem" }}>
+            <h3 style=${{ margin: 0 }}>${isSub ? "Apakšposma labošana" : "Posma labošana"}</h3>
+            <button type="button" class="pv-btn ghost" onClick=${onToggle}>Aizvērt</button>
+          </div>
           <div class="pv-edit-grid">
             <label>
               Nosaukums
@@ -891,10 +1080,20 @@
       `;
     }
 
+    function ExportBar({ phases }) {
+      return html`
+        <div class="pv-export-bar">
+          <button type="button" class="pv-btn" onClick=${() => exportProcesuVadibaExcel(phases)}>⬇ Excel (CSV)</button>
+          <button type="button" class="pv-btn" onClick=${() => exportProcesuVadibaPdf(phases)}>⬇ PDF</button>
+        </div>
+      `;
+    }
+
     function OverviewScreen({ phases, onGoPhase, patchPhase, addPhase, deletePhase }) {
       const [newTitle, setNewTitle] = useState("");
       const [newParent, setNewParent] = useState("");
       const [newDesc, setNewDesc] = useState("");
+      const numbered = flattenPhasesWithNumbers(phases);
 
       function submitAddPhase() {
         const title = String(newTitle || "").trim();
@@ -927,6 +1126,7 @@
               <h1>Pārskats</h1>
               <p class="sub">Kopējā bilde, posmu pārvaldība un laika plāns</p>
             </div>
+            ${ce(ExportBar, { phases })}
           </div>
 
           ${ce(GlobalGantt, { phases, onGoPhase, onPatchPhase: patchPhase })}
@@ -934,14 +1134,14 @@
           <div class="pv-card">
             <h3>Posmu saraksts</h3>
             <div class="pv-phase-list" style=${{ maxHeight: "none" }}>
-              ${flattenPhases(phases).map((p) => html`
-                <div class="pv-phase-row" key=${p.id}>
+              ${numbered.map((p) => html`
+                <div class="pv-phase-row ${phaseRowClass(p)}" key=${p.id}>
                   <button type="button" class="pv-phase-row-main" onClick=${() => onGoPhase(p.id)}>
-                    <strong>${p.depth ? "↳ " : ""}${p.title}</strong>
+                    <strong><span class="pv-phase-num">${p.num}</span>${p.title}</strong>
                     <div class="meta">${p.start || "—"} — ${p.end || "—"} · ${p.progress ?? 0}% · ${p.status || "—"}</div>
                   </button>
                   <div class="pv-phase-row-actions">
-                    <button type="button" class="pv-btn ghost" onClick=${() => onGoPhase(p.id)}>Labot</button>
+                    <button type="button" class="pv-btn ghost" onClick=${() => onGoPhase(p.id, null, true)}>Labot</button>
                     <button type="button" class="pv-btn danger" onClick=${() => confirmDelete(p)}>Dzēst</button>
                   </div>
                 </div>
@@ -984,12 +1184,20 @@
       patchPhase,
       addPhase,
       deletePhase,
+      editOpen,
+      onEditOpenChange,
     }) {
       if (!phase) return html`<div class="pv-empty">Posms nav atrasts</div>`;
 
       const [subTitle, setSubTitle] = useState("");
       const parent = phase.parentId ? phases.find((p) => p.id === phase.parentId) : null;
       const children = phaseChildren(phases, phase.id);
+      const childNums = new Map(
+        flattenPhasesWithNumbers(phases)
+          .filter((p) => p.parentId === phase.id)
+          .map((p) => [p.id, p.num]),
+      );
+      const phaseNum = flattenPhasesWithNumbers(phases).find((p) => p.id === phase.id)?.num || "";
       const activeTool =
         phase.tools?.find((t) => t.id === activeToolId) || phase.tools?.[0] || null;
       const isRoot = !phase.parentId;
@@ -1040,12 +1248,16 @@
             <span>›</span>
             ${parent ? ce(PhaseLink, { phase: parent, onGo: onGoPhase }) : null}
             ${parent ? html`<span>›</span>` : null}
-            <span><strong>${phase.title}</strong></span>
+            <span><strong>${phaseNum ? `${phaseNum}. ` : ""}${phase.title}</strong></span>
           </nav>
+
+          ${ce(ExportBar, { phases })}
 
           ${ce(PhaseEditForm, {
             phase,
             isSub: !isRoot,
+            open: editOpen,
+            onToggle: () => onEditOpenChange(!editOpen),
             onPatch: (patch) => patchPhase(phase.id, patch),
             onDelete: confirmDelete,
           })}
@@ -1059,13 +1271,13 @@
                   ${children.length
                     ? children.map(
                         (c) => html`
-                          <div class="pv-phase-row" key=${c.id}>
+                          <div class="pv-phase-row ${phaseRowClass(c)}" key=${c.id}>
                             <button type="button" class="pv-phase-row-main" onClick=${() => onGoPhase(c.id)}>
-                              <strong>${c.title}</strong>
+                              <strong><span class="pv-phase-num">${childNums.get(c.id) || ""}</span>${c.title}</strong>
                               <div class="meta">${c.start || "—"} — ${c.end || "—"} · ${c.progress ?? 0}% · ${c.status || "—"}</div>
                             </button>
                             <div class="pv-phase-row-actions">
-                              <button type="button" class="pv-btn ghost" onClick=${() => onGoPhase(c.id)}>Labot</button>
+                              <button type="button" class="pv-btn ghost" onClick=${() => onGoPhase(c.id, null, true)}>Labot</button>
                               <button type="button" class="pv-btn danger" onClick=${() => confirmDeleteChild(c)}>Dzēst</button>
                             </div>
                           </div>
@@ -1145,12 +1357,8 @@
         [phases, state.activePhaseId],
       );
 
-      const goOverview = useCallback(() => {
-        setState((p) => ({ ...p, screen: "overview", activePhaseId: null, activeToolId: null }));
-      }, [setState]);
-
       const goPhase = useCallback(
-        (phaseId, toolId) => {
+        (phaseId, toolId, openEdit = false) => {
           setState((p) => {
             const ph = p.phases.find((x) => x.id === phaseId);
             const defaultTool = toolId ?? ph?.tools?.[0]?.id ?? null;
@@ -1159,11 +1367,22 @@
               screen: "phase",
               activePhaseId: phaseId,
               activeToolId: defaultTool,
+              phaseEditOpen: Boolean(openEdit),
             };
           });
         },
         [setState],
       );
+
+      const goOverview = useCallback(() => {
+        setState((p) => ({
+          ...p,
+          screen: "overview",
+          activePhaseId: null,
+          activeToolId: null,
+          phaseEditOpen: false,
+        }));
+      }, [setState]);
 
       const patchPhase = useCallback(
         (phaseId, patch) => {
@@ -1192,6 +1411,7 @@
             screen: open ? "phase" : prev.screen,
             activePhaseId: open ? phase.id : prev.activePhaseId,
             activeToolId: open ? phase.tools[0]?.id ?? null : prev.activeToolId,
+            phaseEditOpen: false,
           }));
           return phase.id;
         },
@@ -1216,7 +1436,7 @@
         [setState],
       );
 
-      const flat = flattenPhases(phases);
+      const flat = flattenPhasesWithNumbers(phases);
 
       return html`
         <div class="pv-root">
@@ -1240,12 +1460,12 @@
                     <button
                       type="button"
                       key=${p.id}
-                      class=${`pv-phase-item ${p.depth ? "sub" : ""} ${state.activePhaseId === p.id ? "active" : ""}`}
+                      class=${`pv-phase-item ${p.depth ? "sub" : ""} ${state.activePhaseId === p.id ? "active" : ""} ${phaseRowClass(p)}`}
                       onClick=${() => goPhase(p.id)}
                     >
                       <div>
-                        <strong>${p.depth ? "↳ " : ""}${p.title}</strong>
-                        <div class="meta">${p.progress ?? 0}%</div>
+                        <strong><span class="pv-phase-num">${p.num}</span>${p.title}</strong>
+                        <div class="meta">${p.progress ?? 0}% · ${p.status || "—"}</div>
                       </div>
                     </button>
                   `,
@@ -1272,6 +1492,8 @@
                     patchPhase,
                     addPhase,
                     deletePhase,
+                    editOpen: Boolean(state.phaseEditOpen),
+                    onEditOpenChange: (open) => setState((p) => ({ ...p, phaseEditOpen: open })),
                   })}
             </main>
           </div>
@@ -1286,6 +1508,10 @@
     saveState,
     fetchRemoteState,
     saveRemoteState,
+    exportProcesuVadibaExcel,
+    exportProcesuVadibaPdf,
+    flattenPhasesWithNumbers,
+    phaseVisualState,
     resetState() {
       if (typeof localStorage !== "undefined") localStorage.removeItem(LS_KEY);
       return defaultState();
