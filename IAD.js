@@ -2381,15 +2381,10 @@
                   })
                   .filter(Boolean)
                   .join("\n");
-                console.error("[PDD_INFORMESHANA] pievienošanas vēstules NETIKA nosūtītas:", fails);
-                const alertMsg = api.buildInformeshanaAlertMessage
-                  ? api.buildInformeshanaAlertMessage(detail, fails)
-                  : "Automātiskā sūtīšana neizdevās.";
-                alert(
-                  "IAD saglabāts, bet automātiskais paziņojums netika nosūtīts.\n\n" +
-                    alertMsg +
-                    (detail ? `\n\n${detail}` : "\n\nSkaties F12 → Console."),
-                );
+                console.warn("[PDD_INFORMESHANA] IAD saglabāts, bet automātiskais paziņojums netika nosūtīts.", {
+                  detail,
+                  fails,
+                });
               } else if (out?.sent > 0) {
                 const sentTo = (out?.results || [])
                   .filter((r) => r?.ok && r?.email)
