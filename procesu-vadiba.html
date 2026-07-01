@@ -15,10 +15,10 @@
       .pv-boot-error p { margin: 0.35rem 0; font-size: 0.92rem; line-height: 1.45; }
     </style>
     <script defer src="./Komanda.js?v=202606182"></script>
-    <script defer src="./ProcesuVadiba.js?v=202606205"></script>
+    <script defer src="./ProcesuVadiba.js?v=202606206"></script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><p style="padding:1.25rem;color:#1f4d47">Ielādē Procesu vadību…</p></div>
     <script type="module">
       import React from "https://esm.sh/react@19.0.0";
       import { createRoot } from "https://esm.sh/react-dom@19.0.0/client";
@@ -26,21 +26,15 @@
 
       const html = htm.bind(React.createElement);
       const rootEl = document.getElementById("root");
-      let tries = 0;
 
       function showBootError(msg) {
-        rootEl.innerHTML = `<div class="pv-boot-error"><h1>Procesu vadība nav ielādēta</h1><p>${msg}</p><p>Pārbaudi, vai fails <strong>ProcesuVadiba.js</strong> ir augšupielādēts (Push) un pārlādē ar Ctrl+F5.</p></div>`;
+        rootEl.innerHTML = `<div class="pv-boot-error"><h1>Procesu vadība nav ielādēta</h1><p>${msg}</p><p>Pārlādē ar Ctrl+F5 vai atver moduli no PDD sākumlapas.</p></div>`;
       }
 
       function boot() {
-        tries += 1;
         const api = globalThis.PDD_PROCESU_VADIBA;
         if (!api?.createProcesuVadibaModule) {
-          if (tries < 120) {
-            requestAnimationFrame(boot);
-            return;
-          }
-          showBootError("Skripts ProcesuVadiba.js netika atrasts vai nav ielādējies.");
+          showBootError("ProcesuVadiba.js nav ielādējies. Pagaidi mirkli un pārlādē lapu.");
           return;
         }
         try {
@@ -51,7 +45,9 @@
           showBootError(String(e?.message || e));
         }
       }
-      boot();
+
+      if (document.readyState === "complete") boot();
+      else window.addEventListener("load", boot, { once: true });
     </script>
   </body>
 </html>

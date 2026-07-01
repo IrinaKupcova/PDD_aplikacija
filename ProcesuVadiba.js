@@ -271,7 +271,9 @@
         --pv-accent-2: #047857;
         font-family: "Segoe UI", system-ui, sans-serif;
         color: var(--pv-text);
-        min-height: 100%;
+        min-height: 70vh;
+        width: 100%;
+        display: block;
       }
       .pv-shell {
         display: grid;
@@ -402,7 +404,32 @@
   }
 
   function createProcesuVadibaModule(html, React) {
-    const { useState, useEffect, useCallback, useMemo, useRef } = React;
+    const { useState, useEffect, useCallback, useMemo, useRef, Component } = React;
+
+    class PvErrorBoundary extends Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { error };
+      }
+      render() {
+        if (this.state.error) {
+          const msg = String(this.state.error?.message || this.state.error || "Nezināma kļūda");
+          return html`
+            <section class="list-panel" style="min-height:40vh;padding:1.25rem">
+              <h2 style="margin:0 0 0.5rem">Procesu vadība — kļūda</h2>
+              <p style="margin:0;color:#7f1d1d">${msg}</p>
+              <p style="margin:0.75rem 0 0;font-size:0.9rem;color:#1f4d47">
+                Mēģini Ctrl+F5. Ja problēma paliek, pārbaudi konsoli (F12).
+              </p>
+            </section>
+          `;
+        }
+        return this.props.children;
+      }
+    }
 
     function usePersistedState(supabase) {
       const [state, setState] = useState(() => loadState());
@@ -410,6 +437,7 @@
       const saveTimerRef = useRef(null);
       const remoteReadyRef = useRef(false);
       const stateRef = useRef(state);
+      const hydratedRef = useRef(false);
 
       useEffect(() => {
         stateRef.current = state;
@@ -417,30 +445,36 @@
 
       useEffect(() => {
         let cancelled = false;
-        (async () => {
-          const sb = supabase ?? root.__PDD_SUPABASE__ ?? null;
-          if (!sb) {
-            if (!cancelled) setSyncStatus("local");
-            remoteReadyRef.current = true;
-            return;
-          }
-          try {
-            const remote = await fetchRemoteState(sb);
-            if (cancelled) return;
-            const local = loadState();
-            const merged = pickNewerState(remote, local);
-            setState(merged);
-            saveState(merged);
-            setSyncStatus("synced");
-          } catch (e) {
-            console.warn("[Procesu vadība] sākotnējā sinhronizācija", e);
-            if (!cancelled) setSyncStatus("error");
-          } finally {
-            if (!cancelled) remoteReadyRef.current = true;
-          }
-        })();
+        const timer = setTimeout(() => {
+          void (async () => {
+            const sb = supabase ?? root.__PDD_SUPABASE__ ?? null;
+            if (!sb) {
+              if (!cancelled) {
+                setSyncStatus("local");
+                remoteReadyRef.current = true;
+              }
+              return;
+            }
+            try {
+              const remote = await fetchRemoteState(sb);
+              if (cancelled || hydratedRef.current) return;
+              hydratedRef.current = true;
+              const local = loadState();
+              const merged = pickNewerState(remote, local);
+              setState(merged);
+              saveState(merged);
+              setSyncStatus(remote ? "synced" : "local");
+            } catch (e) {
+              console.warn("[Procesu vadība] sākotnējā sinhronizācija", e);
+              if (!cancelled) setSyncStatus("error");
+            } finally {
+              if (!cancelled) remoteReadyRef.current = true;
+            }
+          })();
+        }, 0);
         return () => {
           cancelled = true;
+          clearTimeout(timer);
         };
       }, [supabase]);
 
@@ -457,7 +491,8 @@
         saveTimerRef.current = setTimeout(() => {
           void (async () => {
             const out = await saveRemoteState(sb, stateRef.current);
-            setSyncStatus(out?.ok ? "synced" : "error");
+            if (!out?.ok) setSyncStatus("error");
+            else setSyncStatus("synced");
           })();
         }, REMOTE_SAVE_MS);
         return () => clearTimeout(saveTimerRef.current);
@@ -911,7 +946,7 @@
       `;
     }
 
-    return function ProcesuVadibaApp({ embedded, supabase }) {
+    function ProcesuVadibaApp({ embedded, supabase }) {
       const [state, setState, syncStatus] = usePersistedState(supabase);
 
       useEffect(() => {
@@ -1026,6 +1061,14 @@
           </div>
         </div>
       `;
+    }
+
+    return function ProcesuVadibaPanel(props) {
+      return html`
+        <${PvErrorBoundary}>
+          <${ProcesuVadibaApp} embedded=${props?.embedded} supabase=${props?.supabase} />
+        </${PvErrorBoundary}>
+      `;
     };
   }
 
@@ -1035,5 +1078,6 @@
     saveState,
     fetchRemoteState,
     saveRemoteState,
+    READY: true,
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);
