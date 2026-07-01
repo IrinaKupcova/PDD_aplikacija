@@ -6,7 +6,7 @@
   if (typeof globalThis !== "undefined" && globalThis.PDD_PROCESU_VADIBA) return;
   if (typeof document === "undefined") return;
   const s = document.createElement("script");
-  s.src = "./ProcesuVadiba.js?v=202606267";
+  s.src = "./ProcesuVadiba.js?v=202606268";
   s.defer = true;
   document.head.appendChild(s);
 })();

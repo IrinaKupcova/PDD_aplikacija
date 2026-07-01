@@ -14,6 +14,7 @@
   const REMOTE_SAVE_MS = 700;
   const REMOTE_POLL_MS = 20000;
   const REMOTE_HISTORY_LIMIT = 40;
+  const HISTORY_PAGE_SIZE = 20;
   const REMOTE_SYNC_ENABLED = true;
   const WORKPLAN_COL_TYPE = "workplan";
   const EXECUTION_INFO_LABEL = "Informācija par izpildi";
@@ -246,20 +247,33 @@
     return action === "restore" ? "Atjaunošana" : "Saglabāts";
   }
 
-  async function fetchRemoteHistory(sb, limit = REMOTE_HISTORY_LIMIT) {
-    if (!REMOTE_SYNC_ENABLED || !sb) return [];
+  async function fetchRemoteHistory(sb, options) {
+    if (!REMOTE_SYNC_ENABLED || !sb) {
+      return options?.paginated ? { rows: [], total: 0 } : [];
+    }
     await ensureDbSession(sb);
-    const { data, error } = await sb
+    const paginated = Boolean(options?.paginated);
+    const pageSize = Number(options?.pageSize) > 0 ? Number(options.pageSize) : HISTORY_PAGE_SIZE;
+    const page = Math.max(0, Number(options?.page) || 0);
+    const limit = paginated ? pageSize : Number(options?.limit) > 0 ? Number(options.limit) : REMOTE_HISTORY_LIMIT;
+    const offset = paginated ? page * pageSize : 0;
+    let query = sb
       .from(REMOTE_HISTORY_TABLE)
-      .select("id, saved_at, saved_by, action")
+      .select("id, saved_at, saved_by, action", paginated ? { count: "exact" } : undefined)
       .eq("module_id", REMOTE_ROW_ID)
-      .order("saved_at", { ascending: false })
-      .limit(limit);
+      .order("saved_at", { ascending: false });
+    if (paginated) {
+      query = query.range(offset, offset + pageSize - 1);
+    } else {
+      query = query.limit(limit);
+    }
+    const { data, error, count } = await query;
     if (error) {
       console.warn("[Procesu vadība] vēstures lasīšana", error);
-      return [];
+      return paginated ? { rows: [], total: 0 } : [];
     }
-    return Array.isArray(data) ? data : [];
+    const rows = Array.isArray(data) ? data : [];
+    return paginated ? { rows, total: Number(count) || 0 } : rows;
   }
 
   async function restoreRemoteHistory(sb, historyId) {
@@ -2341,6 +2355,11 @@ ${body}
         letter-spacing: 0.02em; color: #047857; background: #e8f8f3; border-radius: 4px;
         padding: 0.06rem 0.35rem; margin-right: 0.35rem;
       }
+      .pv-history-pager {
+        display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+        gap: 0.5rem; margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid #e0f2ee;
+      }
+      .pv-history-pager-meta { font-size: 0.78rem; color: var(--pv-muted); }
       .pv-sync-note {
         margin: 0.5rem 0 0; font-size: 0.72rem; color: #0f3d38; line-height: 1.4; opacity: 0.92;
       }
@@ -3885,20 +3904,28 @@ ${body}
 
     function HistoryScreen({ onGoOverview, onRestore }) {
       const [rows, setRows] = useState([]);
+      const [total, setTotal] = useState(0);
+      const [page, setPage] = useState(0);
       const [loading, setLoading] = useState(true);
       const [restoringId, setRestoringId] = useState(null);
 
-      const loadHistory = useCallback(async () => {
+      const loadHistory = useCallback(async (nextPage = 0) => {
         setLoading(true);
         const sb = root.__PDD_SUPABASE__ ?? null;
-        const list = await fetchRemoteHistory(sb);
-        setRows(list);
+        const out = await fetchRemoteHistory(sb, { paginated: true, page: nextPage, pageSize: HISTORY_PAGE_SIZE });
+        setRows(out.rows || []);
+        setTotal(out.total || 0);
+        setPage(nextPage);
         setLoading(false);
       }, []);
 
       useEffect(() => {
-        void loadHistory();
+        void loadHistory(0);
       }, [loadHistory]);
+
+      const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+      const pageStart = total ? page * HISTORY_PAGE_SIZE + 1 : 0;
+      const pageEnd = Math.min(total, (page + 1) * HISTORY_PAGE_SIZE);
 
       async function handleRestore(row) {
         const when = formatPvDateTime(row.saved_at);
@@ -3911,7 +3938,7 @@ ${body}
           alert("Neizdevās atjaunot. Pārbaudi, vai Supabase vēstures tabula ir izveidota.");
           return;
         }
-        await loadHistory();
+        await loadHistory(page);
         alert("Stāvoklis atjaunots. Visi komandas dalībnieki redzēs šo versiju pēc sinhronizācijas.");
       }
 
@@ -3921,7 +3948,7 @@ ${body}
             <h1>Vēsture un atjaunošana</h1>
             <p class="pv-history-intro">
               Katra saglabāšana Supabase tiek arhivēta. Šeit var atjaunot iepriekšējo stāvokli — visi uzdevumi,
-              posmi, tabulas, teksti un darba plāna uzdevumi atjaunojas kopā.
+              posmi, tabulas, teksti un darba plāna uzdevumi atjaunojas kopā. Vienā lapā rāda ${HISTORY_PAGE_SIZE} ierakstus.
             </p>
             ${loading
               ? html`<p class="pv-empty">Ielādē vēsturi…</p>`
@@ -3950,11 +3977,38 @@ ${body}
                         `,
                       )}
                     </div>
+                    ${totalPages > 1
+                      ? html`
+                          <div class="pv-history-pager">
+                            <button
+                              type="button"
+                              class="pv-btn"
+                              disabled=${page <= 0}
+                              onClick=${() => loadHistory(page - 1)}
+                            >
+                              ← Iepriekšējā
+                            </button>
+                            <span class="pv-history-pager-meta">
+                              ${pageStart}–${pageEnd} no ${total} · lapa ${page + 1}/${totalPages}
+                            </span>
+                            <button
+                              type="button"
+                              class="pv-btn"
+                              disabled=${page >= totalPages - 1}
+                              onClick=${() => loadHistory(page + 1)}
+                            >
+                              Nākamā →
+                            </button>
+                          </div>
+                        `
+                      : total
+                        ? html`<p class="pv-history-pager-meta" style=${{ marginTop: "0.75rem" }}>${total} ieraksti kopā</p>`
+                        : null}
                   `
                 : html`<p class="pv-empty">Vēsture vēl nav pieejama. Tā parādīsies pēc pirmajām izmaiņām Supabase.</p>`}
             <div class="pv-edit-footer">
               <button type="button" class="pv-btn" onClick=${onGoOverview}>Atpakaļ</button>
-              <button type="button" class="pv-btn" onClick=${loadHistory}>Atjaunot sarakstu</button>
+              <button type="button" class="pv-btn" onClick=${() => loadHistory(page)}>Atjaunot sarakstu</button>
             </div>
           </div>
         </div>
