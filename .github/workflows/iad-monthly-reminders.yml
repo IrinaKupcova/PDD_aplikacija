@@ -25,6 +25,8 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
       RESEND_FROM: ${{ secrets.RESEND_FROM }}
+      RESEND_TEST_TO: ${{ secrets.RESEND_TEST_TO }}
+      PDD_IAD_REMINDER_CONTROL_EMAIL: irina.kupcova@vid.gov.lv,pliada@inbox.lv
     steps:
       - uses: actions/checkout@v4
 

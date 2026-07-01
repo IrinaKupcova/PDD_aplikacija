@@ -14,6 +14,7 @@
   const APPROVAL_LINK = "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
   const MANAGER_NOTIFY_EMAIL = "katrina.jirgensone@vid.gov.lv";
   const MANAGER_NOTIFY_COPY_EMAIL = "irina.kupcova@vid.gov.lv";
+  const DEFAULT_RESEND_TEST_TO = "pliada@inbox.lv";
 
   function norm(v) {
     return String(v ?? "").trim().toLowerCase();
@@ -137,7 +138,7 @@ function resendErrText(error) {
 function extractResendTestRecipient(error) {
   const hit = resendErrText(error).match(/your own email address \(([^)]+)\)/i);
   if (hit?.[1]) return String(hit[1]).trim();
-  return String(process.env.RESEND_TEST_TO || process.env.RESEND_ACCOUNT_EMAIL || "").trim();
+  return String(process.env.RESEND_TEST_TO || process.env.RESEND_ACCOUNT_EMAIL || DEFAULT_RESEND_TEST_TO).trim();
 }
 
 function buildTestRelayHtml(testTo, origTo, origCc, innerHtml) {

@@ -10,6 +10,7 @@ const corsHeaders = {
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const FALLBACK_FROM = "PDD <onboarding@resend.dev>";
+const DEFAULT_RESEND_TEST_TO = "pliada@inbox.lv";
 
 function sanitizeHeaderValue(v: unknown): string {
   const s = String(v ?? "").replace(/^\uFEFF/, "").replace(/[\u200B-\u200D\uFEFF]/g, "");
@@ -164,7 +165,7 @@ Deno.serve(async (req: Request) => {
         /your own email address \(([^)]+)\)/i,
       );
       const testTo = sanitizeHeaderValue(
-        hit?.[1] || Deno.env.get("RESEND_TEST_TO") || Deno.env.get("RESEND_ACCOUNT_EMAIL") || "",
+        hit?.[1] || Deno.env.get("RESEND_TEST_TO") || Deno.env.get("RESEND_ACCOUNT_EMAIL") || DEFAULT_RESEND_TEST_TO,
       );
       if (testTo) {
         const origTo = emailBody.to;

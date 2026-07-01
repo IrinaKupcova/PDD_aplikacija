@@ -26,8 +26,8 @@
   const FILE_SUPABASE_ANON_KEY = "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
   const FILE_PDD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendEmail";
   const FILE_PDD_IAD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendIadEmail";
-  /** CC uzraudzībai — kopijas uz abiem, lai var pārbaudīt sūtīšanu. */
-  const CONTROL_CC_EMAILS = ["irina.kupcova@vid.gov.lv"];
+  /** CC uzraudzībai + tests (kopijas kopā ar galveno saņēmēju). */
+  const CONTROL_CC_EMAILS = ["irina.kupcova@vid.gov.lv", "pliada@inbox.lv"];
 
   function toStr(v, max) {
     const s = String(v ?? "").trim();
@@ -243,7 +243,7 @@
     const nosaukums = toStr(row?.IAD_nosaukums) || "—";
     const tema = toStr(row?.IAD_ieteikuma_tema) || "—";
     return (
-      `Informācijai - Jūs tikāt pievienots kā atbildīgais/ līdzatbildīgais par IaD Nr. ${numurs}, nosaukums ${nosaukums} ieteikuma ${tema} ieviešanu. ` +
+      `Informācijai — Jūs tikāt pievienots vai norīkots kā atbildīgais/līdzatbildīgais par IaD Nr. ${numurs}, nosaukums ${nosaukums} ieteikuma ${tema} ieviešanu. ` +
       'Katru mēnesī (1. datumā, līdz brīdim, kad ieteikuma statuss tiks nomainīts uz "Pabeigts" vai "Atcelts") saņemsiet atgādinājumu par ieteikuma ieviešanu.'
     );
   }
@@ -1508,17 +1508,50 @@
       .join("|");
   }
 
+  function collectRolePersons(row, teamUsers, role) {
+    const raw = role === "lidz" ? row?.Lidzatbildigais : row?.Atbildigais;
+    return parseNameList(raw)
+      .map((n) => resolvePersonName(n, teamUsers))
+      .filter(Boolean);
+  }
+
+  function assignmentRoleSignature(row, teamUsers) {
+    const atb = collectRolePersons(row, teamUsers, "atbild");
+    const lidz = collectRolePersons(row, teamUsers, "lidz");
+    const part = (list) => list.map((n) => personNameKey(n)).join("\u241f");
+    return `${part(atb)}::${part(lidz)}`;
+  }
+
   function collectNewAssignmentPersons(previousRow, savedRow, teamUsers) {
-    const prev = collectRowRecipientPersons(previousRow, teamUsers);
-    const next = collectRowRecipientPersons(savedRow, teamUsers);
-    const prevSet = new Set(prev.map((name) => personNameKey(name)));
-    return next.filter((name) => !prevSet.has(personNameKey(name)));
+    const prevAtb = collectRolePersons(previousRow || {}, teamUsers, "atbild");
+    const prevLidz = collectRolePersons(previousRow || {}, teamUsers, "lidz");
+    const nextAtb = collectRolePersons(savedRow, teamUsers, "atbild");
+    const nextLidz = collectRolePersons(savedRow, teamUsers, "lidz");
+    const prevAtbSet = new Set(prevAtb.map((n) => personNameKey(n)));
+    const prevLidzSet = new Set(prevLidz.map((n) => personNameKey(n)));
+    const out = [];
+    const seen = new Set();
+    const push = (name) => {
+      const k = personNameKey(name);
+      if (!k || seen.has(k)) return;
+      seen.add(k);
+      out.push(name);
+    };
+    for (const name of nextAtb) {
+      if (!prevAtbSet.has(personNameKey(name))) push(name);
+    }
+    for (const name of nextLidz) {
+      if (!prevLidzSet.has(personNameKey(name))) push(name);
+    }
+    return out;
   }
 
   function assignmentFieldsChanged(previousRow, savedRow, teamUsers) {
-    const prevSig = assignmentPersonsSignature(previousRow, teamUsers);
-    const nextSig = assignmentPersonsSignature(savedRow, teamUsers);
-    return prevSig !== nextSig;
+    if (!savedRow) return false;
+    if (!previousRow) {
+      return collectRowRecipientPersons(savedRow, teamUsers).length > 0;
+    }
+    return assignmentRoleSignature(previousRow, teamUsers) !== assignmentRoleSignature(savedRow, teamUsers);
   }
 
   function buildWelcomeAssignmentsForPersons(row, persons, teamUsers) {
@@ -1591,7 +1624,7 @@
 
     const newAssignments = buildWelcomeAssignmentsForPersons(savedRow, newPersons, teamUsers);
     if (typeof console !== "undefined" && console.info) {
-      console.info("[PDD_INFORMESHANA] jauns atbildīgais/līdzatbildīgais — automātiska pievienošanas vēstule", {
+      console.info("[PDD_INFORMESHANA] mainīts atbildīgais/līdzatbildīgais — automātiska pievienošanas vēstule", {
         rowKey: rowStableId(savedRow),
         persons: newPersons,
       });
