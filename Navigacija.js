@@ -6,9 +6,9 @@
 (function () {
   function ensureNavigacijaExtraStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-navigacija-extra-style-v3")) return;
+    if (document.getElementById("pdd-navigacija-extra-style-v4")) return;
     const s = document.createElement("style");
-    s.id = "pdd-navigacija-extra-style-v3";
+    s.id = "pdd-navigacija-extra-style-v4";
     s.textContent = `
       .app-nav-top-row {
         display: flex;
@@ -273,6 +273,200 @@
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? "").trim());
   }
 
+  const NAV_APP_CHANGES_SEEN_KEY = "pdd_app_changes_seen_id_v2";
+  const NAV_APP_CHANGES_GLOBAL_ACK = "pdd_app_changes_latest_ack_v1";
+
+  function navAppChangesStampId(raw) {
+    const s = String(raw ?? "").trim();
+    if (!s) return "";
+    const pipe = s.lastIndexOf("|");
+    return (pipe >= 0 ? s.slice(pipe + 1).trim() : s).toLowerCase();
+  }
+
+  function navAppChangesIdentity() {
+    const uid = String(
+      globalThis.__PDD_ACTOR_USER_ID__ ??
+        (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("pdd_local_user_id") : "") ??
+        ""
+    ).trim();
+    const em = String(
+      globalThis.__PDD_ACTOR_EMAIL__ ??
+        (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("pdd_local_email") : "") ??
+        ""
+    )
+      .trim()
+      .toLowerCase();
+    return { uid, em };
+  }
+
+  function navAppChangesSeenKeys() {
+    const { uid, em } = navAppChangesIdentity();
+    const keys = new Set([NAV_APP_CHANGES_SEEN_KEY, NAV_APP_CHANGES_GLOBAL_ACK]);
+    if (uid) keys.add(`${NAV_APP_CHANGES_SEEN_KEY}:${uid}`);
+    if (em) keys.add(`${NAV_APP_CHANGES_SEEN_KEY}:${em}`);
+    if (typeof localStorage !== "undefined") {
+      try {
+        for (let i = 0; i < localStorage.length; i += 1) {
+          const key = String(localStorage.key(i) || "");
+          if (!key.startsWith(NAV_APP_CHANGES_SEEN_KEY)) continue;
+          if ((uid && key.includes(uid)) || (em && key.endsWith(`:${em}`))) keys.add(key);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return [...keys];
+  }
+
+  function navReadLocalAppChangesSeenIds() {
+    const ids = new Set();
+    for (const key of navAppChangesSeenKeys()) {
+      try {
+        const id = navAppChangesStampId(localStorage.getItem(key));
+        if (id) ids.add(id);
+      } catch {
+        /* ignore */
+      }
+    }
+    return ids;
+  }
+
+  function navWriteAppChangesSeen(latestId) {
+    const id = navAppChangesStampId(latestId);
+    if (!id) return;
+    for (const key of navAppChangesSeenKeys()) {
+      try {
+        localStorage.setItem(key, id);
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      localStorage.setItem(NAV_APP_CHANGES_GLOBAL_ACK, id);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function navEnsureDbSession() {
+    const fn = globalThis.__PDD_ENSURE_DB_SESSION__;
+    if (typeof fn === "function") {
+      try {
+        await fn();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const sb = globalThis.__PDD_SUPABASE__;
+    if (!sb?.auth?.getSession) return;
+    try {
+      const s = await sb.auth.getSession();
+      if (!s?.data?.session?.access_token && sb.auth.signInAnonymously) {
+        await sb.auth.signInAnonymously();
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function navCollectActorEmails() {
+    const out = [];
+    const push = (raw) => {
+      const s = String(raw ?? "").trim().toLowerCase();
+      if (s && s.includes("@") && !out.includes(s)) out.push(s);
+    };
+    push(navAppChangesIdentity().em);
+    push(globalThis.__PDD_ACTOR_EMAIL__);
+    try {
+      push(sessionStorage.getItem("pdd_local_email"));
+    } catch {
+      /* ignore */
+    }
+    return out;
+  }
+
+  async function navFetchAppChangesSeenFromDb(sb) {
+    if (!sb?.rpc) return "";
+    for (const em of await navCollectActorEmails()) {
+      try {
+        const { data, error } = await sb.rpc("pdd_get_app_changes_seen_by_email", { p_actor_email: em });
+        if (error) continue;
+        const id = navAppChangesStampId(data);
+        if (id) return id;
+      } catch {
+        /* ignore */
+      }
+    }
+    return "";
+  }
+
+  async function navPersistAppChangesSeenToDb(sb, latestId) {
+    const id = navAppChangesStampId(latestId);
+    if (!sb?.rpc || !id) return;
+    for (const em of await navCollectActorEmails()) {
+      try {
+        const { error } = await sb.rpc("pdd_set_app_changes_seen_by_email", {
+          p_actor_email: em,
+          p_seen_id: id,
+        });
+        if (!error) return;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  async function navResolveLatestAppChangeId() {
+    const M = globalThis.PDD_IZMAINAS;
+    const sb = globalThis.__PDD_SUPABASE__;
+    if (!M?.fetchRows || !M?.latestStamp || !sb) return "";
+    await navEnsureDbSession();
+    const rows = await M.fetchRows(sb);
+    return navAppChangesStampId(M.latestStamp(rows));
+  }
+
+  async function navMarkAppChangesSeen(latestId) {
+    const id = navAppChangesStampId(latestId);
+    if (!id) return;
+    navWriteAppChangesSeen(id);
+    const sb = globalThis.__PDD_SUPABASE__;
+    if (sb) await navPersistAppChangesSeenToDb(sb, id);
+  }
+
+  async function navShouldShowAppChangesNew(view) {
+    try {
+      const M = globalThis.PDD_IZMAINAS;
+      const sb = globalThis.__PDD_SUPABASE__;
+      if (!M?.fetchRows || !M?.latestStamp || !sb) return false;
+      await navEnsureDbSession();
+      const rows = await M.fetchRows(sb);
+      const latestId = navAppChangesStampId(M.latestStamp(rows));
+      if (!latestId) return false;
+
+      if (view === "pddAppChanges") {
+        await navMarkAppChangesSeen(latestId);
+        return false;
+      }
+
+      const dbSeen = await navFetchAppChangesSeenFromDb(sb);
+      if (dbSeen) navWriteAppChangesSeen(dbSeen);
+      if (navReadLocalAppChangesSeenIds().has(latestId)) return false;
+
+      const latestRow = rows.find((r) => navAppChangesStampId(r?.id) === latestId) || rows[0];
+      const ts = Date.parse(String(latestRow?.created_at || latestRow?.datums || ""));
+      const maxNewAgeMs = 3 * 24 * 60 * 60 * 1000;
+      if (Number.isFinite(ts) && Date.now() - ts > maxNewAgeMs) {
+        await navMarkAppChangesSeen(latestId);
+        return false;
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function pddActorKeyForPollVotes() {
     const candidates = [
       globalThis.__PDD_ACTOR_USER_ID__,
@@ -412,7 +606,7 @@
       onPromSubChange,
       showPromDeputyTab,
       showPendingCitsBadge,
-      showPddAppChangesBadge,
+      showPddAppChangesBadge: _showPddAppChangesBadgeProp,
       canGoBack,
       onGoBack,
       onPinCurrentSection,
@@ -425,6 +619,25 @@
     }) {
       ensureNavigacijaExtraStyles();
       const pendingPoll = pddFindPendingSaliedesanaPoll();
+
+      if (!globalThis.__PDD_NAV_CHANGES_INIT__) {
+        globalThis.__PDD_NAV_CHANGES_INIT__ = true;
+        void navShouldShowAppChangesNew(view === "pddAppChanges" ? "pddAppChanges" : "home");
+      }
+
+      const showPddAppChangesBadge = false;
+
+      function openPddAppChangesNav() {
+        onChangeView("pddAppChanges");
+        void (async () => {
+          try {
+            const latestId = await navResolveLatestAppChangeId();
+            if (latestId) await navMarkAppChangesSeen(latestId);
+          } catch {
+            /* ignore */
+          }
+        })();
+      }
 
       const darbaUzdevumiNavOpen = view === "darbaUzdevumiIad";
       const vestureAccordionOpen =
@@ -590,7 +803,7 @@
                   <button
                     type="button"
                     class=${`app-nav-sublink ${view === "pddAppChanges" ? "active" : ""}`}
-                    onClick=${() => onChangeView("pddAppChanges")}
+                    onClick=${() => void openPddAppChangesNav()}
                   >
                     Izmaiņas PDD aplikācijā
                     ${showPddAppChangesBadge ? html`<span class="app-nav-badge-new">NEW</span>` : null}
