@@ -16,6 +16,7 @@
   const REMOTE_HISTORY_LIMIT = 40;
   const REMOTE_SYNC_ENABLED = true;
   const WORKPLAN_COL_TYPE = "workplan";
+  const EXECUTION_INFO_LABEL = "Informācija par izpildi";
   const PDD_SB_URL = "https://fdnkvecgqetmwilwolgt.supabase.co";
   const PDD_SB_ANON_KEY = "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
   const PDD_SB_LS_URL = "pdd_supabase_url";
@@ -45,6 +46,11 @@
     return typeof crypto !== "undefined" && crypto.randomUUID
       ? crypto.randomUUID()
       : `pv_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  }
+
+  function askConfirm(message) {
+    if (typeof confirm !== "function") return true;
+    return confirm(message);
   }
 
   function todayIso() {
@@ -277,7 +283,7 @@
       { id: uid(), name: "Darba virziens", type: "text", width: 200 },
       { id: uid(), name: "Statuss", type: "status", width: 120, options: [...STATUS_PRESETS] },
       { id: uid(), name: "Termiņš", type: "date", width: 120 },
-      { id: uid(), name: "Piezīmes", type: "text", width: 220 },
+      { id: uid(), name: "Piezīmes", type: "text", width: 320 },
     ];
   }
 
@@ -414,15 +420,19 @@
     const roots = list.filter((p) => !p.parentId).sort((a, b) => a.order - b.order);
     const out = [];
     let taskNum = 0;
+    const withProgress = (p, depth, kind, num) => {
+      const meta = phaseProgressMeta(list, p.id);
+      return { ...p, depth, kind, num, progress: meta.progress, progressManual: meta.progressManual };
+    };
     for (const root of roots) {
       taskNum += 1;
-      out.push({ ...root, depth: 0, kind: "Uzdevums", num: String(taskNum) });
+      out.push(withProgress(root, 0, "Uzdevums", String(taskNum)));
       const posmi = list.filter((p) => p.parentId === root.id).sort((a, b) => a.order - b.order);
       posmi.forEach((posm, pi) => {
-        out.push({ ...posm, depth: 1, kind: "Posms", num: `${taskNum}.${pi + 1}` });
+        out.push(withProgress(posm, 1, "Posms", `${taskNum}.${pi + 1}`));
         const subs = list.filter((p) => p.parentId === posm.id).sort((a, b) => a.order - b.order);
         subs.forEach((sub, si) => {
-          out.push({ ...sub, depth: 2, kind: "Apakšposms", num: `${taskNum}.${pi + 1}.${si + 1}` });
+          out.push(withProgress(sub, 2, "Apakšposms", `${taskNum}.${pi + 1}.${si + 1}`));
         });
       });
     }
@@ -625,6 +635,94 @@
     return tableColumnTypeLabel(type);
   }
 
+  function statusToneKey(value) {
+    const v = String(value ?? "").trim().toLowerCase();
+    if (!v || v === "—") return "none";
+    if (/pabeigts|pabeigta|done|completed/i.test(v)) return "done";
+    if (/atcelts|cancel/i.test(v)) return "cancelled";
+    if (/procesā|process|notiek/i.test(v)) return "active";
+    if (/gaida|atbildi/i.test(v)) return "wait";
+    if (/plānots|plan/i.test(v)) return "planned";
+    if (/nav sākts|nesākts|not started/i.test(v)) return "todo";
+    return "default";
+  }
+
+  function statusRowClass(value) {
+    return `pv-row-tone-${statusToneKey(value)}`;
+  }
+
+  function statusCellClass(col, value) {
+    if (col?.type !== "status" && !/^statuss$/i.test(String(col?.name || "").trim())) return "";
+    const tone = statusToneKey(value);
+    return tone === "none" ? "pv-status-cell pv-cell-tone-none" : `pv-status-cell pv-cell-tone-${tone}`;
+  }
+
+  function tableCellClasses(col, value) {
+    return [tableColumnClass(col), statusCellClass(col, value)].filter(Boolean).join(" ");
+  }
+
+  function statusPillClass(value) {
+    const map = {
+      done: "done",
+      active: "work",
+      wait: "wait",
+      planned: "planned",
+      todo: "notstarted",
+      cancelled: "cancelled",
+      none: "muted",
+      default: "wait",
+    };
+    return map[statusToneKey(value)] || "wait";
+  }
+
+  function findStatusColumn(columns) {
+    const list = columns || [];
+    return (
+      list.find((c) => c.type === "status") ||
+      list.find((c) => /^statuss$/i.test(String(c.name || "").trim())) ||
+      null
+    );
+  }
+
+  function tableRowStatusClass(row, columns) {
+    const statusCol = findStatusColumn(columns);
+    if (!statusCol) return "pv-row-tone-none";
+    return statusRowClass(row?.cells?.[statusCol.id] ?? "");
+  }
+
+  function isNotesColumn(col) {
+    return /^piezīmes$/i.test(String(col?.name || "").trim());
+  }
+
+  function tableColumnStyle(col) {
+    const w = Number(col?.width) || 140;
+    const notes = isNotesColumn(col);
+    const minW = notes ? Math.max(w, 320) : w > 140 ? w : 0;
+    if (!minW) return null;
+    return { minWidth: `${minW}px`, width: notes ? `${minW}px` : undefined };
+  }
+
+  function tableColumnClass(col) {
+    return isNotesColumn(col) ? "pv-col-notes" : "";
+  }
+
+  function changeColumnType(col, newType) {
+    const prev = migrateTableColumn(col) || col;
+    const t = newType || "text";
+    return migrateTableColumn({
+      id: prev.id,
+      name: prev.name,
+      type: t,
+      width: prev.width,
+      options:
+        t === "status" || t === "choice"
+          ? prev.type === t && Array.isArray(prev.options)
+            ? prev.options
+            : defaultOptionsForColumnType(t)
+          : undefined,
+    });
+  }
+
   function migrateTableColumn(col) {
     if (!col || !col.id) return null;
     if (isWorkPlanColumn(col)) return null;
@@ -640,6 +738,7 @@
         ? col.options.map((o) => String(o))
         : defaultOptionsForColumnType(type);
     }
+    if (isNotesColumn(out)) out.width = Math.max(Number(out.width) || 0, 320);
     return out;
   }
 
@@ -751,6 +850,19 @@
     return hasOther ? "Notiek" : "Plānots";
   }
 
+  function executionInfoForExport(phase) {
+    const parts = [];
+    const phaseInfo = String(phase?.executionInfo || "").trim();
+    if (phaseInfo) parts.push(phaseInfo);
+    for (const b of phase?.blocks || []) {
+      const blockInfo = String(b?.executionInfo || "").trim();
+      if (!blockInfo) continue;
+      const label = b.title || contentBlockTypeLabel(b.type);
+      parts.push(`${label}: ${blockInfo}`);
+    }
+    return parts.join("\n");
+  }
+
   function collectSectionReportRows(phases, sections, sectionId, asOf) {
     const section = ensureWorkPlanSections(sections).find((s) => s.id === sectionId);
     if (!section) return [];
@@ -770,6 +882,7 @@
           end: p.end || "",
           progress: p.progress ?? 0,
           description: p.description || "",
+          executionInfo: executionInfoForExport(p),
           tableBlock: "",
           extra: "",
         });
@@ -808,6 +921,7 @@
         "Beigas",
         "Progress %",
         "Apraksts",
+        EXECUTION_INFO_LABEL,
         "Tabula",
         "Papildu dati",
       ]
@@ -828,6 +942,7 @@
           r.end,
           r.progress,
           r.description,
+          r.executionInfo,
           r.tableBlock,
           r.extra,
         ]
@@ -860,6 +975,21 @@
     return { kind: "Apakšposms", level: 2, childLabel: null, addChildLabel: null };
   }
 
+  function navKindLabel(kind) {
+    const k = String(kind || "");
+    if (k === "Uzdevums") return "UZDEVUMS";
+    if (k === "Posms") return "posms";
+    if (k === "Apakšposms") return "apakšposms";
+    return k;
+  }
+
+  function navKindTagClass(kind) {
+    const k = String(kind || "");
+    if (k === "Uzdevums") return "pv-kind-tag pv-kind-nav-uzdevums";
+    if (k === "Posms" || k === "Apakšposms") return "pv-kind-tag pv-kind-nav-posms";
+    return "pv-kind-tag";
+  }
+
   function isUnderAncestor(phases, itemId, ancestorId) {
     let cur = itemId;
     while (cur) {
@@ -871,35 +1001,43 @@
     return false;
   }
 
-  function phaseVisualState(phase) {
+  function phaseVisualState(phase, phases) {
     const status = String(phase?.status || "").trim();
-    const done = /pabeigts/i.test(status);
+    const progress = phases ? resolvePhaseProgress(phase, phases) : clampProgress(phase?.progress);
+    const done = /pabeigts/i.test(status) || progress >= 100;
     const cancelled = /atcelts/i.test(status);
     const notStarted = /nav sākts/i.test(status);
-    const muted = done || cancelled || notStarted;
+    const muted = cancelled;
+    const start = String(phase?.start || "").slice(0, 10);
     const end = String(phase?.end || "").slice(0, 10);
     const today = todayIso();
-    const overdue =
-      !muted && end && end < today && Number(phase?.progress ?? 0) < 100;
+    const futureExecution = Boolean(start && start > today && !done && !cancelled);
+    const overdue = !done && !muted && end && end < today && progress < 100;
     const inProgress =
+      !done &&
       !muted &&
       !overdue &&
-      (/procesā|gaida atbildi/i.test(status) ||
-        (Number(phase?.progress ?? 0) > 0 && Number(phase?.progress ?? 0) < 100));
-    return { muted, overdue, inProgress, done, cancelled };
+      (/procesā|gaida atbildi/i.test(status) || (progress > 0 && progress < 100));
+    return { muted, overdue, inProgress, done, cancelled, notStarted, futureExecution };
   }
 
-  function ganttBarClass(phase) {
-    const v = phaseVisualState(phase);
-    if (v.muted) return "muted";
+  function ganttBarClass(phase, phases) {
+    const v = phaseVisualState(phase, phases);
+    const progress = phases ? resolvePhaseProgress(phase, phases) : clampProgress(phase?.progress);
+    if (v.done || progress >= 100) return "done";
+    if (v.cancelled) return "muted";
     if (v.overdue) return "overdue";
     if (v.inProgress) return "active";
+    if (v.futureExecution) return "scheduled";
     return "planned";
   }
 
-  function phaseRowClass(phase) {
-    const v = phaseVisualState(phase);
-    return v.muted ? "pv-muted-row" : v.overdue ? "pv-overdue-row" : "";
+  function phaseRowClass(phase, phases) {
+    const v = phaseVisualState(phase, phases);
+    if (v.muted) return "pv-muted-row";
+    if (v.futureExecution) return "pv-scheduled-row";
+    if (v.overdue) return "pv-overdue-row";
+    return "";
   }
 
   function escapeCsv(val) {
@@ -929,6 +1067,7 @@
         "Progress %",
         "Statuss",
         "Darba plāna uzdevums",
+        EXECUTION_INFO_LABEL,
       ].join(";"),
     ];
     for (const p of flattenPhasesWithNumbers(phases)) {
@@ -947,6 +1086,7 @@
           p.progress ?? 0,
           p.status,
           wpLabel,
+          executionInfoForExport(p),
         ]
           .map(escapeCsv)
           .join(";"),
@@ -975,8 +1115,7 @@
     const numbered = flattenPhasesWithNumbers(phases);
     const rows = numbered
       .map((p) => {
-        const v = phaseVisualState(p);
-        const tone = v.muted ? "muted" : v.overdue ? "overdue" : v.inProgress ? "active" : "";
+        const tone = ganttBarClass(p);
         return `<tr class="${tone}"><td>${p.num}</td><td>${p.kind || ""}</td><td>${String(p.title || "").replace(/</g, "&lt;")}</td><td>${String(p.description || "").replace(/</g, "&lt;")}</td><td>${p.start || "—"}</td><td>${p.end || "—"}</td><td>${p.progress ?? 0}%</td><td>${p.status || "—"}</td></tr>`;
       })
       .join("");
@@ -988,8 +1127,12 @@ table{width:100%;border-collapse:collapse;margin-top:1rem;font-size:.82rem}
 th,td{border:1px solid #c5ebe3;padding:.35rem .45rem;text-align:left}
 th{background:#e8f8f3}
 tr.muted td{color:#9ca3af;background:#f9fafb}
-tr.overdue td{background:#fdf2f2}
-tr.active td{background:#f0fdf9}
+tr.notstarted td{background:#fef2f2;color:#991b1b}
+tr.scheduled td{background:#f9fafb;color:#9ca3af}
+tr.overdue td{background:#fef2f2;color:#991b1b}
+tr.active td{background:#fffbeb;color:#78350f}
+tr.done td{background:#ecfdf5;color:#065f46}
+tr.planned td{background:#f0fdf9}
 @media print{body{padding:.5rem}}
 </style></head><body>
 <h1>Procesu vadība — eksports</h1>
@@ -1050,8 +1193,11 @@ tr.active td{background:#f0fdf9}
 
   function ganttBarColors(tone) {
     const colors = {
-      active: { bar: "#34a88a", track: "#e8f8f3" },
-      overdue: { bar: "#c9a0a0", track: "#fdf2f2" },
+      active: { bar: "#fbbf24", track: "#fffbeb" },
+      done: { bar: "#34d399", track: "#ecfdf5" },
+      notstarted: { bar: "#f87171", track: "#fef2f2" },
+      scheduled: { bar: "#e5e7eb", track: "#f9fafb" },
+      overdue: { bar: "#f87171", track: "#fef2f2" },
       muted: { bar: "#d1d5db", track: "#f3f4f6" },
       planned: { bar: "#7ab8ad", track: "#e8f8f3" },
     };
@@ -1094,14 +1240,16 @@ tr.active td{background:#f0fdf9}
       const metrics = ganttBarMetrics(p, range);
       const tone = ganttBarClass(p);
       const colors = ganttBarColors(tone);
-      const muted = phaseVisualState(p).muted;
+      const vis = phaseVisualState(p);
+      const labelMuted = vis.muted || vis.futureExecution;
       const barX = trackX + (parseFloat(metrics.leftPct) / 100) * trackW;
       const barW = Math.max(5, (parseFloat(metrics.widthPct) / 100) * trackW);
       const fillW = Math.max(0, barW * (metrics.progress / 100));
       const label = `${p.num || ""} ${p.title || ""}`.trim();
-      svg += `<text x="12" y="${y + 21}" font-family="Segoe UI,system-ui,sans-serif" font-size="11" fill="${muted ? "#9ca3af" : "#01171d"}">${escapeXml(label)}</text>`;
+      const barOpacity = vis.futureExecution ? ' opacity="0.55"' : "";
+      svg += `<text x="12" y="${y + 21}" font-family="Segoe UI,system-ui,sans-serif" font-size="11" fill="${labelMuted ? "#9ca3af" : "#01171d"}">${escapeXml(label)}</text>`;
       svg += `<rect x="${trackX}" y="${y + 8}" width="${trackW}" height="18" fill="${colors.track}" rx="4"/>`;
-      svg += `<rect x="${barX}" y="${y + 9}" width="${barW}" height="16" fill="${colors.bar}" rx="3"/>`;
+      svg += `<rect x="${barX}" y="${y + 9}" width="${barW}" height="16" fill="${colors.bar}" rx="3"${barOpacity}/>`;
       if (fillW > 0) {
         svg += `<rect x="${barX}" y="${y + 9}" width="${fillW}" height="16" fill="rgba(1,23,29,0.18)" rx="3"/>`;
       }
@@ -1254,6 +1402,10 @@ svg{max-width:100%;height:auto;display:block}
   function buildContentBlockExportCsv(block) {
     const title = block?.title || contentBlockTypeLabel(block?.type);
     const lines = [[`Bloks: ${title}`, contentBlockTypeLabel(block?.type)].map(escapeCsv).join(";")];
+    const execInfo = String(block?.executionInfo || "").trim();
+    if (execInfo) {
+      lines.push([EXECUTION_INFO_LABEL, execInfo].map(escapeCsv).join(";"));
+    }
     if (block.type === "table") {
       const cols = block.columns || [];
       if (cols.length) lines.push(cols.map((c) => c.name).map(escapeCsv).join(";"));
@@ -1279,10 +1431,14 @@ svg{max-width:100%;height:auto;display:block}
   }
 
   function buildContentBlockPdfBody(block) {
+    const execInfo = String(block?.executionInfo || "").trim();
+    const execSection = execInfo
+      ? `<div class="exec-info"><strong>${escapeXml(EXECUTION_INFO_LABEL)}</strong><p>${escapeXml(execInfo).replace(/\n/g, "<br/>")}</p></div>`
+      : "";
+    let body = "";
     if (block.type === "richtext") {
-      return `<div class="rich">${block.html || "<p></p>"}</div>`;
-    }
-    if (block.type === "table") {
+      body = `<div class="rich">${block.html || "<p></p>"}</div>`;
+    } else if (block.type === "table") {
       const cols = block.columns || [];
       const head = cols.map((c) => `<th>${escapeXml(c.name || "")}</th>`).join("");
       const rows = (block.rows || [])
@@ -1291,28 +1447,25 @@ svg{max-width:100%;height:auto;display:block}
             `<tr>${cols.map((c) => `<td>${escapeXml(row.cells?.[c.id] ?? "")}</td>`).join("")}</tr>`,
         )
         .join("");
-      return `<table><thead><tr>${head}</tr></thead><tbody>${rows || "<tr><td colspan=\"99\">—</td></tr>"}</tbody></table>`;
-    }
-    if (block.type === "list") {
+      body = `<table><thead><tr>${head}</tr></thead><tbody>${rows || "<tr><td colspan=\"99\">—</td></tr>"}</tbody></table>`;
+    } else if (block.type === "list") {
       const tag = block.ordered ? "ol" : "ul";
       const items = (block.items || [])
         .map((item) => `<li>${escapeXml(item.text || "")}</li>`)
         .join("");
-      return `<${tag}>${items || "<li>—</li>"}</${tag}>`;
+      body = `<${tag}>${items || "<li>—</li>"}</${tag}>`;
+    } else if (block.type === "image") {
+      body = block.dataUrl
+        ? `<p><img src="${block.dataUrl}" alt="${escapeXml(block.name || "attēls")}" style="max-width:100%;height:auto;border-radius:8px"/></p>`
+        : `<p>Nav attēla.</p>`;
+    } else if (block.type === "attachment") {
+      body = block.name
+        ? `<p>📎 <strong>${escapeXml(block.name)}</strong> (${escapeXml(formatFileSize(block.size))})</p>`
+        : `<p>Nav pielikuma.</p>`;
+    } else {
+      body = `<p>—</p>`;
     }
-    if (block.type === "image") {
-      if (block.dataUrl) {
-        return `<p><img src="${block.dataUrl}" alt="${escapeXml(block.name || "attēls")}" style="max-width:100%;height:auto;border-radius:8px"/></p>`;
-      }
-      return `<p>Nav attēla.</p>`;
-    }
-    if (block.type === "attachment") {
-      if (block.name) {
-        return `<p>📎 <strong>${escapeXml(block.name)}</strong> (${escapeXml(formatFileSize(block.size))})</p>`;
-      }
-      return `<p>Nav pielikuma.</p>`;
-    }
-    return `<p>—</p>`;
+    return `${execSection}${body}`;
   }
 
   function exportContentBlockExcel(block) {
@@ -1393,6 +1546,7 @@ ${body}
     return {
       title: phase?.title || "",
       description: phase?.description || "",
+      executionInfo: phase?.executionInfo || "",
       start: phase?.start || "",
       end: phase?.end || "",
       progress: Number(phase?.progress ?? 0),
@@ -1447,9 +1601,10 @@ ${body}
 
   function createContentBlock(type) {
     const id = uid();
-    if (type === "richtext") return { id, type, title: "Teksts", html: "<p></p>" };
-    if (type === "image") return { id, type, title: "Attēls", dataUrl: "", name: "" };
-    if (type === "attachment") return { id, type, title: "Pielikums", dataUrl: "", name: "", mime: "", size: 0 };
+    const executionInfo = "";
+    if (type === "richtext") return { id, type, title: "Teksts", html: "<p></p>", executionInfo };
+    if (type === "image") return { id, type, title: "Attēls", dataUrl: "", name: "", executionInfo };
+    if (type === "attachment") return { id, type, title: "Pielikums", dataUrl: "", name: "", mime: "", size: 0, executionInfo };
     if (type === "table") {
       const c1 = createTableColumn("text");
       c1.name = "Apraksts / saturs";
@@ -1459,9 +1614,12 @@ ${body}
         title: "Tabula",
         columns: [c1],
         rows: [{ id: uid(), cells: {} }],
+        executionInfo,
       };
     }
-    if (type === "list") return { id, type, title: "Saraksts", ordered: false, items: [{ id: uid(), text: "" }] };
+    if (type === "list") {
+      return { id, type, title: "Saraksts", ordered: false, items: [{ id: uid(), text: "" }], executionInfo };
+    }
     return null;
   }
 
@@ -1485,6 +1643,55 @@ ${body}
     return (Array.isArray(phases) ? phases : [])
       .filter((p) => p.parentId === parentId)
       .sort((a, b) => a.order - b.order);
+  }
+
+  function clampProgress(value) {
+    return Math.max(0, Math.min(100, Number(value) || 0));
+  }
+
+  function phaseHasChildPhases(phases, phaseId) {
+    return phaseChildren(phases, phaseId).length > 0;
+  }
+
+  function effectivePhaseProgress(phases, phaseId) {
+    const children = phaseChildren(phases, phaseId);
+    if (!children.length) {
+      const p = (Array.isArray(phases) ? phases : []).find((x) => x.id === phaseId);
+      return clampProgress(p?.progress);
+    }
+    const total = children.reduce((sum, c) => sum + effectivePhaseProgress(phases, c.id), 0);
+    return Math.round(total / children.length);
+  }
+
+  function resolvePhaseProgress(phase, phases) {
+    if (!phase) return 0;
+    if (Array.isArray(phases) && phaseHasChildPhases(phases, phase.id)) {
+      return effectivePhaseProgress(phases, phase.id);
+    }
+    return clampProgress(phase.progress);
+  }
+
+  function phaseProgressMeta(phases, phaseId) {
+    const hasChildren = phaseHasChildPhases(phases, phaseId);
+    const p = (Array.isArray(phases) ? phases : []).find((x) => x.id === phaseId);
+    return {
+      progress: hasChildren ? effectivePhaseProgress(phases, phaseId) : clampProgress(p?.progress),
+      progressManual: !hasChildren,
+    };
+  }
+
+  function syncComputedProgressInPhases(phases) {
+    const list = Array.isArray(phases) ? phases : [];
+    return list.map((p) => {
+      if (!phaseHasChildPhases(list, p.id)) return p;
+      return { ...p, progress: effectivePhaseProgress(list, p.id) };
+    });
+  }
+
+  function progressFromChildrenHint(kind) {
+    if (kind === "Uzdevums") return "Aprēķināts no posmu vērtībām.";
+    if (kind === "Posms") return "Aprēķināts no apakšposmu vērtībām.";
+    return "Aprēķināts no apakšelementu vērtībām.";
   }
 
   function collectDescendantIds(phases, phaseId) {
@@ -1576,7 +1783,7 @@ ${body}
       }
       .pv-shell {
         display: grid;
-        grid-template-columns: minmax(210px, 240px) minmax(0, 1fr);
+        grid-template-columns: minmax(400px, 460px) minmax(0, 1fr);
         grid-template-rows: 1fr;
         align-items: stretch;
         min-height: calc(100vh - 80px);
@@ -1637,6 +1844,22 @@ ${body}
         width: 100%; border: 0; background: transparent; text-align: left;
         padding: 0.4rem 0.45rem; border-radius: 8px; cursor: pointer; font: inherit; color: #01171d;
       }
+      .pv-sidebar-accordion-head .pv-phase-item,
+      .pv-phase-item.pv-sidebar-uzdevums {
+        font-size: 0.95rem;
+        padding: 0.48rem 0.5rem;
+      }
+      .pv-sidebar-accordion-head .pv-phase-item strong,
+      .pv-phase-item.pv-sidebar-uzdevums strong {
+        font-size: 0.98rem;
+        font-weight: 700;
+        line-height: 1.3;
+      }
+      .pv-sidebar-accordion-head .pv-phase-num,
+      .pv-phase-item.pv-sidebar-uzdevums .pv-phase-num {
+        font-size: 0.92rem;
+        font-weight: 800;
+      }
       .pv-phase-item:hover { background: rgba(255,255,255,0.45); }
       .pv-phase-item.active { background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
       .pv-phase-item.sub { padding-left: 1.1rem; font-size: 0.82rem; }
@@ -1666,8 +1889,10 @@ ${body}
         flex: 0 0 auto; width: 1.35rem; height: 0.72rem; border-radius: 4px;
         border: 1px solid rgba(1, 23, 29, 0.08);
       }
-      .pv-legend-swatch.active { background: linear-gradient(90deg, #0d9488, #34a88a); }
-      .pv-legend-swatch.overdue { background: linear-gradient(90deg, #b88484, #c9a0a0); }
+      .pv-legend-swatch.active { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+      .pv-legend-swatch.done { background: linear-gradient(90deg, #059669, #34d399); }
+      .pv-legend-swatch.scheduled { background: linear-gradient(90deg, #e5e7eb, #f3f4f6); opacity: 0.85; }
+      .pv-legend-swatch.overdue { background: linear-gradient(90deg, #dc2626, #f87171); }
       .pv-legend-swatch.muted { background: linear-gradient(90deg, #d1d5db, #e5e7eb); }
       .pv-legend-swatch.planned { background: linear-gradient(90deg, #7ab8ad, #9fd4cb); }
       .pv-gantt-label-task { font-weight: 700; color: #01171d; }
@@ -1683,6 +1908,17 @@ ${body}
       .pv-gantt-label-phase .pv-link { font-weight: 600; color: #01171d; }
       .pv-gantt-row.sub .pv-gantt-label-phase .pv-link { font-weight: 500; }
       .pv-muted-row .pv-gantt-label .pv-link { color: #9ca3af !important; font-weight: 500; }
+      .pv-scheduled-row { opacity: 0.58; }
+      .pv-scheduled-row .pv-gantt-label,
+      .pv-scheduled-row .pv-gantt-label-task,
+      .pv-scheduled-row .pv-gantt-label-phase,
+      .pv-scheduled-row .pv-phase-num,
+      .pv-scheduled-row .pv-kind-tag { color: #9ca3af !important; font-weight: 500; }
+      .pv-scheduled-row .pv-gantt-label .pv-link { color: #9ca3af !important; font-weight: 500; }
+      .pv-scheduled-row .pv-gantt-track { background: #f3f4f6; }
+      .pv-overdue-row .pv-gantt-label,
+      .pv-overdue-row .pv-gantt-label-task,
+      .pv-overdue-row .pv-gantt-label-phase { color: #01171d; }
       .pv-topbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.75rem; margin-bottom: 1rem; }
       .pv-topbar h1 { margin: 0; font-size: 1.25rem; }
       .pv-topbar .sub { margin: 0.2rem 0 0; color: var(--pv-muted); font-size: 0.84rem; }
@@ -1737,6 +1973,18 @@ ${body}
       }
       .pv-gantt-track-wrap { min-width: 0; }
       .pv-gantt-row.sub .pv-gantt-label { padding-left: 1rem; font-size: 0.78rem; }
+      .pv-gantt-pct {
+        display: inline-flex; align-items: center; gap: 0.12rem; justify-content: flex-end;
+      }
+      .pv-gantt-pct input {
+        width: 48px; padding: 0.2rem; border: 1px solid #c5ebe3; border-radius: 6px;
+        font: inherit; font-size: 0.82rem; text-align: right;
+      }
+      .pv-gantt-pct-suffix { font-size: 0.82rem; color: #1f4d47; font-weight: 600; }
+      .pv-gantt-pct-readonly {
+        min-width: 1.6rem; text-align: right; font-size: 0.82rem; font-weight: 700; color: #047857;
+      }
+      .pv-gantt-pct.is-computed .pv-gantt-pct-readonly { color: #1f4d47; }
       .pv-gantt-track {
         position: relative; height: 26px; background: #e8f8f3; border-radius: 6px; overflow: hidden;
       }
@@ -1744,8 +1992,10 @@ ${body}
         position: absolute; top: 3px; bottom: 3px; border-radius: 5px; z-index: 1;
         background: linear-gradient(90deg, #6b9e94, #8fbdb4); min-width: 6px;
       }
-      .pv-gantt-bar.active { background: linear-gradient(90deg, #0d9488, #34a88a); }
-      .pv-gantt-bar.overdue { background: linear-gradient(90deg, #b88484, #c9a0a0); }
+      .pv-gantt-bar.active { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+      .pv-gantt-bar.done { background: linear-gradient(90deg, #059669, #34d399); }
+      .pv-gantt-bar.scheduled { background: linear-gradient(90deg, #e5e7eb, #f3f4f6); opacity: 0.72; }
+      .pv-gantt-bar.overdue { background: linear-gradient(90deg, #dc2626, #f87171); }
       .pv-gantt-bar.muted { background: linear-gradient(90deg, #d1d5db, #e5e7eb); }
       .pv-gantt-bar.planned { background: linear-gradient(90deg, #7ab8ad, #9fd4cb); }
       .pv-gantt-bar .fill {
@@ -1764,11 +2014,13 @@ ${body}
         min-height: 2rem;
       }
       .pv-table-options-panel {
-        display: flex; flex-direction: column; gap: 0.65rem;
-        margin: 0 0 0.75rem; padding: 0.65rem 0.75rem;
+        display: flex; flex-direction: column; gap: 0.45rem;
+        margin: 0 0 0.65rem; padding: 0.55rem 0.65rem;
         background: #f0fdf9; border: 1px solid #c5ebe3; border-radius: 10px;
       }
       .pv-table-options-panel .pv-choice-options { margin-top: 0; padding-top: 0; border-top: 0; }
+      .pv-table-options-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+      .pv-table-options-head .meta { margin: 0; font-size: 0.76rem; color: #0f766e; }
       .pv-table-quick-hint {
         font-size: 0.74rem;
         color: #0f766e;
@@ -1781,7 +2033,12 @@ ${body}
         border-radius: 6px; padding: 0.25rem 0.35rem; font: inherit; background: #fff;
         min-height: 2.5rem; resize: vertical;
       }
+      .pv-table th.pv-col-notes, .pv-table td.pv-col-notes,
+      .pv-content-block-view-table th.pv-col-notes, .pv-content-block-view-table td.pv-col-notes {
+        min-width: 280px; width: 22%;
+      }
       .pv-col-header { display: flex; flex-direction: column; gap: 0.28rem; min-width: 130px; }
+      .pv-col-header-type { width: 100%; margin-top: 0.12rem; }
       .pv-col-header-row { display: flex; gap: 0.2rem; align-items: center; }
       .pv-col-header input, .pv-col-header select { font-size: 0.78rem; }
       .pv-col-move-btn {
@@ -1796,7 +2053,20 @@ ${body}
       .pv-choice-opt-row { display: flex; gap: 0.25rem; align-items: center; margin-bottom: 0.25rem; }
       .pv-choice-opt-row input { flex: 1; min-width: 0; }
       .pv-cell-multiline { white-space: pre-wrap; font-size: 0.82rem; }
-      .pv-table tr:hover td { background: #f0fdf9; }
+      .pv-status-cell { font-weight: 600; }
+      .pv-status-cell.pv-cell-tone-done { background: #34d399 !important; color: #064e3b; }
+      .pv-status-cell.pv-cell-tone-active { background: #2dd4bf !important; color: #134e4a; }
+      .pv-status-cell.pv-cell-tone-wait { background: #fbbf24 !important; color: #78350f; }
+      .pv-status-cell.pv-cell-tone-planned { background: #60a5fa !important; color: #1e3a8a; }
+      .pv-status-cell.pv-cell-tone-todo { background: #f87171 !important; color: #7f1d1d; }
+      .pv-status-cell.pv-cell-tone-cancelled { background: #9ca3af !important; color: #1f2937; }
+      .pv-status-cell.pv-cell-tone-default { background: #a7f3d0 !important; color: #065f46; }
+      .pv-status-cell select { background: transparent !important; border: 0 !important; font-weight: 600; color: inherit; box-shadow: none; }
+      .pv-status-cell select:focus { outline: 2px solid rgba(1, 23, 29, 0.25); outline-offset: -1px; }
+      .pv-table tr:hover td:not(.pv-status-cell) { background: #f0fdf9; }
+      .pv-content-block-view-table tr:hover td:not(.pv-status-cell) { background: #f0fdf9; }
+      .pv-table tr:hover td.pv-status-cell,
+      .pv-content-block-view-table tr:hover td.pv-status-cell { filter: brightness(0.97); }
       .pv-table input, .pv-table select {
         width: 100%; box-sizing: border-box; border: 1px solid #c5ebe3;
         border-radius: 6px; padding: 0.25rem 0.35rem; font: inherit; background: #fff;
@@ -1814,9 +2084,12 @@ ${body}
         display: inline-block; padding: 0.12rem 0.45rem; border-radius: 999px;
         font-size: 0.72rem; font-weight: 600;
       }
-      .pv-status-pill.done { background: #d1fae5; color: #047857; }
-      .pv-status-pill.work { background: #ccfbf1; color: #0f766e; }
-      .pv-status-pill.wait { background: #fef3c7; color: #b45309; }
+      .pv-status-pill.done { background: #34d399; color: #064e3b; }
+      .pv-status-pill.work { background: #2dd4bf; color: #134e4a; }
+      .pv-status-pill.wait { background: #fbbf24; color: #78350f; }
+      .pv-status-pill.planned { background: #60a5fa; color: #1e3a8a; }
+      .pv-status-pill.cancelled { background: #9ca3af; color: #1f2937; }
+      .pv-status-pill.notstarted { background: #f87171; color: #7f1d1d; }
       .pv-empty { color: var(--pv-muted); text-align: center; padding: 1.5rem; font-size: 0.88rem; }
       .pv-phase-meta-grid {
         display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; margin-bottom: 1rem;
@@ -1893,9 +2166,19 @@ ${body}
       }
       .pv-muted-row .pv-phase-num { color: #9ca3af; }
       .pv-kind-tag {
-        display: inline-block; font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+        display: inline-block; font-size: 0.65rem; font-weight: 600; text-transform: none;
         letter-spacing: 0.02em; color: #1f4d47; background: #e8f8f3; border-radius: 4px;
         padding: 0.05rem 0.35rem; margin-right: 0.35rem; vertical-align: middle;
+      }
+      .pv-kind-tag.pv-kind-nav-uzdevums {
+        text-transform: uppercase;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      .pv-kind-tag.pv-kind-nav-posms {
+        text-transform: lowercase;
+        font-weight: 600;
+        letter-spacing: 0;
       }
       .pv-phase-row.sub-deep { padding-left: 0.75rem; }
       .pv-accordion-wrap { display: flex; flex-direction: column; }
@@ -1937,6 +2220,21 @@ ${body}
         margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #e0f2ee;
       }
       .pv-content-block-footer .pv-btn.primary { margin-right: 0.15rem; }
+      .pv-execution-info {
+        display: block; margin-top: 0.65rem; font-size: 0.82rem; color: #01171d;
+      }
+      .pv-execution-info textarea {
+        display: block; width: 100%; margin-top: 0.3rem; min-height: 4.5rem;
+        border: 1px solid #c5ebe3; border-radius: 8px; padding: 0.45rem 0.55rem;
+        font: inherit; resize: vertical; background: #fcfffe;
+      }
+      .pv-execution-info-readonly {
+        padding: 0.55rem 0.65rem; border: 1px solid #e0f2ee; border-radius: 8px;
+        background: #f8fffd; white-space: pre-wrap; line-height: 1.45;
+      }
+      .pv-execution-info-readonly strong {
+        display: block; font-size: 0.76rem; color: #065f46; margin-bottom: 0.25rem;
+      }
       .pv-content-block-title { font-size: 0.92rem; font-weight: 600; color: #01171d; flex: 1 1 auto; }
       .pv-rt-body.pv-rt-readonly {
         min-height: 3rem; padding: 0.65rem 0.75rem; border: 1px solid #e0f2ee;
@@ -2175,10 +2473,7 @@ ${body}
 
     function StatusPill({ value }) {
       const v = String(value ?? "").trim() || "—";
-      const muted = /pabeigts|atcelts/i.test(v);
-      const overdue = !muted && false;
-      const cls = muted ? "muted" : /pabeigts/i.test(v) ? "done" : /procesā/i.test(v) ? "work" : overdue ? "overdue" : "wait";
-      return html`<span class="pv-status-pill ${cls}">${v}</span>`;
+      return html`<span class="pv-status-pill ${statusPillClass(v)}">${v}</span>`;
     }
 
     function PhaseLink({ phase, onGo, className }) {
@@ -2272,6 +2567,8 @@ ${body}
       }
 
       function removeAt(i) {
+        const label = String(list[i] || "").trim();
+        if (!askConfirm(label ? `Dzēst opciju „${label}"?` : "Dzēst šo opciju?")) return;
         onChange(list.filter((_, idx) => idx !== i));
       }
 
@@ -2380,13 +2677,18 @@ ${body}
       `;
     }
 
-    function TableColumnHeader({ col, columns, onPatchColumns }) {
+    function TableColumnHeader({ col, columns, onPatchColumns, onTypeChange, columnTypes = TABLE_COLUMN_TYPES }) {
       const idx = columns.findIndex((c) => c.id === col.id);
 
       function patchCol(patch) {
         onPatchColumns(
           columns.map((x) => {
             if (x.id !== col.id) return x;
+            if (patch.type !== undefined && patch.type !== (x.type || "text")) {
+              const next = changeColumnType(x, patch.type);
+              onTypeChange?.(patch.type, x.id);
+              return next;
+            }
             if (patch.name !== undefined) {
               return { ...migrateTableColumn({ ...x, ...patch }), name: patch.name };
             }
@@ -2403,7 +2705,7 @@ ${body}
       }
 
       function removeCol() {
-        if (typeof confirm === "function" && !confirm(`Dzēst kolonnu „${col.name}"?`)) return;
+        if (!askConfirm(`Dzēst kolonnu „${col.name}"?`)) return;
         onPatchColumns(columns.filter((x) => x.id !== col.id));
       }
 
@@ -2420,6 +2722,14 @@ ${body}
             <button type="button" class="pv-col-move-btn" title="Pārvietot pa labi" disabled=${idx >= columns.length - 1} onClick=${() => move(1)}>→</button>
             <button type="button" class="pv-col-move-btn" title="Dzēst kolonnu" onClick=${removeCol}>✕</button>
           </div>
+          <select
+            class="pv-col-header-type"
+            value=${col.type || "text"}
+            title="Kolonnas formāts"
+            onChange=${(e) => patchCol({ type: e.target.value })}
+          >
+            ${columnTypes.map((t) => html`<option key=${t.id} value=${t.id}>${t.label}</option>`)}
+          </select>
         </div>
       `;
     }
@@ -2450,7 +2760,7 @@ ${body}
                 <tr>
                   ${cols.map(
                     (c) => html`
-                      <th key=${c.id}>${c.name || "—"}</th>
+                      <th key=${c.id} class=${tableColumnClass(c)} style=${tableColumnStyle(c)}>${c.name || "—"}</th>
                     `,
                   )}
                 </tr>
@@ -2461,7 +2771,7 @@ ${body}
                       (row) => html`
                         <tr key=${row.id}>
                           ${cols.map((c) => html`
-                            <td key=${c.id}>
+                            <td key=${c.id} class=${tableCellClasses(c, row.cells?.[c.id])} style=${tableColumnStyle(c)}>
                               ${ce(TableCellDisplay, { col: c, value: row.cells?.[c.id], workPlanSections })}
                             </td>
                           `)}
@@ -2485,10 +2795,37 @@ ${body}
       return html`<p class="pv-empty">—</p>`;
     }
 
+    function ExecutionInfoField({ value, editable, onChange, onBlur }) {
+      const text = String(value || "");
+      if (!editable && !text.trim()) return null;
+      if (editable) {
+        return html`
+          <label class="pv-execution-info">
+            ${EXECUTION_INFO_LABEL}
+            <textarea
+              value=${text}
+              onInput=${(e) => onChange(e.target.value)}
+              onBlur=${onBlur}
+              rows=${3}
+              placeholder="Brīvā formā par izpildi…"
+            ></textarea>
+          </label>
+        `;
+      }
+      return html`
+        <div class="pv-execution-info pv-execution-info-readonly">
+          <strong>${EXECUTION_INFO_LABEL}</strong>
+          <div>${text}</div>
+        </div>
+      `;
+    }
+
     function ContentBlockEditor({ block, onSave, onRemove, parentTitle, workPlanSections }) {
       const isTableQuick = block.type === "table";
       const [editing, setEditing] = useState(() => isNewContentBlock(block) && !isTableQuick);
       const [draft, setDraft] = useState(() => blockDraftFrom(block));
+      const [optionsEditColId, setOptionsEditColId] = useState("");
+      const [tableStructureEdit, setTableStructureEdit] = useState(false);
       const tableSaveTimerRef = useRef(null);
 
       useEffect(() => {
@@ -2497,6 +2834,8 @@ ${body}
 
       useEffect(() => {
         setDraft(blockDraftFrom(block));
+        setOptionsEditColId("");
+        setTableStructureEdit(false);
       }, [block.id]);
 
       useEffect(
@@ -2589,71 +2928,123 @@ ${body}
               `
             : null}
           ${b.type === "table"
-            ? html`
-                <p class="pv-table-quick-hint">Tabula — šūnas, rindas un kolonnas rediģējamas uzreiz; izmaiņas saglabājas automātiski.</p>
+            ? (() => {
+                const tableCols = normalizeTableBlock(b).columns;
+                const optCols = tableCols.filter((c) => c.type === "choice" || c.type === "status");
+                const optionsCol =
+                  optionsEditColId && optCols.find((c) => c.id === optionsEditColId)
+                    ? optCols.find((c) => c.id === optionsEditColId)
+                    : null;
+
+                return html`
+                <p class="pv-table-quick-hint">
+                  ${tableStructureEdit
+                    ? "Tabulas struktūras labošana — kolonnas, formāti un izvēlnes."
+                    : "Tabula — aizpildi šūnas; izmaiņas saglabājas automātiski."}
+                </p>
                 <div class="pv-toolbar">
                   <button type="button" class="pv-btn" onClick=${() => patch({ rows: [...(b.rows || []), { id: uid(), cells: {} }] })}>+ Rinda</button>
-                  <select
-                    class="pv-btn"
-                    onChange=${(e) => {
-                      const t = e.target.value;
-                      if (!t) return;
-                      const table = normalizeTableBlock(b);
-                      patch({ columns: [...table.columns, createTableColumn(t)] });
-                      e.target.value = "";
-                    }}
-                  >
-                    <option value="">+ Kolonna…</option>
-                    ${TABLE_COLUMN_TYPES.map((t) => html`<option key=${t.id} value=${t.id}>${t.label}</option>`)}
-                  </select>
+                  ${tableStructureEdit
+                    ? html`
+                        <select
+                          class="pv-btn"
+                          onChange=${(e) => {
+                            const t = e.target.value;
+                            if (!t) return;
+                            const newCol = createTableColumn(t);
+                            patch({ columns: [...tableCols, newCol] });
+                            if (t === "choice" || t === "status") setOptionsEditColId(newCol.id);
+                            e.target.value = "";
+                          }}
+                        >
+                          <option value="">+ Kolonna…</option>
+                          ${TABLE_COLUMN_TYPES.map((t) => html`<option key=${t.id} value=${t.id}>${t.label}</option>`)}
+                        </select>
+                        ${optCols.length
+                          ? html`
+                              <select
+                                class="pv-btn"
+                                value=${optionsEditColId}
+                                onChange=${(e) => setOptionsEditColId(e.target.value)}
+                                title="Atver izvēlnes iestatīšanu tikai izvēlētajai kolonnai"
+                              >
+                                <option value="">Izvēlnes kolonnai…</option>
+                                ${optCols.map(
+                                  (c) => html`
+                                    <option key=${c.id} value=${c.id}>
+                                      ${c.name || "Kolonna"} (${c.type === "status" ? "statuss" : "izvēle"})
+                                    </option>
+                                  `,
+                                )}
+                              </select>
+                            `
+                          : null}
+                        <button
+                          type="button"
+                          class="pv-btn primary"
+                          onClick=${() => {
+                            setTableStructureEdit(false);
+                            setOptionsEditColId("");
+                          }}
+                        >
+                          Gatavs
+                        </button>
+                      `
+                    : html`
+                        <button type="button" class="pv-btn" onClick=${() => setTableStructureEdit(true)}>Labot tabulu</button>
+                      `}
                 </div>
-                ${(() => {
-                  const optCols = normalizeTableBlock(b).columns.filter(
-                    (c) => c.type === "choice" || c.type === "status",
-                  );
-                  if (!optCols.length) return null;
-                  return html`
-                    <div class="pv-table-options-panel">
-                      ${optCols.map(
-                        (c) => html`
-                          <div key=${c.id}>
-                            ${ce(ChoiceOptionsEditor, {
-                              options: c.options || [],
-                              label: `„${c.name || "Kolonna"}” — ${c.type === "status" ? "statusu opcijas" : "izvēles opcijas"}`,
-                              onChange: (options) =>
-                                patch({
-                                  columns: normalizeTableBlock(b).columns.map((x) =>
-                                    x.id === c.id ? { ...x, options } : x,
-                                  ),
-                                }),
-                            })}
-                          </div>
-                        `,
-                      )}
-                    </div>
-                  `;
-                })()}
+                ${tableStructureEdit && optionsCol
+                  ? html`
+                      <div class="pv-table-options-panel">
+                        <div class="pv-table-options-head">
+                          <span class="meta">Iestati opcijas kolonnai „${optionsCol.name || "Kolonna"}”</span>
+                          <button type="button" class="pv-btn" onClick=${() => setOptionsEditColId("")}>Aizvērt</button>
+                        </div>
+                        ${ce(ChoiceOptionsEditor, {
+                          options: optionsCol.options || [],
+                          label: optionsCol.type === "status" ? "Statusu opcijas" : "Izvēles opcijas",
+                          onChange: (options) =>
+                            patch({
+                              columns: tableCols.map((x) => (x.id === optionsCol.id ? { ...x, options } : x)),
+                            }),
+                        })}
+                      </div>
+                    `
+                  : null}
                 <div class="pv-table-wrap">
                   <table class="pv-table pv-table-quick">
                     <thead>
                       <tr>
-                        ${normalizeTableBlock(b).columns.map(
-                          (c) => html`<th key=${c.id}>${ce(TableColumnHeader, {
-                            col: c,
-                            columns: normalizeTableBlock(b).columns,
-                            onPatchColumns: (columns) => patch({ columns }),
-                          })}</th>`,
+                        ${tableCols.map(
+                          (c) => html`<th key=${c.id} class=${tableColumnClass(c)} style=${tableColumnStyle(c)}>
+                            ${tableStructureEdit
+                              ? ce(TableColumnHeader, {
+                                  col: c,
+                                  columns: tableCols,
+                                  onPatchColumns: (columns) => {
+                                    if (optionsEditColId && !columns.some((x) => x.id === optionsEditColId)) {
+                                      setOptionsEditColId("");
+                                    }
+                                    patch({ columns });
+                                  },
+                                  onTypeChange: (newType, colId) => {
+                                    if (newType === "choice" || newType === "status") setOptionsEditColId(colId);
+                                  },
+                                })
+                              : (c.name || "—")}
+                          </th>`,
                         )}
-                        <th style=${{ width: "4.5rem" }}></th>
+                        ${tableStructureEdit ? html`<th style=${{ width: "4.5rem" }}></th>` : null}
                       </tr>
                     </thead>
                     <tbody>
                       ${(b.rows || []).map(
                         (row, rowIdx) => html`
                           <tr key=${row.id}>
-                            ${normalizeTableBlock(b).columns.map(
+                            ${tableCols.map(
                               (c) => html`
-                                <td>
+                                <td class=${tableCellClasses(c, row.cells?.[c.id])} style=${tableColumnStyle(c)}>
                                   ${ce(TableCellEditor, {
                                     col: c,
                                     value: row.cells?.[c.id],
@@ -2670,44 +3061,52 @@ ${body}
                                 </td>
                               `,
                             )}
-                            <td>
-                              <div class="pv-row-actions">
-                                <button
-                                  type="button"
-                                  class="pv-col-move-btn"
-                                  title="Pārvietot augšup"
-                                  disabled=${rowIdx <= 0}
-                                  onClick=${() => patch({ rows: reorderTableRows(b.rows, row.id, -1) })}
-                                >
-                                  ↑
-                                </button>
-                                <button
-                                  type="button"
-                                  class="pv-col-move-btn"
-                                  title="Pārvietot lejup"
-                                  disabled=${rowIdx >= (b.rows || []).length - 1}
-                                  onClick=${() => patch({ rows: reorderTableRows(b.rows, row.id, 1) })}
-                                >
-                                  ↓
-                                </button>
-                                <button
-                                  type="button"
-                                  class="pv-col-move-btn"
-                                  title="Dzēst rindu"
-                                  style=${{ color: "#dc2626" }}
-                                  onClick=${() => patch({ rows: b.rows.filter((r) => r.id !== row.id) })}
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            </td>
+                            ${tableStructureEdit
+                              ? html`
+                                  <td>
+                                    <div class="pv-row-actions">
+                                      <button
+                                        type="button"
+                                        class="pv-col-move-btn"
+                                        title="Pārvietot augšup"
+                                        disabled=${rowIdx <= 0}
+                                        onClick=${() => patch({ rows: reorderTableRows(b.rows, row.id, -1) })}
+                                      >
+                                        ↑
+                                      </button>
+                                      <button
+                                        type="button"
+                                        class="pv-col-move-btn"
+                                        title="Pārvietot lejup"
+                                        disabled=${rowIdx >= (b.rows || []).length - 1}
+                                        onClick=${() => patch({ rows: reorderTableRows(b.rows, row.id, 1) })}
+                                      >
+                                        ↓
+                                      </button>
+                                      <button
+                                        type="button"
+                                        class="pv-col-move-btn"
+                                        title="Dzēst rindu"
+                                        style=${{ color: "#dc2626" }}
+                                        onClick=${() => {
+                                          if (!askConfirm("Dzēst šo tabulas rindu?")) return;
+                                          patch({ rows: b.rows.filter((r) => r.id !== row.id) });
+                                        }}
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  </td>
+                                `
+                              : null}
                           </tr>
                         `,
                       )}
                     </tbody>
                   </table>
                 </div>
-              `
+              `;
+              })()
             : null}
           ${b.type === "list"
             ? html`
@@ -2731,7 +3130,10 @@ ${body}
                           type="button"
                           class="pv-link"
                           style=${{ color: "#dc2626" }}
-                          onClick=${() => patch({ items: b.items.filter((x) => x.id !== item.id) })}
+                          onClick=${() => {
+                            if (!askConfirm("Dzēst šo punktu?")) return;
+                            patch({ items: b.items.filter((x) => x.id !== item.id) });
+                          }}
                         >
                           ✕
                         </button>
@@ -2765,6 +3167,13 @@ ${body}
 
           ${isTableQuick || editing ? renderEditBody(editBlock) : ce(ContentBlockViewBody, { block: viewBlock, workPlanSections })}
 
+          ${ce(ExecutionInfoField, {
+            value: (isTableQuick || editing ? editBlock : viewBlock).executionInfo || "",
+            editable: isTableQuick || editing,
+            onChange: (v) => patch({ executionInfo: v }),
+            onBlur: isTableQuick ? flushTableSave : undefined,
+          })}
+
           <div class="pv-content-block-footer">
             ${isTableQuick
               ? html`<span class="meta">Automātiski saglabāts</span>`
@@ -2773,7 +3182,7 @@ ${body}
                     <button type="button" class="pv-btn primary" onClick=${handleSave}>Saglabāt</button>
                     <button type="button" class="pv-btn" onClick=${handleCancel}>Atcelt</button>
                   `
-                : html`<button type="button" class="pv-btn" onClick=${() => setEditing(true)}>Labot</button>`}
+                : html`<button type="button" class="pv-btn" onClick=${() => setEditing(true)}>Apskatīt/Labot</button>`}
             <button type="button" class="pv-btn" onClick=${() => exportContentBlockExcel(exportBlock)}>⬇ Excel</button>
             <button type="button" class="pv-btn" onClick=${() => exportContentBlockPdf(exportBlock, parentTitle)}>⬇ PDF</button>
             <button type="button" class="pv-btn danger" onClick=${onRemove}>Dzēst bloku</button>
@@ -2809,7 +3218,10 @@ ${body}
       }
 
       function removeBlock(id) {
-        onChange(list.filter((b) => b.id !== id));
+        const b = list.find((x) => x.id === id);
+        const label = b?.title || contentBlockTypeLabel(b?.type) || "bloku";
+        if (!askConfirm(`Dzēst bloku „${label}"?`)) return;
+        onChange(list.filter((x) => x.id !== id));
       }
 
       if (!list.length) return null;
@@ -2834,6 +3246,13 @@ ${body}
     function RegistryList({ phase, tool, readOnly, onPatchPhase }) {
       const registry = phase.registries?.[tool.id] || { columns: defaultRegistryColumns(), rows: [] };
       const team = useMemo(() => getTeamUsers(), []);
+      const [structureEdit, setStructureEdit] = useState(false);
+      const [optionsEditColId, setOptionsEditColId] = useState("");
+      const optCols = registry.columns.filter((c) => c.type === "choice" || c.type === "status");
+      const optionsCol =
+        optionsEditColId && optCols.find((c) => c.id === optionsEditColId)
+          ? optCols.find((c) => c.id === optionsEditColId)
+          : null;
 
       function patchRegistry(next) {
         onPatchPhase({
@@ -2855,6 +3274,7 @@ ${body}
       }
 
       function removeRow(rowId) {
+        if (!askConfirm("Dzēst šo ierakstu?")) return;
         patchRegistry({ ...registry, rows: registry.rows.filter((r) => r.id !== rowId) });
       }
 
@@ -2867,6 +3287,8 @@ ${body}
           ...(type === "status" || type === "choice" ? { options: [...STATUS_PRESETS] } : {}),
         };
         patchRegistry({ ...registry, columns: [...registry.columns, col] });
+        if (type === "choice" || type === "status") setOptionsEditColId(col.id);
+        return col;
       }
 
       function renderCell(row, col) {
@@ -2914,18 +3336,70 @@ ${body}
             ? html`
                 <div class="pv-toolbar">
                   <button type="button" class="pv-btn primary" onClick=${addRow}>+ Jauns ieraksts</button>
-                  <select
-                    class="pv-btn"
-                    onChange=${(e) => {
-                      const t = e.target.value;
-                      if (t) addColumn(t);
-                      e.target.value = "";
-                    }}
-                  >
-                    <option value="">+ Kolonna…</option>
-                    ${REGISTRY_COLUMN_TYPES.map((c) => html`<option value=${c.id}>${c.label}</option>`)}
-                  </select>
+                  ${structureEdit
+                    ? html`
+                        <select
+                          class="pv-btn"
+                          onChange=${(e) => {
+                            const t = e.target.value;
+                            if (!t) return;
+                            addColumn(t);
+                            e.target.value = "";
+                          }}
+                        >
+                          <option value="">+ Kolonna…</option>
+                          ${REGISTRY_COLUMN_TYPES.map((c) => html`<option value=${c.id}>${c.label}</option>`)}
+                        </select>
+                        ${optCols.length
+                          ? html`
+                              <select
+                                class="pv-btn"
+                                value=${optionsEditColId}
+                                onChange=${(e) => setOptionsEditColId(e.target.value)}
+                              >
+                                <option value="">Izvēlnes kolonnai…</option>
+                                ${optCols.map(
+                                  (c) => html`
+                                    <option key=${c.id} value=${c.id}>
+                                      ${c.name || "Kolonna"} (${c.type === "status" ? "statuss" : "izvēle"})
+                                    </option>
+                                  `,
+                                )}
+                              </select>
+                            `
+                          : null}
+                        <button
+                          type="button"
+                          class="pv-btn primary"
+                          onClick=${() => {
+                            setStructureEdit(false);
+                            setOptionsEditColId("");
+                          }}
+                        >
+                          Gatavs
+                        </button>
+                      `
+                    : html`<button type="button" class="pv-btn" onClick=${() => setStructureEdit(true)}>Labot tabulu</button>`}
                 </div>
+                ${structureEdit && optionsCol
+                  ? html`
+                      <div class="pv-table-options-panel">
+                        <div class="pv-table-options-head">
+                          <span class="meta">Iestati opcijas kolonnai „${optionsCol.name || "Kolonna"}”</span>
+                          <button type="button" class="pv-btn" onClick=${() => setOptionsEditColId("")}>Aizvērt</button>
+                        </div>
+                        ${ce(ChoiceOptionsEditor, {
+                          options: optionsCol.options || [],
+                          label: optionsCol.type === "status" ? "Statusu opcijas" : "Izvēles opcijas",
+                          onChange: (options) =>
+                            patchRegistry({
+                              ...registry,
+                              columns: registry.columns.map((x) => (x.id === optionsCol.id ? { ...x, options } : x)),
+                            }),
+                        })}
+                      </div>
+                    `
+                  : null}
               `
             : null}
           <div class="pv-table-wrap">
@@ -2934,21 +3408,23 @@ ${body}
                 <tr>
                   ${registry.columns.map(
                     (c) => html`
-                      <th>
-                        ${readOnly
+                      <th class=${tableColumnClass(c)} style=${tableColumnStyle(c)}>
+                        ${readOnly || !structureEdit
                           ? c.name
-                          : html`
-                              <input
-                                value=${c.name}
-                                onChange=${(e) =>
-                                  patchRegistry({
-                                    ...registry,
-                                    columns: registry.columns.map((x) =>
-                                      x.id === c.id ? { ...x, name: e.target.value } : x,
-                                    ),
-                                  })}
-                              />
-                            `}
+                          : ce(TableColumnHeader, {
+                              col: c,
+                              columns: registry.columns,
+                              columnTypes: REGISTRY_COLUMN_TYPES,
+                              onPatchColumns: (columns) => {
+                                if (optionsEditColId && !columns.some((x) => x.id === optionsEditColId)) {
+                                  setOptionsEditColId("");
+                                }
+                                patchRegistry({ ...registry, columns });
+                              },
+                              onTypeChange: (newType, colId) => {
+                                if (newType === "choice" || newType === "status") setOptionsEditColId(colId);
+                              },
+                            })}
                       </th>
                     `,
                   )}
@@ -2960,7 +3436,9 @@ ${body}
                   ? registry.rows.map(
                       (row) => html`
                         <tr key=${row.id}>
-                          ${registry.columns.map((c) => html`<td key=${c.id}>${renderCell(row, c)}</td>`)}
+                          ${registry.columns.map(
+                            (c) => html`<td key=${c.id} class=${tableCellClasses(c, row.cells?.[c.id])} style=${tableColumnStyle(c)}>${renderCell(row, c)}</td>`,
+                          )}
                           ${!readOnly
                             ? html`
                                 <td>
@@ -3004,9 +3482,11 @@ ${body}
 
     function GanttColorLegend() {
       const items = [
-        { cls: "active", label: "Procesā" },
+        { cls: "active", label: "Procesā / izpildē" },
+        { cls: "done", label: "Pabeigts" },
+        { cls: "scheduled", label: "Vēl nav izpildes laiks" },
         { cls: "overdue", label: "Kavē" },
-        { cls: "muted", label: "Pabeigts / atcelts / nav sākts" },
+        { cls: "muted", label: "Atcelts" },
         { cls: "planned", label: "Plānots" },
       ];
       return html`
@@ -3040,8 +3520,8 @@ ${body}
       }
 
       function labelClass(p) {
-        const muted = phaseVisualState(p).muted;
-        if (muted) return "pv-gantt-label-muted";
+        const v = phaseVisualState(p);
+        if (v.muted || v.futureExecution) return "pv-gantt-label-muted";
         if (p.kind === "Uzdevums") return "pv-gantt-label-task";
         if (p.kind === "Posms") return "pv-gantt-label-phase";
         return "";
@@ -3089,7 +3569,7 @@ ${body}
                     <div class="pv-gantt-row ${rowCls}" key=${p.id}>
                       <div class=${`pv-gantt-label ${lblCls}`}>
                         <span class="pv-phase-num">${p.num || ""}</span>
-                        ${hideKindTag ? null : html`<span class="pv-kind-tag">${p.kind || ""}</span>`}
+                        ${hideKindTag ? null : html`<span class=${navKindTagClass(p.kind)}>${navKindLabel(p.kind)}</span>`}
                         ${onGoPhase ? ce(PhaseLink, { phase: p, onGo: onGoPhase }) : html`<span>${p.title}</span>`}
                       </div>
                       <div class="pv-gantt-track-wrap">
@@ -3106,14 +3586,20 @@ ${body}
                           </div>
                         </div>
                       </div>
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        value=${p.progress ?? 0}
-                        style=${{ width: "56px", padding: "0.2rem", border: "1px solid #c5ebe3", borderRadius: "6px" }}
-                        onChange=${(e) => onPatchPhase(p.id, { progress: Number(e.target.value) })}
-                      />
+                      <div class=${`pv-gantt-pct ${p.progressManual === false ? "is-computed" : ""}`} title=${p.progressManual === false ? progressFromChildrenHint(p.kind) : ""}>
+                        ${p.progressManual === false
+                          ? html`<span class="pv-gantt-pct-readonly">${p.progress ?? 0}</span>`
+                          : html`
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                value=${p.progress ?? 0}
+                                onChange=${(e) => onPatchPhase(p.id, { progress: Number(e.target.value) })}
+                              />
+                            `}
+                        <span class="pv-gantt-pct-suffix">%</span>
+                      </div>
                     </div>
                   `;
                 })
@@ -3176,7 +3662,9 @@ ${body}
           : kind === "Posms"
             ? "Dzēst posmu"
             : "Dzēst apakšposmu";
-      const v = phaseVisualState(phase);
+      const v = phaseVisualState(phase, phases);
+      const hasChildPhases = phaseHasChildPhases(phases, phase.id);
+      const computedProgress = resolvePhaseProgress(phase, phases);
       const [draft, setDraft] = useState(() => phaseDraftFrom(phase, displayNum));
 
       useEffect(() => {
@@ -3188,8 +3676,9 @@ ${body}
       }
 
       function handleSave() {
-        const { title, description, start, end, progress, status, workPlanTaskId, num } = draft;
-        const patch = { title, description, start, end, progress, status };
+        const { title, description, executionInfo, start, end, progress, status, workPlanTaskId, num } = draft;
+        const patch = { title, description, executionInfo, start, end, status };
+        if (!hasChildPhases) patch.progress = progress;
         if (showWorkPlan) patch.workPlanTaskId = workPlanTaskId || null;
         const numTrim = String(num || "").trim();
         if (numTrim && numTrim !== displayNum) {
@@ -3231,22 +3720,26 @@ ${body}
             <div class="pv-phase-summary-row">
               <div>
                 <div class="meta" style=${{ marginBottom: "0.15rem" }}>
-                  <span class="pv-kind-tag">${kind}</span>
+                  <span class=${navKindTagClass(kind)}>${navKindLabel(kind)}</span>
                   ${displayNum ? html`<span class="pv-phase-num">${displayNum}</span>` : null}
                 </div>
                 <strong>${phase.title}</strong>
                 <div class="meta">
-                  ${phase.start || "—"} — ${phase.end || "—"} · ${phase.progress ?? 0}% · ${phase.status || "—"}
+                  ${phase.start || "—"} — ${phase.end || "—"} · ${computedProgress}% · ${phase.status || "—"}
+                  ${hasChildPhases ? html`<span title=${progressFromChildrenHint(kind)}> (aprēķ.)</span>` : null}
                   ${v.overdue ? " · Kavē" : ""}
                 </div>
                 ${wpLabel
                   ? html`<div class="meta" style=${{ marginTop: "0.2rem" }}>Darba plāna uzdevums: ${wpLabel}</div>`
                   : null}
               </div>
-              <button type="button" class="pv-btn" onClick=${() => onToggle(true)}>Labot</button>
+              <button type="button" class="pv-btn" onClick=${() => onToggle(true)}>Apskatīt/Labot</button>
             </div>
             ${phase.description
               ? html`<div class="pv-desc-readonly"><strong style=${{ fontSize: "0.76rem", color: "#065f46" }}>Apraksts</strong><div style=${{ marginTop: "0.25rem" }}>${phase.description}</div></div>`
+              : null}
+            ${phase.executionInfo
+              ? html`<div class="pv-desc-readonly"><strong style=${{ fontSize: "0.76rem", color: "#065f46" }}>${EXECUTION_INFO_LABEL}</strong><div style=${{ marginTop: "0.25rem", whiteSpace: "pre-wrap" }}>${phase.executionInfo}</div></div>`
               : null}
             ${addToolbar}
           </div>
@@ -3303,13 +3796,22 @@ ${body}
               </label>
               <label>
                 Progress (%)
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value=${draft.progress ?? 0}
-                  onChange=${(e) => patchDraft({ progress: Number(e.target.value) })}
-                />
+                ${hasChildPhases
+                  ? html`
+                      <input type="number" value=${computedProgress} disabled />
+                      <span class="meta" style=${{ marginTop: "0.2rem", display: "block" }}>
+                        ${progressFromChildrenHint(kind)}
+                      </span>
+                    `
+                  : html`
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value=${draft.progress ?? 0}
+                        onChange=${(e) => patchDraft({ progress: Number(e.target.value) })}
+                      />
+                    `}
               </label>
               <label style=${{ gridColumn: "1 / -1" }}>
                 Apraksts
@@ -3318,6 +3820,15 @@ ${body}
                   onInput=${(e) => patchDraft({ description: e.target.value })}
                   rows=${3}
                   placeholder="Īss apraksts…"
+                ></textarea>
+              </label>
+              <label style=${{ gridColumn: "1 / -1" }}>
+                ${EXECUTION_INFO_LABEL}
+                <textarea
+                  value=${draft.executionInfo || ""}
+                  onInput=${(e) => patchDraft({ executionInfo: e.target.value })}
+                  rows=${3}
+                  placeholder="Brīvā formā par izpildi…"
                 ></textarea>
               </label>
               ${showWorkPlan
@@ -3508,7 +4019,7 @@ ${body}
       function deleteSection(sectionId) {
         const sec = list.find((s) => s.id === sectionId);
         if (!sec) return;
-        if (typeof confirm === "function" && !confirm(`Dzēst apakšsadaļu „${sec.title}" un visus tās uzdevumus?`)) return;
+        if (!askConfirm(`Dzēst apakšsadaļu „${sec.title}" un visus tās uzdevumus?`)) return;
         patchDraft((prev) => prev.filter((s) => s.id !== sectionId));
         setExpandedSections((prev) => {
           const next = new Set(prev);
@@ -3542,7 +4053,7 @@ ${body}
         const sec = list.find((s) => s.id === sectionId);
         const task = sec?.tasks?.find((t) => t.id === taskId);
         if (!task) return;
-        if (typeof confirm === "function" && !confirm(`Dzēst darba plāna uzdevumu „${task.title}"?`)) return;
+        if (!askConfirm(`Dzēst darba plāna uzdevumu „${task.title}"?`)) return;
         patchDraft((prev) =>
           prev.map((s) =>
             s.id === sectionId ? { ...s, tasks: (s.tasks || []).filter((t) => t.id !== taskId) } : s,
@@ -3688,7 +4199,7 @@ ${body}
             <div class="pv-phase-item-line">
               <strong>
                 <span class="pv-phase-num">${node.num}</span>
-                <span class="pv-kind-tag">${node.kind}</span>
+                <span class=${navKindTagClass(node.kind)}>${navKindLabel(node.kind)}</span>
                 ${node.title}
               </strong>
               ${overdue ? ce(OverdueBadge) : null}
@@ -3737,14 +4248,14 @@ ${body}
                     : html`<span class="pv-accordion-spacer"></span>`}
                   <button
                     type="button"
-                    class=${`pv-phase-item ${activePhaseId === uzdevums.id ? "active" : ""} ${phaseRowClass(uzdevums)}`}
+                    class=${`pv-phase-item pv-sidebar-uzdevums ${activePhaseId === uzdevums.id ? "active" : ""} ${phaseRowClass(uzdevums)}`}
                     onClick=${() => onGoPhase(uzdevums.id)}
                   >
                     <div>
                       <div class="pv-phase-item-line">
                         <strong>
                           <span class="pv-phase-num">${uzdevums.num}</span>
-                          <span class="pv-kind-tag">${uzdevums.kind}</span>
+                          <span class=${navKindTagClass(uzdevums.kind)}>${navKindLabel(uzdevums.kind)}</span>
                           ${uzdevums.title}
                         </strong>
                         ${overdue ? ce(OverdueBadge) : null}
@@ -3793,7 +4304,7 @@ ${body}
                     <button type="button" class="pv-phase-row-main" onClick=${() => onGoPhase(node.id)}>
                       <strong>
                         <span class="pv-phase-num">${node.num}</span>
-                        <span class="pv-kind-tag">${node.kind}</span>
+                        <span class=${navKindTagClass(node.kind)}>${navKindLabel(node.kind)}</span>
                         ${node.title}
                       </strong>
                       <div class="meta">
@@ -3804,8 +4315,23 @@ ${body}
                         : null}
                     </button>
                     <div class="pv-phase-row-actions">
-                      <button type="button" class="pv-btn ghost" onClick=${() => onEdit(node.id)}>Labot</button>
-                      <button type="button" class="pv-btn danger" onClick=${() => onDelete(node)}>Dzēst</button>
+                      <button type="button" class="pv-btn ghost" onClick=${() => onEdit(node.id)}>Apskatīt/Labot</button>
+                      <button
+                        type="button"
+                        class="pv-btn danger"
+                        onClick=${() => {
+                          const msg =
+                            node.kind === "Uzdevums"
+                              ? `Dzēst uzdevumu „${node.title}" un visus posmus/apakšposmus?`
+                              : node.kind === "Posms"
+                                ? `Dzēst posmu „${node.title}" un visus apakšposmus?`
+                                : `Dzēst apakšposmu „${node.title}"?`;
+                          if (!askConfirm(msg)) return;
+                          onDelete(node);
+                        }}
+                      >
+                        Dzēst
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -3872,7 +4398,7 @@ ${body}
             : kindMeta.kind === "Posms"
               ? `Dzēst posmu „${phase.title}" un visus apakšposmus?`
               : `Dzēst apakšposmu „${phase.title}"?`;
-        if (typeof confirm === "function" && !confirm(msg)) return;
+        if (!askConfirm(msg)) return;
         deletePhase(phase.id);
       }
 
@@ -4030,10 +4556,16 @@ ${body}
 
       const patchPhase = useCallback(
         (phaseId, patch) => {
-          setState((prev) => ({
-            ...prev,
-            phases: prev.phases.map((p) => (p.id === phaseId ? { ...p, ...patch } : p)),
-          }));
+          setState((prev) => {
+            if ("progress" in patch && phaseHasChildPhases(prev.phases, phaseId)) {
+              return prev;
+            }
+            let phases = prev.phases.map((p) => (p.id === phaseId ? { ...p, ...patch } : p));
+            if ("progress" in patch) {
+              phases = syncComputedProgressInPhases(phases);
+            }
+            return { ...prev, phases };
+          });
         },
         [setState],
       );
@@ -4043,6 +4575,7 @@ ${body}
           setState((prev) => {
             let phases = repositionPhaseByNumber(phaseId, numStr, prev.phases);
             phases = phases.map((p) => (p.id === phaseId ? { ...p, ...metaPatch } : p));
+            phases = syncComputedProgressInPhases(phases);
             return { ...prev, phases };
           });
         },
@@ -4062,7 +4595,7 @@ ${body}
           if (description) phase.description = String(description).trim();
           setState((prev) => ({
             ...prev,
-            phases: [...prev.phases, phase],
+            phases: syncComputedProgressInPhases([...prev.phases, phase]),
             screen: open ? "phase" : prev.screen,
             activePhaseId: open ? phase.id : prev.activePhaseId,
             activeToolId: open ? phase.tools[0]?.id ?? null : prev.activeToolId,
@@ -4077,7 +4610,7 @@ ${body}
         (phaseId) => {
           setState((prev) => {
             const doomed = collectDescendantIds(prev.phases, phaseId);
-            const nextPhases = deletePhaseFromList(prev.phases, phaseId);
+            const nextPhases = syncComputedProgressInPhases(deletePhaseFromList(prev.phases, phaseId));
             const lostActive = prev.activePhaseId && doomed.has(prev.activePhaseId);
             return {
               ...prev,
