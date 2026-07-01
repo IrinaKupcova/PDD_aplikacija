@@ -477,8 +477,8 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202606218"></script>
-      <script defer src="./ProcesuVadibaPieslegums.js?v=202606218"></script>
+      <script defer src="./ProcesuVadiba.js?v=202606247"></script>
+      <script defer src="./ProcesuVadibaPieslegums.js?v=202606247"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -3181,7 +3181,6 @@
                 </button>
                 <button type="button" class="card" onClick=${onOpenProcesuVadiba}>
                   <h3>Procesu vadība</h3>
-                  <p>Uzdevumi, tabulas, Gantt, termiņi un prezentabls pārskats vadībai.</p>
                 </button>
               </div>
               ${sodienBlock}
@@ -8573,19 +8572,12 @@
                     : html`<section class="list-panel"><p>Saliedēšanas modulis nav ielādēts.</p></section>`;
                 }
                 if (view === "procesuVadiba") {
-                  return html`<iframe
-                    title="Procesu vadība"
-                    src="./procesu-vadiba.html"
-                    class="pv-embed-frame"
-                    style=${{
-                      display: "block",
-                      width: "100%",
-                      minHeight: "calc(100vh - 6rem)",
-                      border: "0",
-                      borderRadius: "14px",
-                      background: "#e8f8f3",
-                    }}
-                  ></iframe>`;
+                  const ProcesuVadibaPanel = getProcesuVadibaPanel();
+                  return ProcesuVadibaPanel
+                    ? html`<div class="pv-embed-host" style=${{ minHeight: "calc(100vh - 6rem)" }}>
+                        <${ProcesuVadibaPanel} />
+                      </div>`
+                    : html`<section class="list-panel"><p>Procesu vadība nav ielādēta.</p></section>`;
                 }
                 return null;
               })()}
