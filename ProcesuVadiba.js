@@ -1763,6 +1763,12 @@ ${body}
         font-size: 0.86rem;
         min-height: 2rem;
       }
+      .pv-table-options-panel {
+        display: flex; flex-direction: column; gap: 0.65rem;
+        margin: 0 0 0.75rem; padding: 0.65rem 0.75rem;
+        background: #f0fdf9; border: 1px solid #c5ebe3; border-radius: 10px;
+      }
+      .pv-table-options-panel .pv-choice-options { margin-top: 0; padding-top: 0; border-top: 0; }
       .pv-table-quick-hint {
         font-size: 0.74rem;
         color: #0f766e;
@@ -2401,8 +2407,6 @@ ${body}
         onPatchColumns(columns.filter((x) => x.id !== col.id));
       }
 
-      const showOptions = col.type === "choice" || col.type === "status";
-
       return html`
         <div class="pv-col-header">
           <div class="pv-col-header-row">
@@ -2416,13 +2420,6 @@ ${body}
             <button type="button" class="pv-col-move-btn" title="Pārvietot pa labi" disabled=${idx >= columns.length - 1} onClick=${() => move(1)}>→</button>
             <button type="button" class="pv-col-move-btn" title="Dzēst kolonnu" onClick=${removeCol}>✕</button>
           </div>
-          ${showOptions
-            ? ce(ChoiceOptionsEditor, {
-                options: col.options || [],
-                label: col.type === "status" ? "Statusu opcijas" : "Izvēles opcijas",
-                onChange: (options) => patchCol({ options }),
-              })
-            : null}
         </div>
       `;
     }
@@ -2610,6 +2607,32 @@ ${body}
                     ${TABLE_COLUMN_TYPES.map((t) => html`<option key=${t.id} value=${t.id}>${t.label}</option>`)}
                   </select>
                 </div>
+                ${(() => {
+                  const optCols = normalizeTableBlock(b).columns.filter(
+                    (c) => c.type === "choice" || c.type === "status",
+                  );
+                  if (!optCols.length) return null;
+                  return html`
+                    <div class="pv-table-options-panel">
+                      ${optCols.map(
+                        (c) => html`
+                          <div key=${c.id}>
+                            ${ce(ChoiceOptionsEditor, {
+                              options: c.options || [],
+                              label: `„${c.name || "Kolonna"}” — ${c.type === "status" ? "statusu opcijas" : "izvēles opcijas"}`,
+                              onChange: (options) =>
+                                patch({
+                                  columns: normalizeTableBlock(b).columns.map((x) =>
+                                    x.id === c.id ? { ...x, options } : x,
+                                  ),
+                                }),
+                            })}
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  `;
+                })()}
                 <div class="pv-table-wrap">
                   <table class="pv-table pv-table-quick">
                     <thead>
