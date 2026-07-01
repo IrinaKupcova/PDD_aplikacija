@@ -1,5 +1,6 @@
 # IaD mēneša atgādinājumi — automātiski katru mēneša 1. datumu (servera cron).
-# Secrets: SUPABASE_URL (vai VITE_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY, RESEND_API_KEY, RESEND_FROM
+# Outlook režīms: rindā Supabase, lietotājs nosūta atverot PDD.
+# Secrets: SUPABASE_URL (vai VITE_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY
 name: IaD monthly reminders
 
 on:
@@ -23,10 +24,8 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-      RESEND_FROM: ${{ secrets.RESEND_FROM }}
-      RESEND_TEST_TO: ${{ secrets.RESEND_TEST_TO }}
-      PDD_IAD_REMINDER_CONTROL_EMAIL: irina.kupcova@vid.gov.lv,pliada@inbox.lv
+      PDD_EMAIL_DELIVERY: outlook
+      PDD_IAD_REMINDER_CONTROL_EMAIL: irina.kupcova@vid.gov.lv
     steps:
       - uses: actions/checkout@v4
 
@@ -43,11 +42,8 @@ jobs:
             echo "::error::Trūkst SUPABASE_URL vai SUPABASE_SERVICE_ROLE_KEY GitHub Secrets."
             exit 1
           fi
-          if [ -z "$RESEND_API_KEY" ]; then
-            echo "::warning::Trūkst RESEND_API_KEY — e-pasti var neiziet caur Resend."
-          fi
 
-      - name: Sūta IaD mēneša atgādinājumus
+      - name: Rindā IaD mēneša atgādinājumus (Supabase)
         run: |
           ARGS=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then

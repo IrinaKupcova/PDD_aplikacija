@@ -2,8 +2,10 @@
  * IaD ieteikumu atbildīgo / līdzatbildīgo informēšana (mēneša atgādinājumi).
  * Strādā pārlūkā (scheduler) un kā Node skripts: node Informeshana.js
  *
- * Env (Node): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RESEND_API_KEY, RESEND_FROM
+ * Env (Node): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  * Opcija: PDD_APP_BASE_URL — saite uz aplikāciju (deep link pamats)
+ * Opcija: PDD_EMAIL_DELIVERY=outlook|resend (noklusējums outlook — bez Resend domēna)
+ * Resend (tikai ja PDD_EMAIL_DELIVERY=resend): RESEND_API_KEY, RESEND_FROM
  */
 (function (root, factory) {
   const api = factory();
@@ -26,8 +28,28 @@
   const FILE_SUPABASE_ANON_KEY = "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
   const FILE_PDD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendEmail";
   const FILE_PDD_IAD_EMAIL_FN_URL = "https://fdnkvecgqetmwilwolgt.supabase.co/functions/v1/sendIadEmail";
-  /** CC uzraudzībai + tests (kopijas kopā ar galveno saņēmēju). */
-  const CONTROL_CC_EMAILS = ["irina.kupcova@vid.gov.lv", "pliada@inbox.lv"];
+  /** CC uzraudzībai (tikai @vid.gov.lv). */
+  const CONTROL_CC_EMAILS = ["irina.kupcova@vid.gov.lv"];
+  const DEFAULT_RESEND_FROM = "PDD <prombutnes@vid.gov.lv>";
+  const LS_EMAIL_DELIVERY_KEY = "pdd_email_delivery";
+  const EMAIL_DELIVERY_OUTLOOK = "outlook";
+  const EMAIL_DELIVERY_RESEND = "resend";
+
+  function getEmailDeliveryMode() {
+    if (typeof process !== "undefined" && process.env?.PDD_EMAIL_DELIVERY) {
+      const v = String(process.env.PDD_EMAIL_DELIVERY).trim().toLowerCase();
+      return v === EMAIL_DELIVERY_RESEND ? EMAIL_DELIVERY_RESEND : EMAIL_DELIVERY_OUTLOOK;
+    }
+    if (typeof localStorage !== "undefined") {
+      const v = String(localStorage.getItem(LS_EMAIL_DELIVERY_KEY) || "").trim().toLowerCase();
+      if (v === EMAIL_DELIVERY_RESEND) return EMAIL_DELIVERY_RESEND;
+    }
+    return EMAIL_DELIVERY_OUTLOOK;
+  }
+
+  function usesOutlookComposeDelivery() {
+    return getEmailDeliveryMode() === EMAIL_DELIVERY_OUTLOOK;
+  }
 
   function toStr(v, max) {
     const s = String(v ?? "").trim();
@@ -503,12 +525,29 @@
     return direct;
   }
 
-  function makeInformeshanaAuditEntry({ row, to, subject, text, kind, via }) {
+  function makeInformeshanaAuditEntry({
+    row,
+    to,
+    subject,
+    text,
+    kind,
+    via,
+    deliveryNote,
+    actualTo,
+    status,
+    cc,
+    reminderStamp,
+  }) {
+    const viaLabel = via || null;
+    const resolvedStatus =
+      status ||
+      (viaLabel === "outlook_compose" || viaLabel === "supabase_queue" ? "prepared" : "sent");
     return {
       id:
         typeof crypto !== "undefined" && crypto.randomUUID
           ? crypto.randomUUID()
           : `audit_${Date.now()}_${Math.random()}`,
+      pdd_kind: "iad_informeshana",
       sentAt: new Date().toISOString(),
       kind: kind || "inform",
       rowKey: rowStableId(row),
@@ -516,9 +555,14 @@
       iadNumurs: toStr(row?.IAD_numurs),
       iadNosaukums: toStr(row?.IAD_nosaukums),
       to: String(to ?? "").trim(),
+      actualTo: String(actualTo ?? "").trim() || null,
+      deliveryNote: toStr(deliveryNote, 500) || null,
       subject: toStr(subject),
       text: toStr(text),
-      via: via || null,
+      via: viaLabel,
+      status: resolvedStatus,
+      cc: Array.isArray(cc) && cc.length ? uniqEmails(cc) : undefined,
+      reminderStamp: reminderStamp || undefined,
     };
   }
 
@@ -544,9 +588,34 @@
     }
   }
 
-  async function recordInformeshanaSend({ row, to, subject, text, kind, via, supabase }) {
+  async function recordInformeshanaSend({
+    row,
+    to,
+    subject,
+    text,
+    kind,
+    via,
+    deliveryNote,
+    actualTo,
+    status,
+    cc,
+    reminderStamp,
+    supabase,
+  }) {
     if (!isValidEmail(to)) return null;
-    const entry = makeInformeshanaAuditEntry({ row, to, subject, text, kind, via });
+    const entry = makeInformeshanaAuditEntry({
+      row,
+      to,
+      subject,
+      text,
+      kind,
+      via,
+      deliveryNote,
+      actualTo,
+      status,
+      cc,
+      reminderStamp,
+    });
     appendLocalInformeshanaAudit(entry);
     const sb = supabase || getSupabaseClientForBrowser();
     if (sb && row) {
@@ -588,6 +657,9 @@
       subject: merged.subject || "",
       text: merged.text || "",
       via: merged.via || null,
+      status: merged.status || "sent",
+      cc: merged.cc,
+      reminderStamp: merged.reminderStamp,
     };
   }
 
@@ -670,9 +742,37 @@
 
   function wasReminderSent(row, rowKey, stamp) {
     const dbLog = readAtgadinajumiFromIadRow(row);
-    if (dbLog?.[stamp]) return true;
+    const dbEntry = dbLog?.[stamp];
+    if (dbEntry?.pending) return false;
+    if (dbEntry) return true;
     const log = readSentLog();
-    return Boolean(log?.[stamp]?.[rowKey]);
+    const localEntry = log?.[stamp]?.[rowKey];
+    if (localEntry?.pending) return false;
+    return Boolean(localEntry);
+  }
+
+  function hasReminderPending(row, stamp) {
+    return Boolean(readAtgadinajumiFromIadRow(row)?.[stamp]?.pending);
+  }
+
+  async function markReminderPending(sb, row, rowKey, stamp, emails) {
+    const payload = {
+      pending: true,
+      queuedAt: new Date().toISOString(),
+      emails: Array.isArray(emails) ? emails : [],
+    };
+    const log = readSentLog();
+    if (!log[stamp]) log[stamp] = {};
+    log[stamp][rowKey] = payload;
+    writeSentLog(log);
+    if (sb && row) {
+      const dbLog = { ...readAtgadinajumiFromIadRow(row), [stamp]: payload };
+      try {
+        await patchIadInformesanas(sb, row, { atgadinajumi: dbLog });
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   async function markReminderSent(sb, row, rowKey, stamp, emails) {
@@ -996,6 +1096,48 @@
     return Boolean(getAnonApiKey() && getIadEmailFnUrls().length > 0);
   }
 
+  function buildOutlookComposeUrl({ to, cc, subject, body }) {
+    const params = new URLSearchParams();
+    const toList = uniqEmails(Array.isArray(to) ? to : to ? [to] : []).join(";");
+    if (toList) params.set("to", toList);
+    const ccList = uniqEmails(Array.isArray(cc) ? cc : cc ? [cc] : []).join(";");
+    if (ccList) params.set("cc", ccList);
+    const subj = String(subject ?? "").trim();
+    if (subj) params.set("subject", subj);
+    const bodyText = String(body ?? "");
+    if (bodyText) params.set("body", bodyText);
+    return `https://outlook.office.com/mail/deeplink/compose?${params.toString()}`;
+  }
+
+  function buildMailtoUrl({ to, cc, subject, body }) {
+    const toList = uniqEmails(Array.isArray(to) ? to : to ? [to] : []);
+    const ccList = uniqEmails(Array.isArray(cc) ? cc : cc ? [cc] : []);
+    const addr = toList.join(",");
+    const q = [];
+    if (ccList.length) q.push(`cc=${encodeURIComponent(ccList.join(","))}`);
+    const subj = String(subject ?? "").trim();
+    if (subj) q.push(`subject=${encodeURIComponent(subj)}`);
+    const bodyText = String(body ?? "");
+    if (bodyText) q.push(`body=${encodeURIComponent(bodyText)}`);
+    const qs = q.length ? `?${q.join("&")}` : "";
+    return `mailto:${encodeURIComponent(addr)}${qs}`;
+  }
+
+  function openComposeInOutlook(opts) {
+    const url = buildOutlookComposeUrl(opts);
+    try {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return true;
+    } catch {
+      try {
+        window.location.href = buildMailtoUrl(opts);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
   function ensureEmailDraftStyles() {
     if (typeof document === "undefined" || document.getElementById("pdd-email-draft-styles")) return;
     const el = document.createElement("style");
@@ -1045,6 +1187,27 @@
       .pdd-email-draft-actions button.primary {
         background: #1d4ed8; color: #fff; border-color: #1d4ed8;
       }
+      .pdd-pending-compose-banner {
+        position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%);
+        z-index: 2147482000; width: min(640px, calc(100% - 1.5rem));
+        background: #1e3a8a; color: #fff; border-radius: 12px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.25); padding: 0.85rem 1rem;
+        display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center;
+      }
+      .pdd-pending-compose-banner p {
+        margin: 0; flex: 1 1 220px; font-size: 0.9rem; line-height: 1.4;
+      }
+      .pdd-pending-compose-banner .actions {
+        display: flex; flex-wrap: wrap; gap: 0.45rem;
+      }
+      .pdd-pending-compose-banner button {
+        font: inherit; cursor: pointer; border-radius: 8px;
+        padding: 0.45rem 0.75rem; border: 1px solid rgba(255,255,255,0.35);
+        background: rgba(255,255,255,0.12); color: #fff;
+      }
+      .pdd-pending-compose-banner button.primary {
+        background: #fff; color: #1e3a8a; border-color: #fff;
+      }
     `;
     document.head.appendChild(el);
   }
@@ -1075,7 +1238,7 @@
     document.getElementById("pdd-email-draft-overlay")?.remove();
   }
 
-  function openEmailDraftPanel({ to, cc, subject, text, title, url }) {
+  function openEmailDraftPanel({ to, cc, subject, text, title, url, deliveryMode, onClose }) {
     if (typeof document === "undefined") return false;
     const addr = String(to ?? "").trim();
     if (!addr.includes("@")) return false;
@@ -1087,6 +1250,8 @@
     const body =
       String(text ?? "").trim() +
       (urlLine ? `\n\nAtvērt aplikācijā: ${urlLine}` : "");
+    const outlookFirst = deliveryMode === EMAIL_DELIVERY_OUTLOOK || usesOutlookComposeDelivery();
+    const composeOpts = { to: addr, cc: ccList, subject: subj, body };
     const fullForCopy = [
       `Kam: ${addr}`,
       ccList.length ? `Kopija: ${ccList.join(", ")}` : "",
@@ -1115,8 +1280,9 @@
 
     const hint = document.createElement("p");
     hint.className = "pdd-email-draft-hint";
-    hint.textContent =
-      "Automātiskā sūtīšana šoreiz neizdevās. Teksts ir sagatavots — nokopē un ielīmē savā e-pastā (Outlook, Copilot u.c.), tad nosūti.";
+    hint.textContent = outlookFirst
+      ? "PDD sagatavoja vēstuli. Nospied „Atvērt Outlook”, pārbaudi adresātus un nosūti no sava VID konta."
+      : "Automātiskā sūtīšana šoreiz neizdevās. Teksts ir sagatavots — nokopē un ielīmē savā e-pastā (Outlook, Copilot u.c.), tad nosūti.";
     card.appendChild(hint);
 
     function addField(label, value) {
@@ -1151,9 +1317,43 @@
     const actions = document.createElement("div");
     actions.className = "pdd-email-draft-actions";
 
+    const finishClose = () => {
+      closeEmailDraftPanel();
+      if (typeof onClose === "function") {
+        try {
+          onClose();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+
+    if (outlookFirst) {
+      const outlookBtn = document.createElement("button");
+      outlookBtn.type = "button";
+      outlookBtn.className = "primary";
+      outlookBtn.textContent = "Atvērt Outlook";
+      outlookBtn.addEventListener("click", () => {
+        openComposeInOutlook(composeOpts);
+      });
+      actions.appendChild(outlookBtn);
+
+      const mailtoBtn = document.createElement("button");
+      mailtoBtn.type = "button";
+      mailtoBtn.textContent = "E-pasta programma";
+      mailtoBtn.addEventListener("click", () => {
+        try {
+          window.location.href = buildMailtoUrl(composeOpts);
+        } catch {
+          /* ignore */
+        }
+      });
+      actions.appendChild(mailtoBtn);
+    }
+
     const copyAllBtn = document.createElement("button");
     copyAllBtn.type = "button";
-    copyAllBtn.className = "primary";
+    if (!outlookFirst) copyAllBtn.className = "primary";
     copyAllBtn.textContent = "Kopēt visu";
     copyAllBtn.addEventListener("click", async () => {
       const ok = await copyTextToClipboard(fullForCopy);
@@ -1180,7 +1380,7 @@
     closeBtn.addEventListener("click", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      closeEmailDraftPanel();
+      finishClose();
     });
 
     actions.appendChild(copyAllBtn);
@@ -1190,11 +1390,11 @@
 
     overlay.appendChild(card);
     overlay.addEventListener("click", (ev) => {
-      if (ev.target === overlay) closeEmailDraftPanel();
+      if (ev.target === overlay) finishClose();
     });
     const onEscape = (ev) => {
       if (ev.key === "Escape") {
-        closeEmailDraftPanel();
+        finishClose();
         document.removeEventListener("keydown", onEscape);
       }
     };
@@ -1207,7 +1407,228 @@
     return openEmailDraftPanel({
       ...opts,
       title: "IaD informēšana — nosūti e-pastu",
+      deliveryMode: EMAIL_DELIVERY_OUTLOOK,
     });
+  }
+
+  function openEmailDraftQueue(items) {
+    const list = (Array.isArray(items) ? items : []).filter((x) => x && String(x.to || "").includes("@"));
+    if (!list.length) return false;
+    let index = 0;
+    const showNext = () => {
+      if (index >= list.length) return;
+      const item = list[index++];
+      const remaining = list.length - index;
+      openEmailDraftPanel({
+        ...item,
+        deliveryMode: EMAIL_DELIVERY_OUTLOOK,
+        title:
+          String(item.title || "IaD informēšana") +
+          (remaining > 0 ? ` (${index}/${list.length})` : ""),
+        onClose: remaining > 0 ? showNext : undefined,
+      });
+    };
+    showNext();
+    return true;
+  }
+
+  async function queuePendingComposeEmail({
+    sb,
+    row,
+    to,
+    subject,
+    text,
+    messageText,
+    url,
+    cc,
+    kind,
+    reminderStamp,
+  }) {
+    const email = String(to ?? "").trim();
+    if (!isValidEmail(email)) return { ok: false, reason: "invalid_email" };
+    const ccList = uniqEmails([...(Array.isArray(cc) ? cc : []), ...getControlCcFor(email)]);
+    const entry = makeInformeshanaAuditEntry({
+      row,
+      to: email,
+      subject,
+      text: messageText || text,
+      kind: kind || "inform",
+      via: "supabase_queue",
+      deliveryNote: "Gaida nosūtīšanu — atver PDD un nospied „Atvērt Outlook”.",
+      status: "pending_compose",
+      cc: ccList,
+      reminderStamp,
+    });
+    appendLocalInformeshanaAudit(entry);
+    if (sb && row) {
+      await patchIadInformesanas(sb, row, { appendAudit: entry });
+    }
+    return { ok: true, via: "supabase_queue", pending: true, entry };
+  }
+
+  async function dispatchIadInformOutlookCompose({
+    to,
+    subject,
+    text,
+    html,
+    url,
+    row,
+    cc,
+    kind,
+    messageText,
+    supabase,
+    autoOpen = true,
+    reminderStamp,
+  }) {
+    const email = String(to ?? "").trim();
+    if (!isValidEmail(email)) return { ok: false, reason: "invalid_email" };
+    const ccList = uniqEmails([...(Array.isArray(cc) ? cc : []), ...getControlCcFor(email)]);
+    const inBrowser = typeof window !== "undefined" && typeof document !== "undefined";
+    const bodyText = String(text ?? "").trim();
+    const panelText = String(messageText ?? "").trim() || bodyText.replace(/\n\nAtvērt aplikācijā:.*$/s, "").trim();
+    const panelTitle =
+      kind === "reminder" ? "IaD mēneša atgādinājums" : "IaD informēšana — nosūti e-pastu";
+
+    if (inBrowser && autoOpen) {
+      openEmailDraftPanel({
+        to: email,
+        cc: ccList,
+        subject,
+        text: panelText,
+        title: panelTitle,
+        url,
+        deliveryMode: EMAIL_DELIVERY_OUTLOOK,
+      });
+      await recordInformeshanaSend({
+        row,
+        to: email,
+        subject,
+        text: messageText || text,
+        kind,
+        via: "outlook_compose",
+        deliveryNote: "Sagatavots Outlook — pārbaudi un nosūti no sava VID konta.",
+        status: "prepared",
+        cc: ccList,
+        reminderStamp,
+        supabase,
+      });
+      return { ok: true, via: "outlook_compose", prepared: true };
+    }
+
+    const queued = await queuePendingComposeEmail({
+      sb: supabase,
+      row,
+      to: email,
+      subject,
+      text,
+      messageText,
+      url,
+      cc: ccList,
+      kind,
+      reminderStamp,
+    });
+    return { ok: true, via: "supabase_queue", prepared: true, pending: true, ...queued };
+  }
+
+  function collectPendingComposeFromRows(rows) {
+    const items = [];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      for (const raw of readAuditFromIadRow(row)) {
+        if (String(raw?.status || "").trim() !== "pending_compose") continue;
+        const entry = normalizeInformeshanaAuditEntry(raw);
+        if (!entry) continue;
+        items.push({ row, entry });
+      }
+    }
+    return items;
+  }
+
+  function closePendingComposeBanner() {
+    if (typeof document === "undefined") return;
+    document.getElementById("pdd-pending-compose-banner")?.remove();
+  }
+
+  function showPendingComposeBanner(items, opts = {}) {
+    if (typeof document === "undefined") return false;
+    const list = (Array.isArray(items) ? items : []).filter((x) => x?.entry?.to);
+    if (!list.length) {
+      closePendingComposeBanner();
+      return false;
+    }
+    ensureEmailDraftStyles();
+    closePendingComposeBanner();
+
+    const banner = document.createElement("div");
+    banner.id = "pdd-pending-compose-banner";
+    banner.className = "pdd-pending-compose-banner";
+    banner.setAttribute("role", "status");
+
+    const p = document.createElement("p");
+    p.textContent = `PDD: ${list.length} informēšanas vēstule(s) gaida nosūtīšanu caur Outlook.`;
+    banner.appendChild(p);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "primary";
+    openBtn.textContent = "Atvērt nākamo";
+    openBtn.addEventListener("click", () => {
+      const first = list[0];
+      const entry = first.entry;
+      const ccList = Array.isArray(entry.cc) ? entry.cc : [];
+      const urlMatch = String(entry.text || "").match(/Atvērt aplikācijā:\s*(\S+)/);
+      openEmailDraftPanel({
+        to: entry.to,
+        cc: ccList,
+        subject: entry.subject,
+        text: entry.text,
+        title: informeshanaKindLabel(entry.kind),
+        url: urlMatch ? urlMatch[1] : "",
+        deliveryMode: EMAIL_DELIVERY_OUTLOOK,
+        onClose: () => {
+          if (typeof opts.onResolved === "function") {
+            void opts.onResolved(first);
+          }
+        },
+      });
+    });
+    actions.appendChild(openBtn);
+
+    const dismissBtn = document.createElement("button");
+    dismissBtn.type = "button";
+    dismissBtn.textContent = "Vēlāk";
+    dismissBtn.addEventListener("click", () => closePendingComposeBanner());
+    actions.appendChild(dismissBtn);
+
+    banner.appendChild(actions);
+    document.body.appendChild(banner);
+    return true;
+  }
+
+  async function refreshPendingComposeBanner(sb) {
+    if (typeof window === "undefined" || !sb) return;
+    const onResolved = async ({ row, entry }) => {
+      const stamp = entry?.reminderStamp;
+      if (stamp && row) {
+        await markReminderSent(sb, row, rowStableId(row), stamp, [entry.to]);
+      }
+      await refreshPendingComposeBanner(sb);
+    };
+    try {
+      const rows = await loadIadRows(sb);
+      const pending = collectPendingComposeFromRows(rows);
+      if (!pending.length) {
+        closePendingComposeBanner();
+        return;
+      }
+      showPendingComposeBanner(pending, { onResolved });
+    } catch (e) {
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("[PDD_INFORMESHANA] pending compose banner", e);
+      }
+    }
   }
 
   async function sendEmailViaPddResendApi({ to, subject, text, html, url, cc }) {
@@ -1239,7 +1660,7 @@
     const from =
       (typeof process !== "undefined" ? String(process.env.RESEND_FROM || "").trim() : "") ||
       String(root.__PDD_INFORMESHANA_RESEND_FROM__ ?? "").trim() ||
-      "PDD <onboarding@resend.dev>";
+      DEFAULT_RESEND_FROM;
     if (!apiKey) return { ok: false, reason: "missing_resend_api_key" };
 
     const ccList = uniqEmails(Array.isArray(cc) ? cc : cc ? [cc] : []).filter((em) => normEmail(em) !== normEmail(to));
@@ -1426,14 +1847,14 @@
     }
     if (/only send testing emails/i.test(dl)) {
       return (
-        "Resend testa režīmā vēstule tiek novirzīta uz pliada@inbox.lv.\n" +
-        "Pārbaudi šo pastkasti — tur būs kopija ar plānotajām adresēm."
+        "Resend: domēns vid.gov.lv vēl nav verificēts.\n" +
+        "Verificē: resend.com/domains → iestati RESEND_FROM = PDD <prombutnes@vid.gov.lv> Supabase Secrets."
       );
     }
     if (/domain is not verified|not verified/i.test(dl)) {
       return (
-        "Resend: domēns vēl nav verificēts.\n" +
-        "Pagaidām vēstules nonāk uz pliada@inbox.lv (testa režīms)."
+        "Resend: domēns vid.gov.lv vēl nav verificēts.\n" +
+        "Verificē resend.com/domains un RESEND_FROM = PDD <prombutnes@vid.gov.lv>."
       );
     }
     if (/edge_fetch_error|failed to fetch|all_channels_failed/i.test(dl)) {
@@ -1449,6 +1870,22 @@
     const email = String(to ?? "").trim();
     if (!isValidEmail(email)) return { ok: false, reason: "invalid_email" };
     const ccList = uniqEmails([...(Array.isArray(cc) ? cc : []), ...getControlCcFor(email)]);
+
+    if (usesOutlookComposeDelivery()) {
+      return dispatchIadInformOutlookCompose({
+        to: email,
+        subject,
+        text,
+        html,
+        url,
+        row,
+        cc: ccList,
+        kind,
+        messageText,
+        supabase,
+        autoOpen: typeof window !== "undefined" && typeof document !== "undefined",
+      });
+    }
 
     async function recordOk(viaResult, viaLabel) {
       await recordInformeshanaSend({
@@ -1645,6 +2082,10 @@
 
   async function sendWelcomeAssignmentBatch(items, sb) {
     const results = [];
+    const inBrowser = typeof window !== "undefined" && typeof document !== "undefined";
+    const outlookMode = usesOutlookComposeDelivery();
+    const draftQueue = [];
+
     for (const item of items) {
       if (!item.email) {
         results.push({
@@ -1656,6 +2097,36 @@
         continue;
       }
       const url = buildIadDeepLink(item.row);
+      const subject = buildWelcomeSubject(item.row);
+      const messageText = buildWelcomeText(item.row);
+      const text = `${messageText}\n\nAtvērt aplikācijā: ${url}`;
+      const html = buildWelcomeHtml(item.row, url);
+
+      if (outlookMode && inBrowser && items.length > 1) {
+        const r = await dispatchIadInformOutlookCompose({
+          to: item.email,
+          subject,
+          text,
+          html,
+          url,
+          row: item.row,
+          kind: "welcome",
+          messageText,
+          supabase: sb,
+          autoOpen: false,
+        });
+        draftQueue.push({
+          to: item.email,
+          cc: getControlCcFor(item.email),
+          subject,
+          text: messageText,
+          title: "IaD pievienošana — nosūti e-pastu",
+          url,
+        });
+        results.push({ rowKey: item.rowKey, email: item.email, name: item.name, ...r });
+        continue;
+      }
+
       const r = await sendIadWelcomeEmail({ to: item.email, row: item.row, url, supabase: sb });
       results.push({
         rowKey: item.rowKey,
@@ -1664,6 +2135,8 @@
         ...r,
       });
     }
+
+    if (draftQueue.length) openEmailDraftQueue(draftQueue);
     return results;
   }
 
@@ -1799,11 +2272,17 @@
     const [rows, teamUsers] = await Promise.all([loadIadRows(sb), loadTeamUsers(sb)]);
     const active = filterActiveIadRows(rows);
     const results = [];
+    const outlookMode = usesOutlookComposeDelivery();
+    const inBrowser = typeof window !== "undefined";
 
     for (const row of active) {
       const rowKey = rowStableId(row);
       if (!force && wasReminderSent(row, rowKey, stamp)) {
         results.push({ rowKey, skipped: true, reason: "already_sent" });
+        continue;
+      }
+      if (!force && hasReminderPending(row, stamp)) {
+        results.push({ rowKey, skipped: true, reason: "pending_compose" });
         continue;
       }
       const recipients = collectRowRecipientEmails(row, teamUsers);
@@ -1812,6 +2291,40 @@
         continue;
       }
       const url = buildIadDeepLink(row);
+
+      if (outlookMode) {
+        const queuedTo = [];
+        const failures = [];
+        for (const em of recipients) {
+          const subject = buildReminderSubject(row);
+          const messageText = buildReminderText(row);
+          const text = `${messageText}\n\nAtvērt aplikācijā: ${url}`;
+          const html = buildReminderHtml(row, url);
+          const r = await dispatchIadInformOutlookCompose({
+            to: em,
+            subject,
+            text,
+            html,
+            url,
+            row,
+            kind: "reminder",
+            messageText,
+            supabase: sb,
+            autoOpen: false,
+            reminderStamp: stamp,
+          });
+          if (r.ok) queuedTo.push(em);
+          else failures.push({ email: em, ...r });
+        }
+        if (queuedTo.length) {
+          await markReminderPending(sb, row, rowKey, stamp, queuedTo);
+          results.push({ rowKey, ok: true, queued: true, queuedTo, failures, via: "outlook_queue" });
+        } else {
+          results.push({ rowKey, ok: false, failures });
+        }
+        continue;
+      }
+
       const sentTo = [];
       const failures = [];
       for (const em of recipients) {
@@ -1825,6 +2338,10 @@
       } else {
         results.push({ rowKey, ok: false, failures });
       }
+    }
+
+    if (inBrowser && outlookMode) {
+      void refreshPendingComposeBanner(sb);
     }
 
     return { ok: true, stamp, count: active.length, results };
@@ -1849,7 +2366,13 @@
     applyIadFocusFromUrl();
     const tick = (label) => {
       void runInformeshanaTick()
-        .then((out) => logInformeshanaTickResult(out, label))
+        .then((out) => {
+          logInformeshanaTickResult(out, label);
+          if (usesOutlookComposeDelivery()) {
+            const sb = getSupabaseClientForBrowser();
+            if (sb) void refreshPendingComposeBanner(sb);
+          }
+        })
         .catch((e) => {
           console.warn("[PDD_INFORMESHANA]", e);
         });
@@ -1913,6 +2436,10 @@
     isControlMonitorRecipient,
     openEmailDraftPanel,
     closeEmailDraftPanel,
+    openEmailDraftQueue,
+    getEmailDeliveryMode,
+    usesOutlookComposeDelivery,
+    refreshPendingComposeBanner,
     buildInformeshanaAlertMessage,
     hasServerEmailChannel,
     debugEmailChannel: () => ({

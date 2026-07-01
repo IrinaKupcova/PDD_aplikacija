@@ -9,8 +9,7 @@ const corsHeaders = {
 };
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
-const FALLBACK_FROM = "PDD <onboarding@resend.dev>";
-const DEFAULT_RESEND_TEST_TO = "pliada@inbox.lv";
+const DEFAULT_FROM = "PDD <prombutnes@vid.gov.lv>";
 
 function sanitizeHeaderValue(v: unknown): string {
   const s = String(v ?? "").replace(/^\uFEFF/, "").replace(/[\u200B-\u200D\uFEFF]/g, "");
@@ -71,6 +70,11 @@ function parseCcFromRequest(raw: RequestBody): string[] {
     .filter((x) => x.includes("@") && x.includes("."));
 }
 
+function resendErrorText(parsed: unknown): string {
+  if (!parsed || typeof parsed !== "object") return "";
+  return String((parsed as { message?: string }).message ?? "").trim();
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -78,10 +82,7 @@ Deno.serve(async (req: Request) => {
   const resendApiKey = readResendApiKey();
   if (!resendApiKey) return jsonResponse({ error: "Missing RESEND_API_KEY" }, 500);
 
-  const from =
-    sanitizeHeaderValue(Deno.env.get("RESEND_FROM")) ||
-    "PDD <onboarding@resend.dev>";
-  const allowCc = !from.toLowerCase().includes("@resend.dev");
+  const from = sanitizeHeaderValue(Deno.env.get("RESEND_FROM")) || DEFAULT_FROM;
 
   let rawBody: RequestBody;
   try {
@@ -120,7 +121,7 @@ Deno.serve(async (req: Request) => {
   const bodyCc = parseCcFromRequest(rawBody).filter(
     (em) => em.toLowerCase() !== toAddr.toLowerCase(),
   );
-  if (allowCc && bodyCc.length > 0) emailBody.cc = bodyCc;
+  if (bodyCc.length > 0) emailBody.cc = bodyCc;
 
   try {
     const sendOnce = async (body: Record<string, unknown>) => {
@@ -143,58 +144,29 @@ Deno.serve(async (req: Request) => {
     };
 
     let sent = await sendOnce(emailBody);
-    let usedFallbackFrom = false;
-    let usedTestRelay = false;
-    const errMsg = String((sent.parsed as { message?: string })?.message ?? "").toLowerCase();
-    const domainUnverified =
-      !sent.ok && (errMsg.includes("domain is not verified") || errMsg.includes("not verified"));
-    if (domainUnverified && !from.toLowerCase().includes("@resend.dev")) {
-      const retryBody: Record<string, unknown> = { ...emailBody, from: FALLBACK_FROM };
-      delete retryBody.cc;
-      const retry = await sendOnce(retryBody);
-      if (retry.ok) {
-        usedFallbackFrom = true;
-        sent = retry;
-      } else {
-        sent = retry;
-      }
-    }
-
-    if (!sent.ok && String((sent.parsed as { message?: string })?.message ?? "").toLowerCase().includes("only send testing emails")) {
-      const hit = String((sent.parsed as { message?: string })?.message ?? "").match(
-        /your own email address \(([^)]+)\)/i,
-      );
-      const testTo = sanitizeHeaderValue(
-        hit?.[1] || Deno.env.get("RESEND_TEST_TO") || Deno.env.get("RESEND_ACCOUNT_EMAIL") || DEFAULT_RESEND_TEST_TO,
-      );
-      if (testTo) {
-        const origTo = emailBody.to;
-        const origCc = emailBody.cc;
-        const notice = `<p style="background:#fef3c7;padding:10px;border-radius:8px;"><strong>PDD (Resend testa režīms):</strong> Novirzīts uz ${escapeHtml(
-          testTo,
-        )}. Plānotie TO: ${escapeHtml(JSON.stringify(origTo))}; CC: ${escapeHtml(
-          JSON.stringify(origCc ?? []),
-        )}</p>`;
-        const relay = await sendOnce({
-          from: FALLBACK_FROM,
-          to: [testTo],
-          subject: `[PDD] ${subject}`,
-          html: notice + html,
-          ...(textRaw ? { text: textRaw } : {}),
-        });
-        if (relay.ok) {
-          usedFallbackFrom = true;
-          usedTestRelay = true;
-          sent = relay;
-        } else {
-          sent = relay;
-        }
+    if (!sent.ok && emailBody.cc) {
+      const errLo = resendErrorText(sent.parsed).toLowerCase();
+      if (errLo.includes("domain") || errLo.includes("verified") || errLo.includes("only send")) {
+        const retryBody: Record<string, unknown> = { ...emailBody };
+        delete retryBody.cc;
+        const retry = await sendOnce(retryBody);
+        if (retry.ok) sent = retry;
+        else sent = retry;
       }
     }
 
     if (!sent.ok) {
+      const errLo = resendErrorText(sent.parsed).toLowerCase();
+      const hint = errLo.includes("domain") || errLo.includes("verified") || errLo.includes("only send")
+        ? "Verificē domēnu vid.gov.lv Resend un iestati RESEND_FROM = PDD <prombutnes@vid.gov.lv>."
+        : undefined;
       return jsonResponse(
-        { error: "Resend request failed", status: sent.status, details: sent.parsed },
+        {
+          error: "Resend request failed",
+          status: sent.status,
+          details: sent.parsed,
+          ...(hint ? { resend_hint: hint } : {}),
+        },
         502,
       );
     }
@@ -205,15 +177,6 @@ Deno.serve(async (req: Request) => {
         ok: true,
         provider: "resend",
         result: sent.parsed,
-        ...(usedFallbackFrom
-          ? {
-              usedFallbackFrom: true,
-              hint: usedTestRelay
-                ? "Resend testa režīms — vēstule nosūtīta uz Resend konta e-pastu."
-                : "RESEND_FROM domēns nav verificēts Resend — pagaidām sūtīts no onboarding@resend.dev",
-            }
-          : {}),
-        ...(usedTestRelay ? { usedTestRelay: true } : {}),
       },
       200,
     );

@@ -14,7 +14,7 @@
   const APPROVAL_LINK = "https://irinakupcova.github.io/PDD_aplikacija/prombutnes-vesture";
   const MANAGER_NOTIFY_EMAIL = "katrina.jirgensone@vid.gov.lv";
   const MANAGER_NOTIFY_COPY_EMAIL = "irina.kupcova@vid.gov.lv";
-  const DEFAULT_RESEND_TEST_TO = "pliada@inbox.lv";
+  const DEFAULT_FROM_VID = "PDD <prombutnes@vid.gov.lv>";
 
   function norm(v) {
     return String(v ?? "").trim().toLowerCase();
@@ -129,76 +129,36 @@ function hrefAttr(u) {
     .replace(/'/g, "&#39;");
 }
 
-const FALLBACK_FROM = "PDD <onboarding@resend.dev>";
+const DEFAULT_FROM = "PDD <prombutnes@vid.gov.lv>";
 
 function resendErrText(error) {
   return String(error?.message || error || "").trim();
 }
 
-function extractResendTestRecipient(error) {
-  const hit = resendErrText(error).match(/your own email address \(([^)]+)\)/i);
-  if (hit?.[1]) return String(hit[1]).trim();
-  return String(process.env.RESEND_TEST_TO || process.env.RESEND_ACCOUNT_EMAIL || DEFAULT_RESEND_TEST_TO).trim();
-}
-
-function buildTestRelayHtml(testTo, origTo, origCc, innerHtml) {
-  return `<p style="background:#fef3c7;padding:10px;border-radius:8px;font-size:14px;"><strong>PDD (Resend testa režīms):</strong> Domēns vēl nav verificēts — vēstule novirzīta uz <strong>${escapeHtml(
-    testTo,
-  )}</strong>.<br/>Plānotie TO: ${escapeHtml(JSON.stringify(origTo))}<br/>CC: ${escapeHtml(
-    JSON.stringify(origCc ?? []),
-  )}</p>${innerHtml}`;
-}
-
 async function sendResendHtmlWithFallback(resend, { from, to, subject, html, text, cc }) {
   const toList = Array.isArray(to) ? to : [to];
-  const base = { from, to: toList, subject, html };
+  const base = { from: from || DEFAULT_FROM, to: toList, subject, html };
   if (text) base.text = text;
   const ccList = uniqEmails(Array.isArray(cc) ? cc : cc ? [cc] : []).filter(
     (em) => !toList.some((t) => norm(t) === norm(em)),
   );
-  if (ccList.length && !String(from || "").toLowerCase().includes("@resend.dev")) {
-    base.cc = ccList;
-  }
+  if (ccList.length) base.cc = ccList;
 
   const trySend = async (body) => {
     const { error, data } = await resend.emails.send(body);
-    if (!error) return { ok: true, data, usedFallbackFrom: false, usedTestRelay: false };
+    if (!error) return { ok: true, data };
     return { ok: false, error };
   };
 
   let out = await trySend(base);
-  if (out.ok) return out;
-
-  const errLo = resendErrText(out.error).toLowerCase();
-  const needsFromFallback =
-    errLo.includes("domain is not verified") ||
-    errLo.includes("only send testing emails") ||
-    errLo.includes("not verified");
-  const fromStr = String(base.from || "").toLowerCase();
-
-  if (needsFromFallback && !fromStr.includes("@resend.dev")) {
-    const retryBody = { ...base, from: FALLBACK_FROM };
-    delete retryBody.cc;
-    out = await trySend(retryBody);
-    if (out.ok) return { ...out, usedFallbackFrom: true };
-  }
-
-  if (!out.ok && resendErrText(out.error).toLowerCase().includes("only send testing emails")) {
-    const testTo = extractResendTestRecipient(out.error);
-    if (testTo) {
-      const relay = await trySend({
-        from: FALLBACK_FROM,
-        to: [testTo],
-        subject: `[PDD] ${subject}`,
-        html: buildTestRelayHtml(testTo, toList, base.cc, html),
-        ...(text
-          ? {
-              text: `PDD (Resend testa režīms). Plānotie TO: ${JSON.stringify(toList)}\n\n${text}`,
-            }
-          : {}),
-      });
-      if (relay.ok) return { ...relay, usedFallbackFrom: true, usedTestRelay: true };
-      out = relay;
+  if (!out.ok && base.cc) {
+    const errLo = resendErrText(out.error).toLowerCase();
+    if (errLo.includes("domain") || errLo.includes("verified") || errLo.includes("only send")) {
+      const retryBody = { ...base };
+      delete retryBody.cc;
+      const retry = await trySend(retryBody);
+      if (retry.ok) return retry;
+      out = retry;
     }
   }
 
@@ -258,7 +218,7 @@ async function onRequestCreated({
   resend,
   requestId,
   veids,
-  fromEmail = "PDD <onboarding@resend.dev>",
+  fromEmail = DEFAULT_FROM_VID,
 }) {
   const { data: currentReq, error: curErr } = await supabase
     .from("prombutnes_dati")
@@ -315,7 +275,7 @@ async function approveRequest({
   resend,
   requestId,
   currentUserId,
-  fromEmail = "PDD <onboarding@resend.dev>",
+  fromEmail = DEFAULT_FROM_VID,
 }) {
   const actor = await getUserById(supabase, currentUserId);
   if (!actor || !isAdminRole(pickUserRole(actor))) throw new Error("Tikai admin drīkst apstiprināt.");
@@ -353,7 +313,7 @@ async function rejectRequest({
   requestId,
   currentUserId,
   reason,
-  fromEmail = "PDD <onboarding@resend.dev>",
+  fromEmail = DEFAULT_FROM_VID,
 }) {
   const r = String(reason ?? "").trim();
   if (!r) throw new Error("Noraidīšanas iemesls ir obligāts.");

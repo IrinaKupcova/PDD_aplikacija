@@ -2225,6 +2225,9 @@
                               <time class="iad-inform-audit-time">${formatInformAuditWhen(entry.sentAt)}</time>
                             </div>
                             <div class="iad-inform-audit-to"><strong>Saņēmējs:</strong> ${entry.to}</div>
+                            ${entry.deliveryNote
+                              ? html`<div class="iad-inform-audit-relay" style="margin-top:6px;padding:8px 10px;background:#fef3c7;border-radius:8px;font-size:13px;">${entry.deliveryNote}</div>`
+                              : null}
                             <div class="iad-inform-audit-text">${entry.text || entry.subject || "—"}</div>
                           </article>
                         `
@@ -2352,6 +2355,16 @@
               if (out?.skipped && out?.reason === "assignment_unchanged") return;
               if (out?.skipped && out?.reason === "no_new_assignment_persons") return;
               if (out?.skipped) console.info("[PDD_INFORMESHANA] pēc saglabāšanas", out.reason || out);
+              const outlookOk = (out?.results || []).filter(
+                (r) => r?.ok && (r?.via === "outlook_compose" || r?.prepared),
+              );
+              if (outlookOk.length) {
+                console.info(
+                  "[PDD_INFORMESHANA] sagatavota informēšanas vēstule Outlook nosūtīšanai:",
+                  outlookOk.map((r) => r.email).filter(Boolean),
+                );
+                return;
+              }
               const fails = (out?.results || []).filter((r) => r && !r.ok && !r.skipped);
               if (fails.length) {
                 const detail = fails
@@ -2399,15 +2412,7 @@
                   .filter((r) => r?.ok && r?.email)
                   .map((r) => String(r.email))
                   .join(", ");
-                const testRelay = (out?.results || []).some(
-                  (r) => r?.body?.usedTestRelay || r?.custom?.body?.usedTestRelay,
-                );
                 console.info("[PDD_INFORMESHANA] automātiski nosūtītas pievienošanas vēstules:", out.sent, sentTo);
-                if (testRelay) {
-                  console.info(
-                    "[PDD_INFORMESHANA] Resend testa režīms — kopija ar plānotajām adresēm: pliada@inbox.lv",
-                  );
-                }
               }
             })
             .catch((e) => console.warn("[PDD_INFORMESHANA] pēc IAD saglabāšanas", e));

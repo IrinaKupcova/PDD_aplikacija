@@ -210,7 +210,7 @@ module.exports = async (req, res) => {
   const supabaseUrl = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const resendKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM || "PDD <onboarding@resend.dev>";
+  const from = process.env.RESEND_FROM || "PDD <prombutnes@vid.gov.lv>";
 
   if (!supabaseUrl || !serviceKey) {
     res.statusCode = 500;
@@ -388,19 +388,7 @@ module.exports = async (req, res) => {
         cc: ccFiltered,
       });
       res.statusCode = 200;
-      return res.end(
-        JSON.stringify({
-          ok: true,
-          success: true,
-          sent: [to],
-          ...(relay.usedTestRelay
-            ? {
-                usedTestRelay: true,
-                hint: "Resend testa režīms — vēstule nosūtīta uz Resend konta e-pastu ar plānoto adresātu sarakstu.",
-              }
-            : {}),
-        }),
-      );
+      return res.end(JSON.stringify({ ok: true, success: true, sent: [to] }));
     }
 
     if (action === "cits_token_approved_emails") {
