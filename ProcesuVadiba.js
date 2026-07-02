@@ -4763,22 +4763,11 @@ ${body}
     }
 
     return function ProcesuVadibaPanel() {
-      const [state, setState, syncStatus, syncError, forcePushToTeam, restoreLocalBackup] = usePersistedState();
+      const [state, setState] = usePersistedState();
 
       useEffect(() => {
         console.info("[Procesu vadība] panelis atvērts");
       }, []);
-
-      const syncLabel =
-        syncStatus === "synced"
-          ? "Sinhronizēts ar Supabase (kopīgs visai komandai)"
-          : syncStatus === "saving"
-            ? "Saglabā Supabase…"
-            : syncStatus === "error"
-              ? "DB kļūda — dati vēl nav kopīgi"
-              : syncStatus === "local"
-                ? "Tikai lokāli — nav Supabase"
-                : "Sinhronizē…";
 
       const phases = state.phases || [];
       const workPlanSections = state.workPlanSections || [];
@@ -4978,50 +4967,12 @@ ${body}
         });
       }, []);
 
-      const dataSummary = useMemo(() => stateSummaryLabel(state), [state]);
-      const showDemoHint = useMemo(() => isLikelyDemoState(state), [state]);
-      const hasLocalBackup = useMemo(() => {
-        const b = loadLocalBackupState();
-        return Boolean(b && stateContentScore(b) > stateContentScore(state));
-      }, [state]);
-
       return html`
         <div class="pv-root">
           <div class="pv-shell">
             <aside class="pv-sidebar">
               <div class="pv-brand">
                 <h2>Procesu vadība</h2>
-                <p style=${{ margin: "0.35rem 0 0", fontSize: "0.72rem", opacity: 0.9 }}>${syncLabel}</p>
-                ${syncError
-                  ? html`<p style=${{ margin: "0.25rem 0 0", fontSize: "0.68rem", color: "#7f1d1d", lineHeight: 1.35 }}>${syncError}</p>`
-                  : null}
-                <p class="pv-sync-note">Visi uzdevumi, teksti, tabulas un darba plāns — kopīgi komandas lietotājiem caur Supabase.</p>
-                <p style=${{ margin: "0.35rem 0 0", fontSize: "0.68rem", opacity: 0.92 }}>Tagad: ${dataSummary}</p>
-                ${showDemoHint
-                  ? html`<p style=${{ margin: "0.25rem 0 0", fontSize: "0.68rem", color: "#92400e", lineHeight: 1.35 }}>
-                      Redzami tikai sākuma demo dati. Atver <strong>Vēsture un atjaunošana</strong> vai rezerves kopiju.
-                    </p>`
-                  : null}
-                ${hasLocalBackup
-                  ? html`
-                      <button
-                        type="button"
-                        class="pv-nav-btn"
-                        style=${{ marginTop: "0.35rem", fontSize: "0.78rem" }}
-                        onClick=${() => void restoreLocalBackup()}
-                      >
-                        ↩ Atjaunot no rezerves kopijas
-                      </button>
-                    `
-                  : null}
-                <button
-                  type="button"
-                  class="pv-nav-btn"
-                  style=${{ marginTop: "0.35rem", fontSize: "0.78rem" }}
-                  onClick=${() => void forcePushToTeam()}
-                >
-                  ↑ Augšupielādēt komandai
-                </button>
               </div>
               <button
                 type="button"
