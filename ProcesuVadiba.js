@@ -474,6 +474,7 @@
       p.registries = p.registries && typeof p.registries === "object" ? p.registries : {};
       p.blocks = Array.isArray(p.blocks) ? p.blocks : [];
       if (p.workPlanTaskId === undefined) p.workPlanTaskId = null;
+      p.assignees = normalizeAssignees(p.assignees);
     }
     s.overviewBlocks = Array.isArray(s.overviewBlocks) ? s.overviewBlocks : [];
     s.workPlanSections = tidyWorkPlanSections(s.workPlanSections);
@@ -513,6 +514,27 @@
 
   function personEmail(u) {
     return String(u.email ?? u["i-mail"] ?? u["e-mail"] ?? "").trim();
+  }
+
+  function assigneeUserId(u) {
+    return String(u?.id ?? "").trim() || personEmail(u);
+  }
+
+  function normalizeAssignees(val) {
+    if (!Array.isArray(val)) return [];
+    return [...new Set(val.map((x) => String(x || "").trim()).filter(Boolean))];
+  }
+
+  function formatAssigneesLabels(assigneeIds, teamUsers) {
+    const ids = normalizeAssignees(assigneeIds);
+    if (!ids.length) return "";
+    const team = Array.isArray(teamUsers) ? teamUsers : [];
+    return ids
+      .map((id) => {
+        const u = team.find((x) => assigneeUserId(x) === id || personEmail(x) === id);
+        return u ? personLabel(u) : id;
+      })
+      .join(", ");
   }
 
   function flattenPhases(phases) {
@@ -814,6 +836,10 @@
 
   function isNotesColumn(col) {
     return /^piezīmes$/i.test(String(col?.name || "").trim());
+  }
+
+  function isMultilineTableColumn(col) {
+    return (col?.type || "text") === "multiline" || isNotesColumn(col);
   }
 
   function tableColumnStyle(col) {
@@ -1189,6 +1215,7 @@
         "Progress %",
         "Statuss",
         "Darba plāna uzdevums",
+        "Izpildītāji",
         EXECUTION_INFO_LABEL,
       ].join(";"),
     ];
@@ -1196,6 +1223,10 @@
       const wpLabel =
         p.kind === "Uzdevums" || p.kind === "Posms"
           ? workPlanTaskLabel(workPlanSections, p.workPlanTaskId)
+          : "";
+      const assigneesLabel =
+        p.kind === "Uzdevums" || p.kind === "Posms"
+          ? formatAssigneesLabels(p.assignees, getTeamUsers())
           : "";
       lines.push(
         [
@@ -1208,6 +1239,7 @@
           p.progress ?? 0,
           p.status,
           wpLabel,
+          assigneesLabel,
           executionInfoForExport(p),
         ]
           .map(escapeCsv)
@@ -1466,14 +1498,29 @@ tr.planned td{background:#f0fdf9}
         "Beigas",
         "Progress %",
         "Statuss",
+        "Izpildītāji",
         `${GANTT_CHART_LABEL}${ganttChartPlainSuffix()} sākums %`,
         `${GANTT_CHART_LABEL}${ganttChartPlainSuffix()} platums %`,
       ].join(";"),
     ];
     for (const p of list) {
       const m = ganttBarMetrics(p, range);
+      const assigneesLabel =
+        p.kind === "Uzdevums" || p.kind === "Posms" ? formatAssigneesLabels(p.assignees, getTeamUsers()) : "";
       lines.push(
-        [p.num, p.kind || "", p.title, p.description, p.start, p.end, p.progress ?? 0, p.status, m.leftPct, m.widthPct]
+        [
+          p.num,
+          p.kind || "",
+          p.title,
+          p.description,
+          p.start,
+          p.end,
+          p.progress ?? 0,
+          p.status,
+          assigneesLabel,
+          m.leftPct,
+          m.widthPct,
+        ]
           .map(escapeCsv)
           .join(";"),
       );
@@ -1808,6 +1855,7 @@ ${body}
       progress: Number(phase?.progress ?? 0),
       status: phase?.status || "Plānots",
       workPlanTaskId: phase?.workPlanTaskId || "",
+      assignees: normalizeAssignees(phase?.assignees),
       num: displayNum || "",
       blocks: JSON.parse(JSON.stringify(phase?.blocks || [])),
     };
@@ -1985,6 +2033,7 @@ ${body}
       progress: 0,
       status: "Plānots",
       workPlanTaskId: null,
+      assignees: [],
       blocks: [],
       tools: parentId
         ? []
@@ -2371,6 +2420,47 @@ ${body}
       .pv-choice-opt-row { display: flex; gap: 0.25rem; align-items: center; margin-bottom: 0.25rem; }
       .pv-choice-opt-row input { flex: 1; min-width: 0; }
       .pv-cell-multiline { white-space: pre-wrap; font-size: 0.82rem; }
+      .pv-multiline-cell { position: relative; min-width: 0; }
+      .pv-multiline-cell textarea {
+        width: 100%; box-sizing: border-box; padding-right: 1.85rem;
+      }
+      .pv-multiline-cell-preview {
+        display: block; max-height: 4.5em; overflow: hidden; white-space: pre-wrap;
+        font-size: 0.82rem; line-height: 1.35; padding-right: 1.85rem; color: #01171d;
+      }
+      .pv-cell-expand-btn {
+        position: absolute; top: 4px; right: 4px; z-index: 2;
+        opacity: 0; pointer-events: none; transition: opacity 0.15s;
+        border: 1px solid #c5ebe3; background: #fff; border-radius: 6px;
+        padding: 0.12rem 0.38rem; font-size: 0.72rem; cursor: pointer; color: #065f46;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+      }
+      .pv-multiline-cell:hover .pv-cell-expand-btn,
+      .pv-multiline-cell:focus-within .pv-cell-expand-btn {
+        opacity: 1; pointer-events: auto;
+      }
+      .pv-cell-expand-backdrop {
+        position: fixed; inset: 0; z-index: 3000;
+        background: rgba(1, 23, 29, 0.45);
+        display: flex; align-items: center; justify-content: center; padding: 1rem;
+      }
+      .pv-cell-expand-modal {
+        width: min(760px, 96vw); max-height: 90vh; background: #fff; border-radius: 12px;
+        padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.6rem;
+        box-shadow: 0 20px 50px rgba(1, 23, 29, 0.22); border: 1px solid #c5ebe3;
+      }
+      .pv-cell-expand-modal h4 { margin: 0; font-size: 0.95rem; color: #01171d; }
+      .pv-cell-expand-area {
+        width: 100%; box-sizing: border-box; min-height: 260px; max-height: 58vh;
+        resize: vertical; border: 1px solid #c5ebe3; border-radius: 8px;
+        padding: 0.65rem; font: inherit; font-size: 0.9rem; line-height: 1.45;
+      }
+      .pv-cell-expand-readonly {
+        white-space: pre-wrap; overflow: auto; min-height: 160px; max-height: 58vh;
+        border: 1px solid #e0f2ee; border-radius: 8px; padding: 0.65rem; background: #fafefd;
+        font-size: 0.9rem; line-height: 1.45;
+      }
+      .pv-cell-expand-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: flex-end; }
       .pv-status-cell { font-weight: 600; }
       .pv-status-cell.pv-cell-tone-done { background: #34d399 !important; color: #064e3b; }
       .pv-status-cell.pv-cell-tone-active { background: #2dd4bf !important; color: #134e4a; }
@@ -2477,6 +2567,48 @@ ${body}
       .pv-edit-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.75rem; }
       .pv-edit-section { margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px dashed #c5ebe3; }
       .pv-edit-section h4 { margin: 0 0 0.55rem; font-size: 0.88rem; color: #065f46; font-weight: 600; }
+      .pv-assignees-picker { position: relative; }
+      .pv-assignees-selected {
+        min-height: 2.35rem; border: 1px solid #c5ebe3; border-radius: 10px;
+        padding: 0.4rem 0.5rem; background: #fff;
+        display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center;
+        cursor: default;
+      }
+      .pv-assignees-picker:hover .pv-assignees-selected,
+      .pv-assignees-picker.is-open .pv-assignees-selected {
+        border-color: #047857; background: #f8fffd;
+      }
+      .pv-assignees-placeholder { font-size: 0.8rem; color: #6b7280; }
+      .pv-assignee-tag {
+        display: inline-flex; align-items: center; gap: 0.2rem;
+        padding: 0.18rem 0.45rem 0.18rem 0.55rem; background: #e8f8f3;
+        border: 1px solid #b8e0d6; border-radius: 999px; font-size: 0.8rem; color: #01171d;
+      }
+      .pv-assignee-tag-remove {
+        border: 0; background: transparent; cursor: pointer; color: #b91c1c;
+        font-size: 0.95rem; line-height: 1; padding: 0 0.12rem;
+      }
+      .pv-assignees-dropdown {
+        position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 45;
+        display: grid; gap: 0.35rem; max-height: 220px; overflow: auto;
+        border: 1px solid #c5ebe3; border-radius: 10px; padding: 0.5rem 0.55rem;
+        background: #fff; box-shadow: 0 10px 28px rgba(1, 23, 29, 0.14);
+      }
+      .pv-assignees-list {
+        display: grid; gap: 0.35rem; max-height: 220px; overflow: auto;
+        border: 1px solid #c5ebe3; border-radius: 10px; padding: 0.5rem 0.55rem;
+        background: #f8fffd;
+      }
+      .pv-assignee-row {
+        display: flex; align-items: center; gap: 0.45rem;
+        font-size: 0.86rem; color: #01171d; cursor: pointer; border-radius: 6px;
+        padding: 0.12rem 0.15rem;
+      }
+      .pv-assignee-row:hover { background: #ecfdf5; }
+      .pv-assignee-row input { margin: 0; accent-color: #047857; flex: 0 0 auto; }
+      .pv-assignee-row span { line-height: 1.3; }
+      .pv-assignees-empty { margin: 0; font-size: 0.78rem; color: #0f766e; }
+      .pv-assignees-hint { margin: 0.35rem 0 0; font-size: 0.76rem; color: #0f766e; }
       .pv-edit-lower-zone {
         background: #f8fffd; border: 1px solid #d7efe8; border-radius: 10px;
         padding: 0.85rem; margin-top: 1rem;
@@ -3111,14 +3243,95 @@ ${body}
       `;
     }
 
+    function MultilineCellSurface({ value, col, readOnly, onChange }) {
+      const [open, setOpen] = useState(false);
+      const [local, setLocal] = useState(String(value ?? ""));
+      const text = String(value ?? "");
+      const label = col?.name || "Teksts";
+      const hasContent = text.trim().length > 0;
+
+      useEffect(() => {
+        if (!open) setLocal(text);
+      }, [text, open]);
+
+      function openModal() {
+        setLocal(text);
+        setOpen(true);
+      }
+
+      function closeModal() {
+        setOpen(false);
+        setLocal(text);
+      }
+
+      function saveModal() {
+        onChange?.(local);
+        setOpen(false);
+      }
+
+      const modal = open
+        ? html`
+            <div class="pv-cell-expand-backdrop" onClick=${closeModal}>
+              <div class="pv-cell-expand-modal" onClick=${(e) => e.stopPropagation()}>
+                <h4>${label}</h4>
+                ${readOnly
+                  ? html`<div class="pv-cell-expand-readonly">${text || "—"}</div>`
+                  : html`
+                      <textarea
+                        class="pv-cell-expand-area"
+                        value=${local}
+                        onInput=${(e) => setLocal(e.target.value)}
+                        placeholder="Teksts…"
+                      ></textarea>
+                    `}
+                <div class="pv-cell-expand-actions">
+                  ${readOnly
+                    ? html`
+                        <button type="button" class="pv-btn primary" onClick=${closeModal}>Aizvērt</button>
+                      `
+                    : html`
+                        <button type="button" class="pv-btn" onClick=${closeModal}>Atcelt</button>
+                        <button type="button" class="pv-btn primary" onClick=${saveModal}>Saglabāt</button>
+                      `}
+                </div>
+              </div>
+            </div>
+          `
+        : null;
+
+      if (readOnly) {
+        return html`
+          <div class=${`pv-multiline-cell ${hasContent ? "has-content" : ""}`}>
+            <span class="pv-multiline-cell-preview">${hasContent ? text : "—"}</span>
+            <button type="button" class="pv-cell-expand-btn" title="Atvērt lielajā skatā" onClick=${openModal}>
+              ⤢
+            </button>
+            ${modal}
+          </div>
+        `;
+      }
+
+      return html`
+        <div class="pv-multiline-cell">
+          <textarea rows=${2} onInput=${(e) => onChange(e.target.value)}>${text}</textarea>
+          <button type="button" class="pv-cell-expand-btn" title="Atvērt lielajā skatā" onClick=${openModal}>
+            ⤢
+          </button>
+          ${modal}
+        </div>
+      `;
+    }
+
     function TableCellDisplay({ col, value, workPlanSections }) {
       const team = useMemo(() => getTeamUsers(), []);
+      if (isMultilineTableColumn(col)) {
+        const text = String(value ?? "");
+        if (!text.trim()) return html`<span>—</span>`;
+        return ce(MultilineCellSurface, { value: text, col, readOnly: true });
+      }
       const display = formatTableCellDisplay(value, col, workPlanSections, team);
       if (display && typeof display === "object" && display.kind === "status") {
         return ce(StatusPill, { value: display.value });
-      }
-      if (display && typeof display === "object" && display.kind === "multiline") {
-        return html`<span class="pv-cell-multiline">${display.value}</span>`;
       }
       return html`<span>${display}</span>`;
     }
@@ -3181,10 +3394,8 @@ ${body}
           </select>
         `;
       }
-      if (type === "multiline") {
-        return html`
-          <textarea onInput=${(e) => onChange(e.target.value)} rows=${2}>${String(val)}</textarea>
-        `;
+      if (isMultilineTableColumn(col)) {
+        return ce(MultilineCellSurface, { value: val, col, readOnly: false, onChange });
       }
       return html`
         <input type="text" value=${String(val)} onInput=${(e) => onChange(e.target.value)} />
@@ -3335,21 +3546,25 @@ ${body}
     }
 
     function ContentBlockEditor({ block, onSave, onRemove, parentTitle, workPlanSections }) {
-      const isTableQuick = block.type === "table";
-      const [editing, setEditing] = useState(() => isNewContentBlock(block) && !isTableQuick);
+      const isTable = block.type === "table";
+      const [editing, setEditing] = useState(() => isNewContentBlock(block));
+      const [tableQuickEdit, setTableQuickEdit] = useState(false);
       const [draft, setDraft] = useState(() => blockDraftFrom(block));
       const [optionsEditColId, setOptionsEditColId] = useState("");
       const [tableStructureEdit, setTableStructureEdit] = useState(false);
       const tableSaveTimerRef = useRef(null);
+      const isTableQuick = isTable && tableQuickEdit;
 
       useEffect(() => {
-        if (!isTableQuick && !editing) setDraft(blockDraftFrom(block));
-      }, [block, editing, isTableQuick]);
+        if (!tableQuickEdit && !editing) setDraft(blockDraftFrom(block));
+      }, [block, editing, tableQuickEdit]);
 
       useEffect(() => {
         setDraft(blockDraftFrom(block));
         setOptionsEditColId("");
         setTableStructureEdit(false);
+        setTableQuickEdit(false);
+        setEditing(isNewContentBlock(block));
       }, [block.id]);
 
       useEffect(
@@ -3414,6 +3629,22 @@ ${body}
       function handleCancel() {
         setDraft(blockDraftFrom(block));
         setEditing(false);
+        setTableQuickEdit(false);
+      }
+
+      function startTableQuickEdit() {
+        setDraft(blockDraftFrom(block));
+        setEditing(false);
+        setTableStructureEdit(false);
+        setOptionsEditColId("");
+        setTableQuickEdit(true);
+      }
+
+      function stopTableQuickEdit() {
+        flushTableSave();
+        setTableQuickEdit(false);
+        setTableStructureEdit(false);
+        setOptionsEditColId("");
       }
 
       function renderEditBody(b) {
@@ -3452,9 +3683,11 @@ ${body}
 
                 return html`
                 <p class="pv-table-quick-hint">
-                  ${tableStructureEdit
-                    ? "Tabulas struktūras labošana — kolonnas, formāti un izvēlnes."
-                    : "Tabula — aizpildi šūnas; izmaiņas saglabājas automātiski."}
+                  ${tableQuickEdit
+                    ? tableStructureEdit
+                      ? "Tabulas struktūras labošana — kolonnas, formāti un izvēlnes."
+                      : "Ātrā labošana — aizpildi šūnas; izmaiņas saglabājas automātiski."
+                    : "Tabula — labo šūnas un nospied Saglabāt."}
                 </p>
                 <div class="pv-toolbar">
                   <button type="button" class="pv-btn" onClick=${() => patch({ rows: [...(b.rows || []), { id: uid(), cells: {} }] })}>+ Rinda</button>
@@ -3527,7 +3760,7 @@ ${body}
                     `
                   : null}
                 <div class="pv-table-wrap">
-                  <table class="pv-table pv-table-quick">
+                  <table class=${`pv-table ${tableQuickEdit ? "pv-table-quick" : ""}`}>
                     <thead>
                       <tr>
                         ${tableCols.map(
@@ -3690,13 +3923,32 @@ ${body}
 
           <div class="pv-content-block-footer">
             ${isTableQuick
-              ? html`<span class="meta">Automātiski saglabāts</span>`
+              ? html`
+                  <span class="meta">Automātiski saglabāts</span>
+                  <button type="button" class="pv-btn" onClick=${stopTableQuickEdit}>Beigt ātro labošanu</button>
+                `
               : editing
                 ? html`
                     <button type="button" class="pv-btn primary" onClick=${handleSave}>Saglabāt</button>
                     <button type="button" class="pv-btn" onClick=${handleCancel}>Atcelt</button>
                   `
-                : html`<button type="button" class="pv-btn" onClick=${() => setEditing(true)}>Apskatīt/Labot</button>`}
+                : html`
+                    <button
+                      type="button"
+                      class="pv-btn"
+                      onClick=${() => {
+                        setTableQuickEdit(false);
+                        setEditing(true);
+                      }}
+                    >
+                      Apskatīt/Labot
+                    </button>
+                    ${isTable
+                      ? html`
+                          <button type="button" class="pv-btn" onClick=${startTableQuickEdit}>Ātrā labošana</button>
+                        `
+                      : null}
+                  `}
             <button type="button" class="pv-btn" onClick=${() => exportContentBlockExcel(exportBlock)}>⬇ Excel</button>
             <button type="button" class="pv-btn" onClick=${() => exportContentBlockPdf(exportBlock, parentTitle)}>⬇ PDF</button>
             <button type="button" class="pv-btn danger" onClick=${onRemove}>Dzēst bloku</button>
@@ -4404,6 +4656,109 @@ ${body}
       });
     }
 
+    function TeamAssigneesField({ assignees, onChange }) {
+      const [team, setTeam] = useState(() => getTeamUsers());
+      const [open, setOpen] = useState(false);
+      const closeTimerRef = useRef(null);
+      const selected = normalizeAssignees(assignees);
+
+      useEffect(() => {
+        const refresh = () => setTeam(getTeamUsers());
+        refresh();
+        if (typeof window !== "undefined") {
+          window.addEventListener("pdd:komanda-team-users-changed", refresh);
+          return () => window.removeEventListener("pdd:komanda-team-users-changed", refresh);
+        }
+        return undefined;
+      }, []);
+
+      useEffect(
+        () => () => {
+          if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+        },
+        [],
+      );
+
+      function openMenu() {
+        if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+        setOpen(true);
+      }
+
+      function closeMenuSoon() {
+        if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = setTimeout(() => setOpen(false), 160);
+      }
+
+      function toggle(id) {
+        const key = String(id);
+        if (selected.includes(key)) onChange(selected.filter((x) => x !== key));
+        else onChange([...selected, key]);
+      }
+
+      if (!team.length) {
+        return html`
+          <p class="pv-assignees-empty">
+            Komandas saraksts nav pieejams — vispirms pievieno dalībniekus sadaļā Komanda.
+          </p>
+        `;
+      }
+
+      const sorted = [...team].sort((a, b) => personLabel(a).localeCompare(personLabel(b), "lv"));
+      const selectedUsers = selected
+        .map((id) => sorted.find((u) => assigneeUserId(u) === id))
+        .filter(Boolean);
+
+      return html`
+        <div
+          class=${`pv-assignees-picker ${open ? "is-open" : ""}`}
+          onMouseEnter=${openMenu}
+          onMouseLeave=${closeMenuSoon}
+        >
+          <div class="pv-assignees-selected" aria-label="Izvēlētie izpildītāji">
+            ${selectedUsers.length
+              ? selectedUsers.map((u) => {
+                  const id = assigneeUserId(u);
+                  const label = personLabel(u) || personEmail(u) || "—";
+                  return html`
+                    <span class="pv-assignee-tag" key=${id}>
+                      <span>${label}</span>
+                      <button
+                        type="button"
+                        class="pv-assignee-tag-remove"
+                        title="Noņemt"
+                        onClick=${(e) => {
+                          e.stopPropagation();
+                          toggle(id);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  `;
+                })
+              : html`<span class="pv-assignees-placeholder">Uzejiet, lai izvēlētos izpildītājus…</span>`}
+          </div>
+          ${open
+            ? html`
+                <div class="pv-assignees-dropdown" role="listbox" aria-label="Komandas dalībnieki">
+                  ${sorted.map((u) => {
+                    const id = assigneeUserId(u);
+                    const checked = selected.includes(id);
+                    const label = personLabel(u) || personEmail(u) || "—";
+                    return html`
+                      <label class="pv-assignee-row" key=${id}>
+                        <input type="checkbox" checked=${checked} onChange=${() => toggle(id)} />
+                        <span>${label}</span>
+                      </label>
+                    `;
+                  })}
+                </div>
+              `
+            : null}
+        </div>
+      `;
+    }
+
     function PhaseEditForm({
       phase,
       phases,
@@ -4418,6 +4773,7 @@ ${body}
     }) {
       const kind = kindMeta?.kind || "Posms";
       const showWorkPlan = kind === "Uzdevums" || kind === "Posms";
+      const showAssignees = showWorkPlan;
       const wpSections = normalizeWorkPlanSections(workPlanSections);
       const depth = kindMeta?.level ?? (kind === "Uzdevums" ? 0 : kind === "Posms" ? 1 : 2);
       const displayNum = useMemo(
@@ -4446,10 +4802,11 @@ ${body}
       }
 
       function handleSave() {
-        const { title, description, executionInfo, start, end, progress, status, workPlanTaskId, num } = draft;
+        const { title, description, executionInfo, start, end, progress, status, workPlanTaskId, assignees, num } = draft;
         const patch = { title, description, executionInfo, start, end, status };
         if (!hasChildPhases) patch.progress = progress;
         if (showWorkPlan) patch.workPlanTaskId = workPlanTaskId || null;
+        if (showAssignees) patch.assignees = normalizeAssignees(assignees);
         const numTrim = String(num || "").trim();
         if (numTrim && numTrim !== displayNum) {
           const check = validatePhaseNumber(numTrim, depth, phases || []);
@@ -4471,6 +4828,7 @@ ${body}
 
       const isUzdevums = kind === "Uzdevums";
       const wpLabel = showWorkPlan ? workPlanTaskLabel(wpSections, phase.workPlanTaskId) : "";
+      const assigneesSummary = showAssignees ? formatAssigneesLabels(phase.assignees, getTeamUsers()) : "";
 
       const addToolbar = ce(ContentAddToolbar, {
         onAdd: onAddBlock,
@@ -4501,6 +4859,18 @@ ${body}
                 </div>
                 ${wpLabel
                   ? html`<div class="meta" style=${{ marginTop: "0.2rem" }}>Darba plāna uzdevums: ${wpLabel}</div>`
+                  : null}
+                ${assigneesSummary
+                  ? html`
+                      <div class="meta" style=${{ marginTop: "0.2rem" }}>
+                        Izpildītāji:
+                        ${assigneesSummary.split(", ").map(
+                          (name) => html`
+                            <span class="pv-assignee-tag" key=${name} style=${{ marginRight: "0.25rem" }}>${name}</span>
+                          `,
+                        )}
+                      </div>
+                    `
                   : null}
               </div>
               <button type="button" class="pv-btn" onClick=${() => onToggle(true)}>Apskatīt/Labot</button>
@@ -4630,6 +5000,18 @@ ${body}
                 : null}
             </div>
           </div>
+
+          ${showAssignees
+            ? html`
+                <div class="pv-edit-section">
+                  <h4>Izpildītāji</h4>
+                  ${ce(TeamAssigneesField, {
+                    assignees: draft.assignees,
+                    onChange: (next) => patchDraft({ assignees: next }),
+                  })}
+                </div>
+              `
+            : null}
 
           ${addToolbar}
 
