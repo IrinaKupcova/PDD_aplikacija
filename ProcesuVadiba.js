@@ -4926,38 +4926,6 @@ ${body}
       const phaseTree = useMemo(() => buildPhaseTree(phases), [phases]);
       const [sidebarExpanded, setSidebarExpanded] = useState(() => new Set());
 
-      useEffect(() => {
-        const overdueIds = overdueExpandedTaskIds(phaseTree);
-        if (!overdueIds.size) return;
-        setSidebarExpanded((prev) => {
-          const next = new Set(prev);
-          let changed = false;
-          for (const id of overdueIds) {
-            if (!next.has(id)) {
-              next.add(id);
-              changed = true;
-            }
-          }
-          return changed ? next : prev;
-        });
-      }, [phaseTree]);
-
-      useEffect(() => {
-        if (!state.activePhaseId) return;
-        let cur = phases.find((p) => p.id === state.activePhaseId);
-        if (!cur) return;
-        while (cur.parentId) {
-          cur = phases.find((p) => p.id === cur.parentId);
-          if (!cur) return;
-        }
-        setSidebarExpanded((prev) => {
-          if (prev.has(cur.id)) return prev;
-          const next = new Set(prev);
-          next.add(cur.id);
-          return next;
-        });
-      }, [state.activePhaseId, phases]);
-
       const toggleSidebarExpand = useCallback((taskId) => {
         setSidebarExpanded((prev) => {
           const next = new Set(prev);
