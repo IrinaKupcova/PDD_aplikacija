@@ -520,20 +520,60 @@
     return String(u?.id ?? "").trim() || personEmail(u);
   }
 
-  function normalizeAssignees(val) {
-    if (!Array.isArray(val)) return [];
-    return [...new Set(val.map((x) => String(x || "").trim()).filter(Boolean))];
+  function assigneeEntryId(entry) {
+    if (entry == null) return "";
+    if (typeof entry === "string") return String(entry).trim();
+    if (typeof entry === "object") {
+      return String(entry.id ?? entry.userId ?? "").trim() || personEmail(entry);
+    }
+    return String(entry).trim();
   }
 
-  function formatAssigneesLabels(assigneeIds, teamUsers) {
-    const ids = normalizeAssignees(assigneeIds);
-    if (!ids.length) return "";
-    const team = Array.isArray(teamUsers) ? teamUsers : [];
-    return ids
-      .map((id) => {
-        const u = team.find((x) => assigneeUserId(x) === id || personEmail(x) === id);
-        return u ? personLabel(u) : id;
+  function resolveAssigneeUser(key, team) {
+    const k = String(key || "").trim();
+    if (!k) return null;
+    const kl = k.toLowerCase();
+    for (const u of team || []) {
+      if (assigneeUserId(u) === k) return u;
+      const em = personEmail(u);
+      if (em && em.toLowerCase() === kl) return u;
+      const iMail = String(u["i-mail"] ?? "").trim();
+      if (iMail && iMail.toLowerCase() === kl) return u;
+      const eMail = String(u["e-mail"] ?? "").trim();
+      if (eMail && eMail.toLowerCase() === kl) return u;
+    }
+    return null;
+  }
+
+  function normalizeAssignees(val, teamUsers) {
+    if (!Array.isArray(val)) return [];
+    const team = Array.isArray(teamUsers) ? teamUsers : getTeamUsers();
+    const out = [];
+    const seen = new Set();
+    for (const item of val) {
+      const id = assigneeEntryId(item);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      let name = "";
+      if (item && typeof item === "object" && String(item.name || "").trim()) {
+        name = String(item.name).trim();
+      }
+      const u = resolveAssigneeUser(id, team);
+      if (!name && u) name = personLabel(u) || personEmail(u);
+      out.push({ id, name: name || (u ? personLabel(u) || personEmail(u) : "") || id });
+    }
+    return out;
+  }
+
+  function formatAssigneesLabels(assignees, teamUsers) {
+    const team = Array.isArray(teamUsers) ? teamUsers : getTeamUsers();
+    return normalizeAssignees(assignees, team)
+      .map((e) => {
+        if (e.name && e.name !== e.id) return e.name;
+        const u = resolveAssigneeUser(e.id, team);
+        return u ? personLabel(u) || personEmail(u) : e.name;
       })
+      .filter((s) => String(s || "").trim())
       .join(", ");
   }
 
@@ -4671,7 +4711,8 @@ ${body}
       const [team, setTeam] = useState(() => getTeamUsers());
       const [open, setOpen] = useState(false);
       const closeTimerRef = useRef(null);
-      const selected = normalizeAssignees(assignees);
+      const selected = normalizeAssignees(assignees, team);
+      const selectedIdSet = new Set(selected.map((e) => e.id));
 
       useEffect(() => {
         const refresh = () => setTeam(getTeamUsers());
@@ -4700,10 +4741,11 @@ ${body}
         closeTimerRef.current = setTimeout(() => setOpen(false), 160);
       }
 
-      function toggle(id) {
-        const key = String(id);
-        if (selected.includes(key)) onChange(selected.filter((x) => x !== key));
-        else onChange([...selected, key]);
+      function toggle(u) {
+        const id = assigneeUserId(u);
+        const name = personLabel(u) || personEmail(u) || id;
+        if (selectedIdSet.has(id)) onChange(selected.filter((e) => e.id !== id));
+        else onChange([...selected, { id, name }]);
       }
 
       if (!team.length) {
@@ -4715,9 +4757,13 @@ ${body}
       }
 
       const sorted = [...team].sort((a, b) => personLabel(a).localeCompare(personLabel(b), "lv"));
-      const selectedUsers = selected
-        .map((id) => sorted.find((u) => assigneeUserId(u) === id))
-        .filter(Boolean);
+      const selectedUsers = selected.map((entry) => {
+        const u = sorted.find((x) => assigneeUserId(x) === entry.id) || resolveAssigneeUser(entry.id, sorted);
+        return {
+          id: entry.id,
+          label: entry.name && entry.name !== entry.id ? entry.name : u ? personLabel(u) || personEmail(u) : entry.name,
+        };
+      });
 
       return html`
         <div
@@ -4727,26 +4773,24 @@ ${body}
         >
           <div class="pv-assignees-selected" aria-label="Izvēlētie izpildītāji">
             ${selectedUsers.length
-              ? selectedUsers.map((u) => {
-                  const id = assigneeUserId(u);
-                  const label = personLabel(u) || personEmail(u) || "—";
-                  return html`
-                    <span class="pv-assignee-tag" key=${id}>
-                      <span>${label}</span>
-                      <button
-                        type="button"
-                        class="pv-assignee-tag-remove"
-                        title="Noņemt"
-                        onClick=${(e) => {
-                          e.stopPropagation();
-                          toggle(id);
-                        }}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  `;
-                })
+              ? selectedUsers.map((entry) => html`
+                  <span class="pv-assignee-tag" key=${entry.id}>
+                    <span>${entry.label}</span>
+                    <button
+                      type="button"
+                      class="pv-assignee-tag-remove"
+                      title="Noņemt"
+                      onClick=${(e) => {
+                        e.stopPropagation();
+                        const u = sorted.find((x) => assigneeUserId(x) === entry.id);
+                        if (u) toggle(u);
+                        else onChange(selected.filter((x) => x.id !== entry.id));
+                      }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                `)
               : html`<span class="pv-assignees-placeholder">Uzejiet, lai izvēlētos izpildītājus…</span>`}
           </div>
           ${open
@@ -4754,11 +4798,11 @@ ${body}
                 <div class="pv-assignees-dropdown" role="listbox" aria-label="Komandas dalībnieki">
                   ${sorted.map((u) => {
                     const id = assigneeUserId(u);
-                    const checked = selected.includes(id);
+                    const checked = selectedIdSet.has(id);
                     const label = personLabel(u) || personEmail(u) || "—";
                     return html`
                       <label class="pv-assignee-row" key=${id}>
-                        <input type="checkbox" checked=${checked} onChange=${() => toggle(id)} />
+                        <input type="checkbox" checked=${checked} onChange=${() => toggle(u)} />
                         <span>${label}</span>
                       </label>
                     `;
