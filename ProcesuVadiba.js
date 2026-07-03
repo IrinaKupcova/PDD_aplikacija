@@ -2564,6 +2564,17 @@ ${body}
         padding: 0.45rem 0.55rem; border-radius: 8px; border: 1px solid #c5ebe3; font: inherit; color: var(--pv-text);
       }
       .pv-edit-grid textarea { min-height: 88px; resize: vertical; }
+      .pv-edit-grid-row {
+        grid-column: 1 / -1;
+        display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.75rem;
+        align-items: start;
+      }
+      @media (max-width: 820px) { .pv-edit-grid-row { grid-template-columns: 1fr; } }
+      .pv-edit-grid-field {
+        display: flex; flex-direction: column; gap: 0.3rem; min-width: 0;
+        font-size: 0.78rem; color: var(--pv-muted);
+      }
+      .pv-edit-field-label { font-size: 0.78rem; color: var(--pv-muted); }
       .pv-edit-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.75rem; }
       .pv-edit-section { margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px dashed #c5ebe3; }
       .pv-edit-section h4 { margin: 0 0 0.55rem; font-size: 0.88rem; color: #065f46; font-weight: 600; }
@@ -2589,10 +2600,10 @@ ${body}
         font-size: 0.95rem; line-height: 1; padding: 0 0.12rem;
       }
       .pv-assignees-dropdown {
-        position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 45;
+        position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; top: auto; z-index: 45;
         display: grid; gap: 0.35rem; max-height: 220px; overflow: auto;
         border: 1px solid #c5ebe3; border-radius: 10px; padding: 0.5rem 0.55rem;
-        background: #fff; box-shadow: 0 10px 28px rgba(1, 23, 29, 0.14);
+        background: #fff; box-shadow: 0 -8px 28px rgba(1, 23, 29, 0.12);
       }
       .pv-assignees-list {
         display: grid; gap: 0.35rem; max-height: 220px; overflow: auto;
@@ -4971,47 +4982,52 @@ ${body}
                   placeholder="Brīvā formā par izpildi…"
                 ></textarea>
               </label>
-              ${showWorkPlan
+              ${showWorkPlan || showAssignees
                 ? html`
-                    <label style=${{ gridColumn: "1 / -1" }}>
-                      Darba plāna uzdevums
-                      <select
-                        value=${draft.workPlanTaskId || ""}
-                        onChange=${(e) => patchDraft({ workPlanTaskId: e.target.value || null })}
-                      >
-                        <option value="">— Nav izvēlēts —</option>
-                        ${wpSections.map(
-                          (sec) => html`
-                            <optgroup key=${sec.id} label=${sec.title}>
-                              ${sec.tasks.map(
-                                (t) => html`<option key=${t.id} value=${t.id}>${t.title}</option>`,
-                              )}
-                            </optgroup>
-                          `,
-                        )}
-                      </select>
-                      ${!wpSections.length
-                        ? html`<span class="meta" style=${{ marginTop: "0.25rem", display: "block" }}>
-                            Vispirms pievieno uzdevumus sadaļā „Darba plāna uzdevumi”.
-                          </span>`
+                    <div class="pv-edit-grid-row">
+                      ${showWorkPlan
+                        ? html`
+                            <label class="pv-edit-grid-field">
+                              Darba plāna uzdevums
+                              <select
+                                value=${draft.workPlanTaskId || ""}
+                                onChange=${(e) => patchDraft({ workPlanTaskId: e.target.value || null })}
+                              >
+                                <option value="">— Nav izvēlēts —</option>
+                                ${wpSections.map(
+                                  (sec) => html`
+                                    <optgroup key=${sec.id} label=${sec.title}>
+                                      ${sec.tasks.map(
+                                        (t) => html`<option key=${t.id} value=${t.id}>${t.title}</option>`,
+                                      )}
+                                    </optgroup>
+                                  `,
+                                )}
+                              </select>
+                              ${!wpSections.length
+                                ? html`<span class="meta" style=${{ marginTop: "0.25rem", display: "block" }}>
+                                    Vispirms pievieno uzdevumus sadaļā „Darba plāna uzdevumi”.
+                                  </span>`
+                                : null}
+                            </label>
+                          `
+                        : html`<div></div>`}
+                      ${showAssignees
+                        ? html`
+                            <div class="pv-edit-grid-field">
+                              <span class="pv-edit-field-label">Izpildītāji</span>
+                              ${ce(TeamAssigneesField, {
+                                assignees: draft.assignees,
+                                onChange: (next) => patchDraft({ assignees: next }),
+                              })}
+                            </div>
+                          `
                         : null}
-                    </label>
+                    </div>
                   `
                 : null}
             </div>
           </div>
-
-          ${showAssignees
-            ? html`
-                <div class="pv-edit-section">
-                  <h4>Izpildītāji</h4>
-                  ${ce(TeamAssigneesField, {
-                    assignees: draft.assignees,
-                    onChange: (next) => patchDraft({ assignees: next }),
-                  })}
-                </div>
-              `
-            : null}
 
           ${addToolbar}
 
