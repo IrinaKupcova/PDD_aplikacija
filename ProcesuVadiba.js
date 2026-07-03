@@ -2557,7 +2557,7 @@ ${body}
         display: grid; gap: 0.65rem;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       }
-      .pv-edit-grid label {
+      .pv-edit-grid label:not(.pv-assignee-row) {
         display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.78rem; color: var(--pv-muted);
       }
       .pv-edit-grid input, .pv-edit-grid textarea, .pv-edit-grid select {
@@ -2601,7 +2601,7 @@ ${body}
       }
       .pv-assignees-dropdown {
         position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; top: auto; z-index: 45;
-        display: grid; gap: 0.35rem; max-height: 220px; overflow: auto;
+        display: flex; flex-direction: column; gap: 0.35rem; max-height: 220px; overflow: auto;
         border: 1px solid #c5ebe3; border-radius: 10px; padding: 0.5rem 0.55rem;
         background: #fff; box-shadow: 0 -8px 28px rgba(1, 23, 29, 0.12);
       }
@@ -2611,9 +2611,9 @@ ${body}
         background: #f8fffd;
       }
       .pv-assignee-row {
-        display: flex; align-items: center; gap: 0.45rem;
+        display: flex; flex-direction: row; align-items: center; gap: 0.45rem;
         font-size: 0.86rem; color: #01171d; cursor: pointer; border-radius: 6px;
-        padding: 0.12rem 0.15rem;
+        padding: 0.12rem 0.15rem; width: 100%; box-sizing: border-box;
       }
       .pv-assignee-row:hover { background: #ecfdf5; }
       .pv-assignee-row input { margin: 0; accent-color: #047857; flex: 0 0 auto; }
