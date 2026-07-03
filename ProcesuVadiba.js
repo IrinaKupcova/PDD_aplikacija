@@ -30,6 +30,7 @@
   const PDD_SB_LS_KEY = "pdd_supabase_anon_key";
 
   const STATUS_PRESETS = ["Nav sākts", "Plānots", "Procesā", "Gaida atbildi", "Pabeigts", "Atcelts"];
+  const GANTT_FILTER_STATUSES = [...STATUS_PRESETS, "Kavē"];
   const REGISTRY_COLUMN_TYPES = [
     { id: "text", label: "Teksts" },
     { id: "date", label: "Datums" },
@@ -110,7 +111,7 @@
       (n, s) => n + (Array.isArray(s.tasks) ? s.tasks.length : 0),
       0,
     );
-    return roots * 10000 + phases.length * 100 + blocks * 10 + wpTasks * 5;
+    return roots * 10000 + phases.length * 100 + blocks * 10 + wpTasks * 5 + (Array.isArray(state?.notes) ? state.notes.length : 0);
   }
 
   function stateSummaryLabel(state) {
@@ -393,6 +394,7 @@
       activeToolId: null,
       overviewBlocks: [],
       workPlanSections: [],
+      notes: [],
       phases: [
         {
           id: phaseId,
@@ -464,7 +466,7 @@
   function migrateState(s) {
     if (!s || typeof s !== "object") return defaultState();
     if (!Array.isArray(s.phases)) return defaultState();
-    if (s.phases.length === 0 && !s.workPlanSections?.length && !s.updatedAt && !s.updated_at) {
+    if (s.phases.length === 0 && !s.workPlanSections?.length && !s.notes?.length && !s.updatedAt && !s.updated_at) {
       return defaultState();
     }
     for (const p of s.phases) {
@@ -475,8 +477,15 @@
     }
     s.overviewBlocks = Array.isArray(s.overviewBlocks) ? s.overviewBlocks : [];
     s.workPlanSections = tidyWorkPlanSections(s.workPlanSections);
+    s.notes = tidyNotes(s.notes);
     s.phases = migratePhasesTableBlocks(s.phases);
-    if (s.screen !== "overview" && s.screen !== "phase" && s.screen !== "workplan" && s.screen !== "history") {
+    if (
+      s.screen !== "overview" &&
+      s.screen !== "phase" &&
+      s.screen !== "workplan" &&
+      s.screen !== "history" &&
+      s.screen !== "notes"
+    ) {
       s.screen = "overview";
     }
     if (s.screen === "phase" && s.activePhaseId && !s.phases.some((p) => p.id === s.activePhaseId)) {
@@ -672,6 +681,24 @@
         title: String(t.title).trim() || "Jauns uzdevums",
       })),
     }));
+  }
+
+  function tidyNotes(notes) {
+    if (!Array.isArray(notes)) return [];
+    return notes
+      .map((n, i) => ({
+        id: n?.id || uid(),
+        title: String(n?.title ?? "").trim() || "Jauna piezīme",
+        body: String(n?.body ?? ""),
+        reminder: Boolean(n?.reminder),
+        order: Number.isFinite(n?.order) ? n.order : i,
+        updatedAt: String(n?.updatedAt || n?.updated_at || todayIso()),
+      }))
+      .sort((a, b) => a.order - b.order);
+  }
+
+  function notesHaveReminder(notes) {
+    return tidyNotes(notes).some((n) => n.reminder);
   }
 
   function normalizeWorkPlanSections(sections) {
@@ -1319,9 +1346,15 @@ tr.planned td{background:#f0fdf9}
 
     for (const m of months) {
       const x = trackX + (m.leftNum / 100) * trackW;
+      const w = Math.max(1, (m.widthNum / 100) * trackW);
       svg += `<line x1="${x}" y1="${topPad}" x2="${x}" y2="${H - 8}" stroke="#b8e0d6" stroke-width="1"/>`;
-      svg += `<text x="${x + 4}" y="${topPad + headerH - 18}" font-family="Segoe UI,system-ui,sans-serif" font-size="11" fill="#0f4d47">${escapeXml(m.month)}</text>`;
-      svg += `<text x="${x + 4}" y="${topPad + headerH - 6}" font-family="Segoe UI,system-ui,sans-serif" font-size="8" fill="#6b7280">${escapeXml(m.year)}</text>`;
+      if (m.showLabel !== false) {
+        const cx = x + w / 2;
+        svg += `<text x="${cx}" y="${topPad + headerH - 18}" text-anchor="middle" font-family="Segoe UI,system-ui,sans-serif" font-size="10" font-weight="600" fill="#0f4d47">${escapeXml(m.month)}</text>`;
+        if (m.showYear) {
+          svg += `<text x="${cx}" y="${topPad + headerH - 6}" text-anchor="middle" font-family="Segoe UI,system-ui,sans-serif" font-size="7" fill="#6b7280">${escapeXml(m.year)}</text>`;
+        }
+      }
     }
 
     svg += `<line x1="${trackX}" y1="${topPad + headerH}" x2="${W - 16}" y2="${topPad + headerH}" stroke="#c5ebe3" stroke-width="1"/>`;
@@ -1612,6 +1645,8 @@ ${body}
     return { min: dates[0], max: dates[dates.length - 1] };
   }
 
+  const GANTT_MONTH_SHORT = ["JAN", "FEB", "MAR", "APR", "MAI", "JŪN", "JŪL", "AUG", "SEP", "OKT", "NOV", "DEC"];
+
   function ganttMonthLabels(range) {
     const minT = new Date(range.min).getTime();
     const maxT = new Date(range.max).getTime();
@@ -1619,22 +1654,148 @@ ${body}
     const out = [];
     const d = new Date(range.min);
     d.setDate(1);
+    d.setHours(0, 0, 0, 0);
     while (d.getTime() <= maxT + 86400000 * 31) {
-      const leftNum = ((d.getTime() - minT) / spanMs) * 100;
-      if (leftNum <= 100) {
-        const month = d.toLocaleDateString("lv-LV", { month: "long" });
-        const year = String(d.getFullYear());
+      const startMs = Math.max(d.getTime(), minT);
+      const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+      const endMs = Math.min(next.getTime(), minT + spanMs);
+      const leftNum = ((startMs - minT) / spanMs) * 100;
+      const widthNum = Math.max(0, ((endMs - startMs) / spanMs) * 100);
+      if (widthNum > 0 && leftNum < 100) {
+        const monthIdx = d.getMonth();
+        const year = d.getFullYear();
         out.push({
-          left: `${Math.max(0, Math.min(100, leftNum))}%`,
-          leftNum: Math.max(0, Math.min(100, leftNum)),
-          month,
-          year,
-          label: `${month} ${year}`,
+          left: `${leftNum}%`,
+          width: `${widthNum}%`,
+          leftNum,
+          widthNum,
+          month: GANTT_MONTH_SHORT[monthIdx],
+          year: String(year),
+          showYear: true,
+          showLabel: widthNum >= 1.8,
+          label: `${GANTT_MONTH_SHORT[monthIdx]} ${year}`,
         });
       }
       d.setMonth(d.getMonth() + 1);
     }
     return out;
+  }
+
+  function rootPhaseId(phases, phaseId) {
+    let cur = phases.find((p) => p.id === phaseId);
+    while (cur?.parentId) {
+      const parent = phases.find((p) => p.id === cur.parentId);
+      if (!parent) break;
+      cur = parent;
+    }
+    return cur?.id || phaseId;
+  }
+
+  function phaseOverlapsFilterRange(phase, dateFrom, dateTo) {
+    if (!dateFrom && !dateTo) return true;
+    const from = dateFrom || "0000-01-01";
+    const to = dateTo || "9999-12-31";
+    const start = String(phase?.start || "").slice(0, 10);
+    const end = String(phase?.end || phase?.start || "").slice(0, 10);
+    if (!start && !end) return true;
+    const itemStart = start || end;
+    const itemEnd = end || start;
+    return itemStart <= to && itemEnd >= from;
+  }
+
+  function monthEndIso(yyyyMm) {
+    const parts = String(yyyyMm || "").match(/^(\d{4})-(\d{2})$/);
+    if (!parts) return "";
+    const y = Number(parts[1]);
+    const m = Number(parts[2]);
+    const last = new Date(y, m, 0).getDate();
+    return `${parts[1]}-${parts[2]}-${String(last).padStart(2, "0")}`;
+  }
+
+  function resolveTimeFilterRange(timeFilter) {
+    const mode = timeFilter?.mode || "";
+    if (mode === "year") {
+      const y = String(timeFilter?.year || "").trim();
+      if (!/^\d{4}$/.test(y)) return { dateFrom: "", dateTo: "" };
+      return { dateFrom: `${y}-01-01`, dateTo: `${y}-12-31` };
+    }
+    if (mode === "month") {
+      const month = String(timeFilter?.month || "").trim();
+      if (!/^\d{4}-\d{2}$/.test(month)) return { dateFrom: "", dateTo: "" };
+      return { dateFrom: `${month}-01`, dateTo: monthEndIso(month) };
+    }
+    if (mode === "period") {
+      return {
+        dateFrom: String(timeFilter?.dateFrom || "").slice(0, 10),
+        dateTo: String(timeFilter?.dateTo || "").slice(0, 10),
+      };
+    }
+    return { dateFrom: "", dateTo: "" };
+  }
+
+  function isTimeFilterActive(timeFilter) {
+    const { dateFrom, dateTo } = resolveTimeFilterRange(timeFilter);
+    return Boolean(dateFrom || dateTo);
+  }
+
+  function ganttFilterYearOptions(phases) {
+    const years = new Set();
+    const now = new Date().getFullYear();
+    years.add(now - 1);
+    years.add(now);
+    years.add(now + 1);
+    for (const p of phases || []) {
+      for (const d of [p.start, p.end]) {
+        const y = Number(String(d || "").slice(0, 4));
+        if (y >= 2000 && y <= 2100) years.add(y);
+      }
+    }
+    return [...years].sort((a, b) => a - b);
+  }
+
+  function timeFilterButtonLabel(timeFilter) {
+    const mode = timeFilter?.mode || "";
+    if (mode === "year" && timeFilter?.year) return `Laiks (${timeFilter.year})`;
+    if (mode === "month" && timeFilter?.month) return `Laiks (${timeFilter.month})`;
+    if (mode === "period") {
+      const from = String(timeFilter?.dateFrom || "").slice(0, 10);
+      const to = String(timeFilter?.dateTo || "").slice(0, 10);
+      if (from && to) return `Laiks (${from} — ${to})`;
+      if (from || to) return `Laiks (1)`;
+    }
+    return "Laiks";
+  }
+
+  function phaseMatchesStatusFilter(phase, phases, statuses) {
+    if (!statuses?.length) return true;
+    const status = String(phase?.status || "").trim().toLowerCase();
+    const tone = ganttBarClass(phase, phases);
+    return statuses.some((st) => {
+      const key = String(st || "").trim().toLowerCase();
+      if (!key) return false;
+      if (key === "kavē") return tone === "overdue";
+      if (status && status === key) return true;
+      if (key === "nav sākts") return tone === "scheduled" || /nav sākts/i.test(status);
+      if (key === "plānots") return tone === "planned";
+      if (key === "procesā") return tone === "active" || /procesā/i.test(status);
+      if (key === "gaida atbildi") return /gaida atbildi/i.test(status);
+      if (key === "pabeigts") return tone === "done";
+      if (key === "atcelts") return tone === "muted";
+      return false;
+    });
+  }
+
+  function filterGanttItems(items, phases, filters) {
+    const dateFrom = filters?.dateFrom || "";
+    const dateTo = filters?.dateTo || "";
+    const uzdevumsIds = filters?.uzdevumsIds || [];
+    const statuses = filters?.statuses || [];
+    return items.filter((p) => {
+      if (uzdevumsIds.length && !uzdevumsIds.includes(rootPhaseId(phases, p.id))) return false;
+      if (!phaseOverlapsFilterRange(p, dateFrom, dateTo)) return false;
+      if (!phaseMatchesStatusFilter(p, phases, statuses)) return false;
+      return true;
+    });
   }
 
   function phaseDraftFrom(phase, displayNum) {
@@ -1934,6 +2095,16 @@ ${body}
         border-radius: 4px; padding: 0.07rem 0.38rem; line-height: 1.25;
         box-shadow: 0 1px 2px rgba(185, 28, 28, 0.35);
       }
+      .pv-reminder-badge {
+        display: inline-block; font-size: 0.58rem; font-weight: 700;
+        letter-spacing: 0.02em; color: #fff; background: #dc2626;
+        border-radius: 4px; padding: 0.07rem 0.38rem; line-height: 1.25;
+        box-shadow: 0 1px 2px rgba(185, 28, 28, 0.35);
+        white-space: nowrap;
+      }
+      .pv-nav-btn-row {
+        display: flex; align-items: center; justify-content: space-between; gap: 0.35rem; width: 100%;
+      }
       .pv-phase-item {
         display: flex; align-items: flex-start; gap: 0.35rem;
         width: 100%; border: 0; background: transparent; text-align: left;
@@ -1973,8 +2144,59 @@ ${body}
       .pv-card { max-width: none; }
       .pv-content-block-card { max-width: none; }
       .pv-screen-overview { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-      .pv-screen-overview .pv-card { flex: 1; display: flex; flex-direction: column; margin-bottom: 0; min-height: 0; }
-      .pv-screen-overview .pv-gantt-global { flex: 1; min-height: 320px; }
+      .pv-gantt-overview > .pv-card:not(.pv-gantt-filters-card) {
+        flex: 1; display: flex; flex-direction: column; margin-bottom: 0; min-height: 0;
+      }
+      .pv-gantt-overview .pv-gantt-global { flex: 1; min-height: 320px; }
+      .pv-gantt-overview { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: 0.55rem; }
+      .pv-gantt-filters-card { margin-bottom: 0; padding: 0.65rem 0.75rem; flex: 0 0 auto; }
+      .pv-gantt-filters-head {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem;
+        justify-content: space-between; margin-bottom: 0.45rem;
+      }
+      .pv-gantt-filters-title { margin: 0; font-size: 0.92rem; color: #01171d; }
+      .pv-gantt-filter-toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+      .pv-gantt-filter-drop { position: relative; }
+      .pv-gantt-filter-btn {
+        padding: 0.38rem 0.72rem; border: 1px solid #c5ebe3; border-radius: 8px;
+        background: #fff; font: inherit; font-size: 0.8rem; cursor: pointer; color: #1f4d47;
+      }
+      .pv-gantt-filter-btn:hover { border-color: #0d9488; background: #f8fffd; }
+      .pv-gantt-filter-btn.is-active { border-color: #047857; background: #e8f8f3; font-weight: 600; color: #01171d; }
+      .pv-gantt-filter-btn.is-open { border-color: #047857; box-shadow: 0 0 0 2px rgba(4, 120, 87, 0.15); }
+      .pv-gantt-filter-menu {
+        position: absolute; top: calc(100% + 4px); left: 0; z-index: 50;
+        min-width: 240px; max-width: 340px; max-height: 300px; overflow: auto;
+        padding: 0.55rem 0.6rem; background: #fff; border: 1px solid #c5ebe3;
+        border-radius: 10px; box-shadow: 0 10px 28px rgba(1, 23, 29, 0.14);
+      }
+      .pv-gantt-filter-menu-dates { display: flex; flex-direction: column; gap: 0.45rem; }
+      .pv-gantt-filter-menu-dates label {
+        display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.72rem; color: #1f4d47;
+      }
+      .pv-gantt-filter-menu-dates input[type="date"],
+      .pv-gantt-filter-menu-dates input[type="month"],
+      .pv-gantt-filter-menu-dates select {
+        padding: 0.32rem 0.42rem; border: 1px solid #c5ebe3; border-radius: 8px; font: inherit; font-size: 0.8rem;
+      }
+      .pv-gantt-time-modes {
+        display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.5rem;
+      }
+      .pv-gantt-time-mode-btn {
+        padding: 0.28rem 0.55rem; border: 1px solid #c5ebe3; border-radius: 999px;
+        background: #fff; font: inherit; font-size: 0.74rem; cursor: pointer; color: #1f4d47;
+      }
+      .pv-gantt-time-mode-btn:hover { border-color: #0d9488; background: #f8fffd; }
+      .pv-gantt-time-mode-btn.is-on { border-color: #047857; background: #e8f8f3; font-weight: 600; }
+      .pv-gantt-filter-menu-item {
+        display: flex; align-items: flex-start; gap: 0.4rem; padding: 0.38rem 0.3rem;
+        font-size: 0.78rem; color: #1f4d47; cursor: pointer; border-radius: 6px;
+      }
+      .pv-gantt-filter-menu-item:hover { background: #f0fdf9; }
+      .pv-gantt-filter-menu-item input { margin: 0.12rem 0 0; accent-color: #047857; flex: 0 0 auto; }
+      .pv-gantt-filter-menu-item span { line-height: 1.35; }
+      .pv-gantt-filter-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; }
+      .pv-gantt-filter-summary { margin: 0; font-size: 0.78rem; color: #0f4d47; font-weight: 600; }
       .pv-gantt-legend { display: flex; flex-wrap: wrap; gap: 0.85rem 1.1rem; margin: 0 0 0.65rem; align-items: center; }
       .pv-legend-item {
         display: inline-flex; align-items: center; gap: 0.35rem;
@@ -2046,19 +2268,20 @@ ${body}
         border-bottom: 1px solid #e0f2ee; font-size: 0.82rem;
       }
       .pv-gantt-months {
-        position: relative; height: 34px; margin-bottom: 0.25rem;
-        border-bottom: 1px dashed #c5ebe3; background: #f8fffd;
+        position: relative; height: 30px; margin-bottom: 0.25rem;
+        border-bottom: 1px dashed #c5ebe3; background: #f8fffd; overflow: hidden;
       }
-      .pv-gantt-month-tick {
-        position: absolute; top: 0; bottom: 0;
-        border-left: 1px solid #b8e0d6; padding-left: 0.3rem;
-        display: flex; flex-direction: column; justify-content: flex-end;
-        padding-bottom: 2px; line-height: 1.05;
+      .pv-gantt-month-seg {
+        position: absolute; top: 0; bottom: 0; box-sizing: border-box;
+        border-left: 1px solid #b8e0d6;
+        display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+        padding: 0 1px 2px; line-height: 1.05; overflow: hidden;
       }
       .pv-gantt-month-name {
-        font-size: 0.68rem; color: #0f4d47; white-space: nowrap; text-transform: lowercase;
+        font-size: 0.6rem; font-weight: 700; color: #0f4d47; letter-spacing: 0.03em;
+        white-space: nowrap;
       }
-      .pv-gantt-month-year { font-size: 0.55rem; color: #6b7280; }
+      .pv-gantt-month-year { font-size: 0.5rem; color: #6b7280; white-space: nowrap; }
       .pv-gantt-grid-lines {
         position: absolute; inset: 0; pointer-events: none; z-index: 0;
       }
@@ -2186,6 +2409,33 @@ ${body}
       .pv-status-pill.cancelled { background: #9ca3af; color: #1f2937; }
       .pv-status-pill.notstarted { background: #f87171; color: #7f1d1d; }
       .pv-empty { color: var(--pv-muted); text-align: center; padding: 1.5rem; font-size: 0.88rem; }
+      .pv-notes-screen { max-width: none; }
+      .pv-notes-list { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.65rem; }
+      .pv-note-sheet {
+        border: 1px solid #c5ebe3; border-radius: 12px; background: #fff;
+        padding: 0.7rem 0.8rem; box-shadow: 0 2px 8px rgba(13, 148, 136, 0.06);
+      }
+      .pv-note-sheet.has-reminder { border-color: #fca5a5; box-shadow: 0 2px 10px rgba(220, 38, 38, 0.1); }
+      .pv-note-head {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.65rem; margin-bottom: 0.5rem;
+      }
+      .pv-note-title {
+        flex: 1 1 180px; min-width: 0; border: 1px solid #c5ebe3; border-radius: 8px;
+        padding: 0.42rem 0.55rem; font: inherit; font-size: 0.92rem; font-weight: 600; color: #01171d;
+      }
+      .pv-note-body {
+        width: 100%; box-sizing: border-box; min-height: 120px; resize: vertical;
+        border: 1px solid #c5ebe3; border-radius: 8px; padding: 0.5rem 0.6rem;
+        font: inherit; font-size: 0.86rem; line-height: 1.45; color: #01171d; background: #fafefd;
+      }
+      .pv-note-foot {
+        display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+        gap: 0.45rem; margin-top: 0.55rem;
+      }
+      .pv-note-reminder-check {
+        display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: #1f4d47; cursor: pointer;
+      }
+      .pv-note-reminder-check input { margin: 0; accent-color: #dc2626; }
       .pv-phase-meta-grid {
         display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; margin-bottom: 1rem;
       }
@@ -3748,7 +3998,7 @@ ${body}
       const items = [
         { cls: "active", label: "Procesā / izpildē" },
         { cls: "done", label: "Pabeigts" },
-        { cls: "scheduled", label: "Vēl nav izpildes laiks" },
+        { cls: "scheduled", label: "Nav sākts" },
         { cls: "overdue", label: "Kavē" },
         { cls: "muted", label: "Atcelts" },
         { cls: "planned", label: "Plānots" },
@@ -3813,9 +4063,13 @@ ${body}
                 <div class="pv-gantt-months">
                   ${months.map(
                     (m, i) => html`
-                      <div class="pv-gantt-month-tick" key=${i} style=${{ left: m.left }}>
-                        <span class="pv-gantt-month-name">${m.month}</span>
-                        <span class="pv-gantt-month-year">${m.year}</span>
+                      <div class="pv-gantt-month-seg" key=${i} style=${{ left: m.left, width: m.width }}>
+                        ${m.showLabel
+                          ? html`
+                              <span class="pv-gantt-month-name">${m.month}</span>
+                              ${m.showYear ? html`<span class="pv-gantt-month-year">${m.year}</span>` : null}
+                            `
+                          : null}
                       </div>
                     `,
                   )}
@@ -3874,16 +4128,268 @@ ${body}
     }
 
     function GlobalGantt({ phases, onGoPhase, onPatchPhase }) {
-      const items = flattenPhasesWithNumbers(phases).filter((p) => p.kind !== "Apakšposms");
-      return ce(GanttChart, {
-        items,
-        onGoPhase,
-        onPatchPhase,
-        title: `Kopējais ${GANTT_CHART_LABEL} — visi uzdevumi un posmi`,
-        legendSwatches: true,
-        fillHeight: true,
-        hideKindTag: true,
-      });
+      const allItems = useMemo(
+        () => flattenPhasesWithNumbers(phases).filter((p) => p.kind !== "Apakšposms"),
+        [phases],
+      );
+      const uzdevumi = useMemo(
+        () => phases.filter((p) => !p.parentId).sort((a, b) => a.order - b.order),
+        [phases],
+      );
+      const [timeMode, setTimeMode] = useState("");
+      const [filterYear, setFilterYear] = useState("");
+      const [filterMonth, setFilterMonth] = useState("");
+      const [periodFrom, setPeriodFrom] = useState("");
+      const [periodTo, setPeriodTo] = useState("");
+      const [uzIds, setUzIds] = useState([]);
+      const [statIds, setStatIds] = useState([]);
+      const [openPanel, setOpenPanel] = useState(null);
+      const filtersRef = useRef(null);
+
+      const yearOptions = useMemo(() => ganttFilterYearOptions(phases), [phases]);
+      const timeFilter = useMemo(
+        () => ({
+          mode: timeMode,
+          year: filterYear,
+          month: filterMonth,
+          dateFrom: periodFrom,
+          dateTo: periodTo,
+        }),
+        [timeMode, filterYear, filterMonth, periodFrom, periodTo],
+      );
+      const timeRange = useMemo(() => resolveTimeFilterRange(timeFilter), [timeFilter]);
+      const hasTimeFilter = isTimeFilterActive(timeFilter);
+      const hasFilters = Boolean(hasTimeFilter || uzIds.length || statIds.length);
+
+      useEffect(() => {
+        if (!openPanel) return;
+        function onDocClick(e) {
+          if (filtersRef.current && !filtersRef.current.contains(e.target)) setOpenPanel(null);
+        }
+        document.addEventListener("mousedown", onDocClick);
+        return () => document.removeEventListener("mousedown", onDocClick);
+      }, [openPanel]);
+
+      const items = useMemo(
+        () =>
+          filterGanttItems(allItems, phases, {
+            dateFrom: timeRange.dateFrom,
+            dateTo: timeRange.dateTo,
+            uzdevumsIds: uzIds,
+            statuses: statIds,
+          }),
+        [allItems, phases, timeRange, uzIds, statIds],
+      );
+      const summary = useMemo(() => {
+        if (!items.length) return { count: 0, avg: 0 };
+        const sum = items.reduce((acc, p) => acc + resolvePhaseProgress(p, phases), 0);
+        return { count: items.length, avg: Math.round(sum / items.length) };
+      }, [items, phases]);
+
+      function togglePanel(key) {
+        setOpenPanel((prev) => (prev === key ? null : key));
+      }
+      function toggleUz(id) {
+        setUzIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+      }
+      function toggleStat(s) {
+        setStatIds((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
+      }
+      function setTimeFilterMode(mode) {
+        setTimeMode(mode);
+        if (mode !== "year") setFilterYear("");
+        if (mode !== "month") setFilterMonth("");
+        if (mode !== "period") {
+          setPeriodFrom("");
+          setPeriodTo("");
+        }
+      }
+      function clearFilters() {
+        setTimeMode("");
+        setFilterYear("");
+        setFilterMonth("");
+        setPeriodFrom("");
+        setPeriodTo("");
+        setUzIds([]);
+        setStatIds([]);
+        setOpenPanel(null);
+      }
+
+      function filterBtnLabel(base, count) {
+        return count ? `${base} (${count})` : base;
+      }
+
+      return html`
+        <div class="pv-gantt-overview">
+          <div class="pv-card pv-gantt-filters-card" ref=${filtersRef}>
+            <div class="pv-gantt-filters-head">
+              <h3 class="pv-gantt-filters-title">Filtrēšana</h3>
+              <div class="pv-gantt-filter-toolbar">
+                <div class="pv-gantt-filter-drop">
+                  <button
+                    type="button"
+                    class=${`pv-gantt-filter-btn ${hasTimeFilter ? "is-active" : ""} ${openPanel === "time" ? "is-open" : ""}`}
+                    onClick=${() => togglePanel("time")}
+                  >
+                    ${hasTimeFilter ? timeFilterButtonLabel(timeFilter) : "Laiks"}
+                  </button>
+                  ${openPanel === "time"
+                    ? html`
+                        <div class="pv-gantt-filter-menu">
+                          <div class="pv-gantt-time-modes">
+                            <button
+                              type="button"
+                              class=${`pv-gantt-time-mode-btn ${timeMode === "year" ? "is-on" : ""}`}
+                              onClick=${() => setTimeFilterMode("year")}
+                            >
+                              Gads
+                            </button>
+                            <button
+                              type="button"
+                              class=${`pv-gantt-time-mode-btn ${timeMode === "month" ? "is-on" : ""}`}
+                              onClick=${() => setTimeFilterMode("month")}
+                            >
+                              Mēnesis
+                            </button>
+                            <button
+                              type="button"
+                              class=${`pv-gantt-time-mode-btn ${timeMode === "period" ? "is-on" : ""}`}
+                              onClick=${() => setTimeFilterMode("period")}
+                            >
+                              Periods
+                            </button>
+                          </div>
+                          ${timeMode === "year"
+                            ? html`
+                                <div class="pv-gantt-filter-menu-dates">
+                                  <label>
+                                    Gads
+                                    <select value=${filterYear} onChange=${(e) => setFilterYear(e.target.value)}>
+                                      <option value="">— izvēlies —</option>
+                                      ${yearOptions.map(
+                                        (y) => html`
+                                          <option value=${String(y)} key=${y}>${y}</option>
+                                        `,
+                                      )}
+                                    </select>
+                                  </label>
+                                </div>
+                              `
+                            : null}
+                          ${timeMode === "month"
+                            ? html`
+                                <div class="pv-gantt-filter-menu-dates">
+                                  <label>
+                                    Mēnesis
+                                    <input
+                                      type="month"
+                                      value=${filterMonth}
+                                      onInput=${(e) => setFilterMonth(e.target.value)}
+                                    />
+                                  </label>
+                                </div>
+                              `
+                            : null}
+                          ${timeMode === "period"
+                            ? html`
+                                <div class="pv-gantt-filter-menu-dates">
+                                  <label>
+                                    No
+                                    <input type="date" value=${periodFrom} onInput=${(e) => setPeriodFrom(e.target.value)} />
+                                  </label>
+                                  <label>
+                                    Līdz
+                                    <input type="date" value=${periodTo} onInput=${(e) => setPeriodTo(e.target.value)} />
+                                  </label>
+                                </div>
+                              `
+                            : null}
+                        </div>
+                      `
+                    : null}
+                </div>
+                ${uzdevumi.length
+                  ? html`
+                      <div class="pv-gantt-filter-drop">
+                        <button
+                          type="button"
+                          class=${`pv-gantt-filter-btn ${uzIds.length ? "is-active" : ""} ${openPanel === "pasakums" ? "is-open" : ""}`}
+                          onClick=${() => togglePanel("pasakums")}
+                        >
+                          ${filterBtnLabel("Pasākums", uzIds.length)}
+                        </button>
+                        ${openPanel === "pasakums"
+                          ? html`
+                              <div class="pv-gantt-filter-menu">
+                                ${uzdevumi.map(
+                                  (u) => html`
+                                    <label class="pv-gantt-filter-menu-item" key=${u.id}>
+                                      <input
+                                        type="checkbox"
+                                        checked=${uzIds.includes(u.id)}
+                                        onChange=${() => toggleUz(u.id)}
+                                      />
+                                      <span>${u.title}</span>
+                                    </label>
+                                  `,
+                                )}
+                              </div>
+                            `
+                          : null}
+                      </div>
+                    `
+                  : null}
+                <div class="pv-gantt-filter-drop">
+                  <button
+                    type="button"
+                    class=${`pv-gantt-filter-btn ${statIds.length ? "is-active" : ""} ${openPanel === "status" ? "is-open" : ""}`}
+                    onClick=${() => togglePanel("status")}
+                  >
+                    ${filterBtnLabel("Statuss", statIds.length)}
+                  </button>
+                  ${openPanel === "status"
+                    ? html`
+                        <div class="pv-gantt-filter-menu">
+                          ${GANTT_FILTER_STATUSES.map(
+                            (s) => html`
+                              <label class="pv-gantt-filter-menu-item" key=${s}>
+                                <input
+                                  type="checkbox"
+                                  checked=${statIds.includes(s)}
+                                  onChange=${() => toggleStat(s)}
+                                />
+                                <span>${s}</span>
+                              </label>
+                            `,
+                          )}
+                        </div>
+                      `
+                    : null}
+                </div>
+                ${hasFilters
+                  ? html`
+                      <button type="button" class="pv-btn danger" onClick=${clearFilters}>Notīrīt filtru</button>
+                    `
+                  : null}
+              </div>
+            </div>
+            <div class="pv-gantt-filter-actions">
+              <p class="pv-gantt-filter-summary">
+                ${hasFilters ? "Filtrēts" : "Kopā"}: ${summary.count} elementi · Vidējais progress: ${summary.avg}%
+              </p>
+            </div>
+          </div>
+          ${ce(GanttChart, {
+            items,
+            onGoPhase,
+            onPatchPhase,
+            title: `Kopējais ${GANTT_CHART_LABEL} — visi uzdevumi un posmi`,
+            legendSwatches: true,
+            fillHeight: true,
+            hideKindTag: true,
+          })}
+        </div>
+      `;
     }
 
     function PhaseGantt({ phase, phases, onGoPhase, onPatchPhase }) {
@@ -4260,6 +4766,101 @@ ${body}
               <button type="button" class="pv-btn" onClick=${onGoOverview}>Atpakaļ</button>
               <button type="button" class="pv-btn" onClick=${() => loadHistory(page)}>Atjaunot sarakstu</button>
             </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function OverdueBadge() {
+      return html`<span class="pv-overdue-badge">Kavēts</span>`;
+    }
+
+    function ReminderBadge() {
+      return html`<span class="pv-reminder-badge">Atgādinājums</span>`;
+    }
+
+    function NotesScreen({ notes, onChange }) {
+      const list = useMemo(() => tidyNotes(notes), [notes]);
+
+      function patchNotes(next) {
+        onChange(tidyNotes(next));
+      }
+
+      function addNote() {
+        patchNotes([
+          ...list,
+          {
+            id: uid(),
+            title: "Jauna piezīme",
+            body: "",
+            reminder: false,
+            order: list.length,
+            updatedAt: todayIso(),
+          },
+        ]);
+      }
+
+      function updateNote(id, patch) {
+        patchNotes(list.map((n) => (n.id === id ? { ...n, ...patch, updatedAt: todayIso() } : n)));
+      }
+
+      function deleteNote(id) {
+        const note = list.find((n) => n.id === id);
+        if (!note) return;
+        if (!askConfirm(`Dzēst piezīmi „${note.title}"?`)) return;
+        patchNotes(list.filter((n) => n.id !== id).map((n, i) => ({ ...n, order: i })));
+      }
+
+      return html`
+        <div class="pv-notes-screen">
+          <div class="pv-card">
+            <div class="pv-toolbar">
+              <h3 style=${{ margin: 0, display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap" }}>
+                Piezīmes
+                ${notesHaveReminder(list) ? ce(ReminderBadge) : null}
+              </h3>
+              <button type="button" class="pv-btn primary" onClick=${addNote}>+ Jauna piezīme</button>
+            </div>
+            ${list.length
+              ? html`
+                  <div class="pv-notes-list">
+                    ${list.map(
+                      (note) => html`
+                        <article class=${`pv-note-sheet ${note.reminder ? "has-reminder" : ""}`} key=${note.id}>
+                          <div class="pv-note-head">
+                            <input
+                              class="pv-note-title"
+                              value=${note.title}
+                              placeholder="Nosaukums"
+                              onInput=${(e) => updateNote(note.id, { title: e.target.value })}
+                            />
+                            ${note.reminder ? ce(ReminderBadge) : null}
+                            <button type="button" class="pv-btn danger" onClick=${() => deleteNote(note.id)}>
+                              Dzēst
+                            </button>
+                          </div>
+                          <textarea
+                            class="pv-note-body"
+                            placeholder="Piezīme, atgādinājums vai ieraksts…"
+                            value=${note.body}
+                            onInput=${(e) => updateNote(note.id, { body: e.target.value })}
+                          ></textarea>
+                          <div class="pv-note-foot">
+                            <label class="pv-note-reminder-check">
+                              <input
+                                type="checkbox"
+                                checked=${note.reminder}
+                                onChange=${(e) => updateNote(note.id, { reminder: e.target.checked })}
+                              />
+                              <span>Atgādinājums</span>
+                            </label>
+                          </div>
+                        </article>
+                      `,
+                    )}
+                  </div>
+                `
+              : html`<p class="pv-empty">Nav piezīmju. Pievieno jaunu lapiņu ar pogu augšā.</p>`}
           </div>
         </div>
       `;
@@ -4771,6 +5372,8 @@ ${body}
 
       const phases = state.phases || [];
       const workPlanSections = state.workPlanSections || [];
+      const notes = state.notes || [];
+      const hasNoteReminders = useMemo(() => notesHaveReminder(notes), [notes]);
       const activePhase = useMemo(
         () => phases.find((p) => p.id === state.activePhaseId) || null,
         [phases, state.activePhaseId],
@@ -4823,6 +5426,16 @@ ${body}
         }));
       }, [setState]);
 
+      const goNotes = useCallback(() => {
+        setState((p) => ({
+          ...p,
+          screen: "notes",
+          activePhaseId: null,
+          activeToolId: null,
+          phaseEditOpen: false,
+        }));
+      }, [setState]);
+
       const restoreHistory = useCallback(
         async (historyId) => {
           const sb = root.__PDD_SUPABASE__ ?? null;
@@ -4845,6 +5458,13 @@ ${body}
               ? clearWorkPlanTaskFromPhases(prev.phases, clearedTaskIds)
               : prev.phases,
           }));
+        },
+        [setState],
+      );
+
+      const setNotes = useCallback(
+        (nextNotes) => {
+          setState((prev) => ({ ...prev, notes: tidyNotes(nextNotes) }));
         },
         [setState],
       );
@@ -4970,6 +5590,16 @@ ${body}
               </button>
               <button
                 type="button"
+                class=${`pv-nav-btn ${state.screen === "notes" ? "active" : ""}`}
+                onClick=${goNotes}
+              >
+                <span class="pv-nav-btn-row">
+                  <span>📝 Piezīmes</span>
+                  ${hasNoteReminders ? ce(ReminderBadge) : null}
+                </span>
+              </button>
+              <button
+                type="button"
                 class=${`pv-nav-btn ${state.screen === "history" ? "active" : ""}`}
                 onClick=${goHistory}
               >
@@ -4989,6 +5619,11 @@ ${body}
                       phases,
                       onSectionsChange: setWorkPlanSections,
                     })
+                  : state.screen === "notes"
+                    ? ce(NotesScreen, {
+                        notes,
+                        onChange: setNotes,
+                      })
                   : state.screen === "history"
                     ? ce(HistoryScreen, {
                         onGoOverview: goOverview,
