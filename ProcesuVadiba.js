@@ -507,6 +507,55 @@
     }
   }
 
+  let hydrateTeamUsersPromise = null;
+
+  async function hydrateTeamUsersForPv() {
+    const cached = getTeamUsers();
+    if (cached.length) return cached;
+    if (hydrateTeamUsersPromise) return hydrateTeamUsersPromise;
+
+    hydrateTeamUsersPromise = (async () => {
+      try {
+        const sb = root.__PDD_SUPABASE__ ?? (await ensureSupabaseClient());
+        if (sb && typeof root.__PDD_ENSURE_DB_SESSION__ === "function") {
+          try {
+            await root.__PDD_ENSURE_DB_SESSION__();
+          } catch {
+            /* ignore */
+          }
+        }
+        if (sb) {
+          let rows = null;
+          const r1 = await sb.from("users").select("*").order("Vārds uzvārds", { ascending: true });
+          if (!r1.error && Array.isArray(r1.data) && r1.data.length) rows = r1.data;
+          if (!rows?.length) {
+            const r2 = await sb.from("users").select("*");
+            if (!r2.error && Array.isArray(r2.data) && r2.data.length) rows = r2.data;
+          }
+          if (!rows?.length) {
+            const r3 = await sb.from("profiles").select("*");
+            if (!r3.error && Array.isArray(r3.data) && r3.data.length) {
+              rows = [...r3.data].sort((a, b) =>
+                personLabel(a).localeCompare(personLabel(b), "lv"),
+              );
+            }
+          }
+          if (rows?.length) {
+            if (root.KOMANDA?.mergeTeamUsersCache) root.KOMANDA.mergeTeamUsersCache(rows);
+            else if (root.KOMANDA?.saveTeamUsers) root.KOMANDA.saveTeamUsers(rows);
+          }
+        }
+      } catch (e) {
+        console.warn("[Procesu vadība] komandas saraksta ielāde", e);
+      }
+      return getTeamUsers();
+    })().finally(() => {
+      hydrateTeamUsersPromise = null;
+    });
+
+    return hydrateTeamUsersPromise;
+  }
+
   function personLabel(u) {
     if (!u) return "";
     return String(u["Vārds uzvārds"] ?? u.full_name ?? u.email ?? "").trim();
@@ -2460,19 +2509,21 @@ ${body}
       .pv-choice-opt-row { display: flex; gap: 0.25rem; align-items: center; margin-bottom: 0.25rem; }
       .pv-choice-opt-row input { flex: 1; min-width: 0; }
       .pv-cell-multiline { white-space: pre-wrap; font-size: 0.82rem; }
-      .pv-multiline-cell { position: relative; min-width: 0; }
+      .pv-multiline-cell { position: relative; min-width: 0; display: flex; align-items: flex-start; gap: 0.2rem; }
       .pv-multiline-cell textarea {
-        width: 100%; box-sizing: border-box; padding-right: 1.85rem;
+        flex: 1; min-width: 0;
+        width: 100%; box-sizing: border-box;
       }
       .pv-multiline-cell-preview {
+        flex: 1; min-width: 0;
         display: block; max-height: 4.5em; overflow: hidden; white-space: pre-wrap;
-        font-size: 0.82rem; line-height: 1.35; padding-right: 1.85rem; color: #01171d;
+        font-size: 0.82rem; line-height: 1.35; color: #01171d;
       }
       .pv-cell-expand-btn {
-        position: absolute; top: 4px; right: 4px; z-index: 2;
+        flex-shrink: 0; align-self: flex-start; margin-top: 1px;
         opacity: 0; pointer-events: none; transition: opacity 0.15s;
         border: 1px solid #c5ebe3; background: #fff; border-radius: 6px;
-        padding: 0.12rem 0.38rem; font-size: 0.72rem; cursor: pointer; color: #065f46;
+        padding: 0.12rem 0.32rem; font-size: 0.72rem; cursor: pointer; color: #065f46;
         box-shadow: 0 2px 6px rgba(0,0,0,0.08);
       }
       .pv-multiline-cell:hover .pv-cell-expand-btn,
@@ -3604,7 +3655,14 @@ ${body}
       const [optionsEditColId, setOptionsEditColId] = useState("");
       const [tableStructureEdit, setTableStructureEdit] = useState(false);
       const tableSaveTimerRef = useRef(null);
+      const tableBlurSaveTimerRef = useRef(null);
+      const draftRef = useRef(draft);
+      const blockRootRef = useRef(null);
       const isTableQuick = isTable && tableQuickEdit;
+
+      useEffect(() => {
+        draftRef.current = draft;
+      }, [draft]);
 
       useEffect(() => {
         if (!tableQuickEdit && !editing) setDraft(blockDraftFrom(block));
@@ -3621,6 +3679,7 @@ ${body}
       useEffect(
         () => () => {
           if (tableSaveTimerRef.current) clearTimeout(tableSaveTimerRef.current);
+          if (tableBlurSaveTimerRef.current) clearTimeout(tableBlurSaveTimerRef.current);
         },
         [],
       );
@@ -3647,7 +3706,18 @@ ${body}
       function flushTableSave() {
         if (!isTableQuick) return;
         clearTimeout(tableSaveTimerRef.current);
-        onSave(normalizeTableBlock(draft));
+        clearTimeout(tableBlurSaveTimerRef.current);
+        onSave(normalizeTableBlock(draftRef.current));
+      }
+
+      function scheduleFlushTableSave() {
+        if (!isTableQuick) return;
+        clearTimeout(tableBlurSaveTimerRef.current);
+        tableBlurSaveTimerRef.current = setTimeout(() => {
+          const active = document.activeElement;
+          if (active && blockRootRef.current?.contains(active)) return;
+          flushTableSave();
+        }, 120);
       }
 
       async function onPickFile(kind, e) {
@@ -3947,7 +4017,7 @@ ${body}
       const exportBlock = isTableQuick || editing ? draft : block;
 
       return html`
-        <div class=${`pv-content-block ${isTableQuick ? "is-table-quick" : editing ? "is-editing" : "is-view"}`}>
+        <div ref=${blockRootRef} class=${`pv-content-block ${isTableQuick ? "is-table-quick" : editing ? "is-editing" : "is-view"}`}>
           <div class="pv-content-block-head">
             <span class="pv-content-preview-type">${contentBlockTypeLabel(block.type)}</span>
             ${isTableQuick || editing
@@ -3956,7 +4026,7 @@ ${body}
                     type="text"
                     value=${activeBlock.title || ""}
                     onInput=${(e) => patch({ title: e.target.value })}
-                    onBlur=${isTableQuick ? flushTableSave : undefined}
+                    onBlur=${isTableQuick ? scheduleFlushTableSave : undefined}
                     placeholder="Bloka nosaukums…"
                   />
                 `
@@ -3969,7 +4039,7 @@ ${body}
             value: (isTableQuick || editing ? editBlock : viewBlock).executionInfo || "",
             editable: isTableQuick || editing,
             onChange: (v) => patch({ executionInfo: v }),
-            onBlur: isTableQuick ? flushTableSave : undefined,
+            onBlur: isTableQuick ? scheduleFlushTableSave : undefined,
           })}
 
           <div class="pv-content-block-footer">
@@ -4709,19 +4779,50 @@ ${body}
 
     function TeamAssigneesField({ assignees, onChange }) {
       const [team, setTeam] = useState(() => getTeamUsers());
+      const [teamLoading, setTeamLoading] = useState(() => !getTeamUsers().length);
       const [open, setOpen] = useState(false);
       const closeTimerRef = useRef(null);
       const selected = normalizeAssignees(assignees, team);
       const selectedIdSet = new Set(selected.map((e) => e.id));
 
       useEffect(() => {
-        const refresh = () => setTeam(getTeamUsers());
-        refresh();
+        let cancelled = false;
+
+        async function ensureTeam() {
+          const current = getTeamUsers();
+          if (current.length) {
+            if (!cancelled) {
+              setTeam(current);
+              setTeamLoading(false);
+            }
+            return;
+          }
+          if (!cancelled) setTeamLoading(true);
+          const list = await hydrateTeamUsersForPv();
+          if (!cancelled) {
+            setTeam(list);
+            setTeamLoading(false);
+          }
+        }
+
+        function refresh() {
+          const list = getTeamUsers();
+          setTeam(list);
+          if (!list.length) void ensureTeam();
+          else setTeamLoading(false);
+        }
+
+        void ensureTeam();
         if (typeof window !== "undefined") {
           window.addEventListener("pdd:komanda-team-users-changed", refresh);
-          return () => window.removeEventListener("pdd:komanda-team-users-changed", refresh);
+          return () => {
+            cancelled = true;
+            window.removeEventListener("pdd:komanda-team-users-changed", refresh);
+          };
         }
-        return undefined;
+        return () => {
+          cancelled = true;
+        };
       }, []);
 
       useEffect(
@@ -4748,10 +4849,28 @@ ${body}
         else onChange([...selected, { id, name }]);
       }
 
+      if (teamLoading) {
+        return html`<p class="pv-assignees-empty">Ielādē komandas sarakstu…</p>`;
+      }
+
       if (!team.length) {
         return html`
           <p class="pv-assignees-empty">
-            Komandas saraksts nav pieejams — vispirms pievieno dalībniekus sadaļā Komanda.
+            Komandas saraksts nav ielādējies.
+            <button
+              type="button"
+              class="pv-btn ghost"
+              style=${{ marginLeft: "0.35rem", padding: "0.2rem 0.45rem", fontSize: "0.76rem" }}
+              onClick=${() => {
+                setTeamLoading(true);
+                void hydrateTeamUsersForPv().then((list) => {
+                  setTeam(list);
+                  setTeamLoading(false);
+                });
+              }}
+            >
+              Mēģināt vēlreiz
+            </button>
           </p>
         `;
       }
