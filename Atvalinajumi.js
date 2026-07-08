@@ -2281,7 +2281,7 @@
             <h2>Atvaļinājumu grafiks</h2>
             <p>
               Ieplānotie atvaļinājumi sinhronizēti ar datubāzi. <strong>Labot</strong>, <strong>dzēst</strong> un
-              <strong>Atspoguļot kalendārī</strong> vari tikai savus ierakstus — citu darbinieku ierakstus ne.
+              <strong>Atspoguļot kalendārī</strong> vari tikai savus ierakstus — citu darbinieku ierakstus nē.
             </p>
           </div>
           <div class="atv-toolbar">
