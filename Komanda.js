@@ -222,7 +222,7 @@
 
   function isGlobalActorAdmin() {
     const r = String(globalThis.__PDD_ACTOR_ROLE__ ?? "").trim().toLowerCase();
-    return r === "admin";
+    return r === "admin" || r === "manager" || r === "vaditajs" || r === "vadītājs";
   }
 
   async function collectActorEmailsForRpc(supabase) {
@@ -861,6 +861,538 @@
     return { id: me?.id ? String(me.id) : uid, role };
   }
 
+  function isActorAdmin() {
+    if (isGlobalActorAdmin()) return true;
+    if (getCurrentLocalActor().role === "admin") return true;
+    const actor = getCurrentLocalActor();
+    const me = loadTeamUsers().find((u) => String(u?.id ?? "").trim() === String(actor?.id ?? "").trim());
+    const r = String(me?.role ?? "").trim().toLowerCase();
+    return r === "admin" || r === "manager" || r === "vaditajs" || r === "vadītājs";
+  }
+
+  function assertIsAdminForCrud() {
+    if (isActorAdmin()) return { ok: true };
+    return { ok: false, error: new Error("Tikai administrators var pārvaldīt komandas ierakstus.") };
+  }
+
+  function newTeamUserId() {
+    try {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+      }
+    } catch {
+      /* ignore */
+    }
+    return `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function buildTeamUserDbPayload(user) {
+    const u = normalizeUser(user);
+    const name = String(u["Vārds uzvārds"] ?? u.full_name ?? "").trim();
+    const email = String(u.email ?? u["i-mail"] ?? u["e-mail"] ?? "").trim();
+    return {
+      "Vārds uzvārds": name || null,
+      full_name: name || null,
+      email: email || null,
+      "i-mail": email || null,
+      "e-mail": email || null,
+      Amats: String(u.Amats ?? "").trim() || null,
+      role: u.role === "admin" ? "admin" : "user",
+      Aizvieto: normalizeAizvieto(u.Aizvieto) || null,
+      [COL_KOMPETENCE_PAPILDU]: normalizePapilduKompetence(u[COL_KOMPETENCE_PAPILDU]) || null,
+    };
+  }
+
+  async function saveTeamUserToSupabase(user, { isNew = false } = {}) {
+    const supabase = globalThis.__PDD_SUPABASE__;
+    if (!supabase?.from) return { skipped: true, reason: "no_supabase" };
+    const u = normalizeUser(user);
+    const uid = String(u.id ?? "").trim();
+    if (!uid) return { error: new Error("Trūkst lietotāja id.") };
+    await ensureDbSessionForKomanda(supabase);
+    const payload = buildTeamUserDbPayload(u);
+    let lastError = null;
+
+    if (isNew) {
+      const ins = await supabase
+        .from("users")
+        .insert({ id: uid, ...payload, created_at: u.created_at || new Date().toISOString() })
+        .select("*")
+        .maybeSingle();
+      if (!ins.error && ins.data) return { ok: true, row: ins.data, created: true };
+      lastError = ins.error;
+      const email = pickEmailForRpcFromUserRow(u);
+      if (email) {
+        const foundId = await lookupUserIdByEmailRpc(supabase, email);
+        if (foundId) {
+          return saveTeamUserToSupabase({ ...u, id: foundId }, { isNew: false });
+        }
+      }
+      return { error: lastError ?? new Error("Neizdevās pievienot lietotāju datubāzē.") };
+    }
+
+    const upd = await supabase.from("users").update(payload).eq("id", uid).select("*").maybeSingle();
+    if (!upd.error && upd.data) return { ok: true, row: upd.data, created: false };
+    lastError = upd.error;
+    const email = pickEmailForRpcFromUserRow(u);
+    if (email) {
+      const foundId = await lookupUserIdByEmailRpc(supabase, email);
+      if (foundId && foundId !== uid) {
+        const upd2 = await supabase.from("users").update(payload).eq("id", foundId).select("*").maybeSingle();
+        if (!upd2.error && upd2.data) return { ok: true, row: upd2.data, created: false, remappedId: foundId };
+        lastError = upd2.error || lastError;
+      }
+    }
+    return { error: lastError ?? new Error("Neizdevās saglabāt lietotāja datus datubāzē.") };
+  }
+
+  async function deleteTeamUserFromSupabase(userId) {
+    const supabase = globalThis.__PDD_SUPABASE__;
+    if (!supabase?.from) return { skipped: true, reason: "no_supabase" };
+    const uid = String(userId ?? "").trim();
+    if (!uid) return { error: new Error("Trūkst lietotāja id.") };
+    await ensureDbSessionForKomanda(supabase);
+    const { error } = await supabase.from("users").delete().eq("id", uid);
+    if (error) return { error };
+    return { ok: true };
+  }
+
+  async function createTeamUser({
+    vardUzv = "",
+    email = "",
+    amats = "",
+    role = "user",
+    aizvieto = "",
+    kompetence = "",
+    syncDb = true,
+  } = {}) {
+    const perm = assertIsAdminForCrud();
+    if (!perm.ok) return { error: perm.error };
+    const name = String(vardUzv ?? "").trim();
+    const em = String(email ?? "").trim();
+    if (!name) return { error: new Error("Ievadi vārdu un uzvārdu.") };
+    if (!em || !em.includes("@")) return { error: new Error("Ievadi derīgu e-pastu.") };
+
+    const id = newTeamUserId();
+    const user = normalizeUser({
+      id,
+      role: String(role ?? "user").toLowerCase() === "admin" ? "admin" : "user",
+      "Vārds uzvārds": name,
+      full_name: name,
+      email: em,
+      "i-mail": em,
+      "e-mail": em,
+      Amats: String(amats ?? "").trim(),
+      Aizvieto: normalizeAizvieto(aizvieto),
+      [COL_KOMPETENCE_PAPILDU]: normalizePapilduKompetence(kompetence),
+      created_at: new Date().toISOString(),
+    });
+
+    const users = loadTeamUsers();
+    if (users.some((u) => collectTeamUserEmails(u).includes(em.toLowerCase()))) {
+      return { error: new Error("Lietotājs ar šo e-pastu jau ir sarakstā.") };
+    }
+    users.push(user);
+    saveTeamUsers(users);
+
+    if (!syncDb) return { ok: true, user, synced: false };
+    const db = await saveTeamUserToSupabase(user, { isNew: true });
+    if (db?.row) applyDbRowToLocalCache(db.row);
+    if (db?.error) {
+      return {
+        ok: true,
+        user: loadTeamUsers().find((u) => String(u.id) === id) || user,
+        synced: false,
+        error: new Error(String(db.error?.message ?? db.error ?? "Neizdevās sinhronizēt ar datubāzi.")),
+      };
+    }
+    if (db?.skipped) return { ok: true, user, synced: false };
+    return { ok: true, user: loadTeamUsers().find((u) => String(u.id) === id) || user, synced: true };
+  }
+
+  async function updateTeamUserProfile({ userId, patch = {}, syncDb = true } = {}) {
+    const uid = String(userId ?? "").trim();
+    if (!uid) return { error: new Error("Trūkst userId.") };
+    const perm = assertIsAdminForCrud();
+    if (!perm.ok) return { error: perm.error };
+
+    const users = loadTeamUsers();
+    const idx = users.findIndex((u) => String(u.id) === uid);
+    if (idx < 0) return { error: new Error("Lietotājs nav atrasts.") };
+
+    const p = patch && typeof patch === "object" ? patch : {};
+    const nextName = p["Vārds uzvārds"] ?? p.vardUzv ?? p.full_name;
+    const nextEmail = p.email ?? p["i-mail"] ?? p["e-mail"];
+    const nextAmats = p.Amats ?? p.amats;
+    const nextRole = p.role;
+    const nextAizvieto = p.Aizvieto ?? p.aizvieto;
+    const nextKomp = p[COL_KOMPETENCE_PAPILDU] ?? p.kompetence;
+
+    const merged = normalizeUser({
+      ...users[idx],
+      ...(nextName !== undefined ? { "Vārds uzvārds": nextName, full_name: nextName } : {}),
+      ...(nextEmail !== undefined
+        ? { email: nextEmail, "i-mail": nextEmail, "e-mail": nextEmail }
+        : {}),
+      ...(nextAmats !== undefined ? { Amats: nextAmats } : {}),
+      ...(nextRole !== undefined ? { role: nextRole } : {}),
+      ...(nextAizvieto !== undefined ? { Aizvieto: nextAizvieto } : {}),
+      ...(nextKomp !== undefined ? { [COL_KOMPETENCE_PAPILDU]: nextKomp } : {}),
+      id: uid,
+    });
+
+    users[idx] = merged;
+    saveTeamUsers(users);
+
+    if (!syncDb) return { ok: true, user: merged, synced: false };
+    const db = await saveTeamUserToSupabase(merged, { isNew: false });
+    if (db?.row) {
+      applyDbRowToLocalCache(db.row);
+      if (db.remappedId && db.remappedId !== uid) {
+        const refreshed = loadTeamUsers().filter((u) => String(u.id) !== uid);
+        saveTeamUsers(refreshed);
+        applyDbRowToLocalCache(db.row);
+      }
+    }
+    if (db?.error) {
+      return {
+        ok: true,
+        user: merged,
+        synced: false,
+        error: new Error(String(db.error?.message ?? db.error ?? "Neizdevās sinhronizēt ar datubāzi.")),
+      };
+    }
+    if (db?.skipped) return { ok: true, user: merged, synced: false };
+    const saved = loadTeamUsers().find((u) => String(u.id) === String(db?.row?.id ?? uid)) || merged;
+    return { ok: true, user: saved, synced: true };
+  }
+
+  async function deleteTeamUserWithDb(userId, { syncDb = true } = {}) {
+    const uid = String(userId ?? "").trim();
+    if (!uid) return { error: new Error("Trūkst userId.") };
+    const perm = assertIsAdminForCrud();
+    if (!perm.ok) return { error: perm.error };
+    if (isSelfTeamRow(uid)) return { error: new Error("Nevar dzēst savu ierakstu.") };
+
+    deleteTeamUser(uid);
+    if (!syncDb) return { ok: true, synced: false };
+    const db = await deleteTeamUserFromSupabase(uid);
+    if (db?.error) {
+      return {
+        ok: true,
+        synced: false,
+        error: new Error(String(db.error?.message ?? db.error ?? "Neizdevās dzēst no datubāzes.")),
+      };
+    }
+    if (db?.skipped) return { ok: true, synced: false };
+    return { ok: true, synced: true };
+  }
+
+  function escHtml(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function injectKomandaAdminStyles() {
+    if (document.getElementById("pdd-komanda-admin-styles")) return;
+    const st = document.createElement("style");
+    st.id = "pdd-komanda-admin-styles";
+    st.textContent = `
+      .team-users-panel:has(#pdd-komanda-admin-root) > .table-wrap { display: none !important; }
+      .pdd-komanda-admin-toolbar {
+        display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+        margin: 0 0 0.65rem;
+      }
+      .pdd-komanda-admin-msg { font-size: 0.78rem; color: var(--muted, #64748b); }
+      .pdd-komanda-admin-msg.is-err { color: #b91c1c; }
+      .pdd-komanda-admin-msg.is-ok { color: #047857; }
+      .pdd-komanda-admin-table-wrap { overflow: auto; border: 1px solid var(--border, #c5ebe3); border-radius: 10px; }
+      .pdd-komanda-admin-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; min-width: 880px; }
+      .pdd-komanda-admin-table th, .pdd-komanda-admin-table td {
+        border-bottom: 1px solid var(--border, #e0f2ee); padding: 0.42rem 0.45rem; vertical-align: top;
+      }
+      .pdd-komanda-admin-table th { background: #e8f8f3; color: #065f46; font-weight: 600; text-align: left; }
+      .pdd-komanda-admin-table input,
+      .pdd-komanda-admin-table select,
+      .pdd-komanda-admin-table textarea {
+        width: 100%; box-sizing: border-box; font: inherit; font-size: 0.78rem;
+        border: 1px solid var(--border, #c5ebe3); border-radius: 6px; padding: 0.22rem 0.35rem; background: #fff;
+      }
+      .pdd-komanda-admin-table textarea { min-height: 3.2rem; resize: vertical; }
+      .pdd-komanda-admin-actions { display: flex; flex-wrap: wrap; gap: 0.3rem; white-space: nowrap; }
+      .pdd-komanda-admin-btn {
+        border: 1px solid var(--border, #c5ebe3); background: #fff; border-radius: 8px;
+        padding: 0.22rem 0.5rem; font-size: 0.76rem; cursor: pointer;
+      }
+      .pdd-komanda-admin-btn.primary { background: #0d9488; color: #fff; border-color: #0d9488; }
+      .pdd-komanda-admin-btn.danger { color: #b91c1c; border-color: #fecaca; }
+      .pdd-komanda-admin-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+      .pdd-komanda-admin-new {
+        margin: 0 0 0.75rem; padding: 0.65rem 0.75rem; border: 1px dashed #c5ebe3;
+        border-radius: 10px; background: #f8fffd;
+      }
+      .pdd-komanda-admin-new-grid {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.45rem;
+      }
+      .pdd-komanda-admin-new label { display: grid; gap: 0.15rem; font-size: 0.74rem; color: #0f766e; }
+    `;
+    document.head.appendChild(st);
+  }
+
+  function mountKomandaAdminUi(panel) {
+    if (!panel || !isActorAdmin()) return;
+    if (panel.querySelector("#pdd-komanda-admin-root")) return;
+    injectKomandaAdminStyles();
+
+    const root = document.createElement("div");
+    root.id = "pdd-komanda-admin-root";
+    root.innerHTML = `
+      <div class="pdd-komanda-admin-toolbar">
+        <button type="button" class="pdd-komanda-admin-btn primary" data-act="toggle-new">+ Jauns lietotājs</button>
+        <span class="pdd-komanda-admin-msg" data-role="msg"></span>
+      </div>
+      <div class="pdd-komanda-admin-new" data-role="new-form" hidden>
+        <div class="pdd-komanda-admin-new-grid">
+          <label>Vārds uzvārds<input type="text" data-new="name" placeholder="Vārds Uzvārds" /></label>
+          <label>e-pasts<input type="email" data-new="email" placeholder="vards.uzvards@vid.gov.lv" /></label>
+          <label>Amats<input type="text" data-new="amats" placeholder="Amats" /></label>
+          <label>Loma
+            <select data-new="role">
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+          </label>
+        </div>
+        <div style="margin-top:0.45rem;display:flex;gap:0.35rem;flex-wrap:wrap">
+          <button type="button" class="pdd-komanda-admin-btn primary" data-act="create-user">Pievienot</button>
+          <button type="button" class="pdd-komanda-admin-btn" data-act="cancel-new">Atcelt</button>
+        </div>
+      </div>
+      <div class="pdd-komanda-admin-table-wrap">
+        <table class="pdd-komanda-admin-table">
+          <thead>
+            <tr>
+              <th>Loma</th>
+              <th>Vārds uzvārds</th>
+              <th>e-pasts</th>
+              <th>Amats</th>
+              <th>Aizvieto</th>
+              <th>Kompetence</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody data-role="tbody"></tbody>
+        </table>
+      </div>
+    `;
+
+    const tableWrap = panel.querySelector(".table-wrap");
+    if (tableWrap) panel.insertBefore(root, tableWrap);
+    else panel.appendChild(root);
+
+    const msgEl = root.querySelector('[data-role="msg"]');
+    const tbody = root.querySelector('[data-role="tbody"]');
+    const newForm = root.querySelector('[data-role="new-form"]');
+
+    function setMsg(text, kind) {
+      if (!msgEl) return;
+      msgEl.textContent = String(text ?? "");
+      msgEl.classList.remove("is-err", "is-ok");
+      if (kind === "err") msgEl.classList.add("is-err");
+      if (kind === "ok") msgEl.classList.add("is-ok");
+    }
+
+    function aizvietoOptions(excludeId) {
+      return getReplacementOptions(excludeId)
+        .map((o) => `<option value="${escHtml(o.id)}">${escHtml(o.name)}</option>`)
+        .join("");
+    }
+
+    function renderAdminTable() {
+      const users = loadTeamUsers();
+      if (!tbody) return;
+      tbody.innerHTML = users
+        .map((u) => {
+          const uid = escHtml(u.id);
+          const role = u.role === "admin" ? "admin" : "user";
+          const aizvRaw = String(u.Aizvieto ?? "").trim();
+          const usersList = loadTeamUsers();
+          const aizvByName = usersList.find(
+            (x) =>
+              String(x?.["Vārds uzvārds"] ?? x?.full_name ?? "")
+                .trim()
+                .toLowerCase() === aizvRaw.toLowerCase(),
+          );
+          const aizvSel = String(aizvByName?.id ?? "").trim();
+          return `
+            <tr data-uid="${uid}">
+              <td>
+                <select data-f="role">
+                  <option value="user"${role === "user" ? " selected" : ""}>user</option>
+                  <option value="admin"${role === "admin" ? " selected" : ""}>admin</option>
+                </select>
+              </td>
+              <td><input type="text" data-f="name" value="${escHtml(u["Vārds uzvārds"] ?? u.full_name ?? "")}" /></td>
+              <td><input type="email" data-f="email" value="${escHtml(u.email ?? u["i-mail"] ?? "")}" /></td>
+              <td><input type="text" data-f="amats" value="${escHtml(u.Amats ?? "")}" /></td>
+              <td>
+                <select data-f="aizvieto">
+                  <option value="">Nav norādīts</option>
+                  ${aizvietoOptions(u.id)}
+                </select>
+              </td>
+              <td><textarea data-f="kompetence" rows="2">${escHtml(u[COL_KOMPETENCE_PAPILDU] ?? "")}</textarea></td>
+              <td>
+                <div class="pdd-komanda-admin-actions">
+                  <button type="button" class="pdd-komanda-admin-btn primary" data-act="save-row">Saglabāt</button>
+                  <button type="button" class="pdd-komanda-admin-btn danger" data-act="delete-row">Dzēst</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      for (const tr of tbody.querySelectorAll("tr[data-uid]")) {
+        const uid = tr.getAttribute("data-uid");
+        const u = users.find((x) => String(x.id) === String(uid));
+        if (!u) continue;
+        const aizvRaw = String(u.Aizvieto ?? "").trim();
+        const byName = users.find(
+          (x) =>
+            String(x?.["Vārds uzvārds"] ?? x?.full_name ?? "")
+              .trim()
+              .toLowerCase() === aizvRaw.toLowerCase(),
+        );
+        const sel = tr.querySelector('[data-f="aizvieto"]');
+        if (sel && byName?.id) sel.value = String(byName.id);
+        else if (sel && !aizvRaw) sel.value = "";
+      }
+    }
+
+    async function saveRow(tr) {
+      const uid = tr.getAttribute("data-uid");
+      if (!uid) return;
+      const aizvId = String(tr.querySelector('[data-f="aizvieto"]')?.value ?? "").trim();
+      let aizvietoName = "";
+      if (aizvId) {
+        const rep = loadTeamUsers().find((x) => String(x.id) === aizvId);
+        aizvietoName = String(rep?.["Vārds uzvārds"] ?? rep?.full_name ?? "").trim();
+      }
+      const btn = tr.querySelector('[data-act="save-row"]');
+      if (btn) btn.disabled = true;
+      setMsg("Saglabā…", "");
+      const r = await updateTeamUserProfile({
+        userId: uid,
+        patch: {
+          role: tr.querySelector('[data-f="role"]')?.value ?? "user",
+          "Vārds uzvārds": tr.querySelector('[data-f="name"]')?.value ?? "",
+          email: tr.querySelector('[data-f="email"]')?.value ?? "",
+          Amats: tr.querySelector('[data-f="amats"]')?.value ?? "",
+          Aizvieto: aizvietoName,
+          [COL_KOMPETENCE_PAPILDU]: tr.querySelector('[data-f="kompetence"]')?.value ?? "",
+        },
+        syncDb: true,
+      });
+      if (btn) btn.disabled = false;
+      if (r?.error) {
+        setMsg(String(r.error?.message ?? r.error), "err");
+        return;
+      }
+      setMsg(r?.synced === false ? "Saglabāts lokāli; DB sinhronizācija neizdevās." : "Saglabāts.", r?.synced === false ? "err" : "ok");
+      renderAdminTable();
+    }
+
+    root.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-act]");
+      if (!btn || !root.contains(btn)) return;
+      const act = btn.getAttribute("data-act");
+      if (act === "toggle-new") {
+        if (newForm) newForm.hidden = !newForm.hidden;
+        return;
+      }
+      if (act === "cancel-new") {
+        if (newForm) newForm.hidden = true;
+        return;
+      }
+      if (act === "create-user") {
+        btn.disabled = true;
+        setMsg("Pievieno…", "");
+        const r = await createTeamUser({
+          vardUzv: root.querySelector('[data-new="name"]')?.value ?? "",
+          email: root.querySelector('[data-new="email"]')?.value ?? "",
+          amats: root.querySelector('[data-new="amats"]')?.value ?? "",
+          role: root.querySelector('[data-new="role"]')?.value ?? "user",
+          syncDb: true,
+        });
+        btn.disabled = false;
+        if (r?.error) {
+          setMsg(String(r.error?.message ?? r.error), "err");
+          return;
+        }
+        setMsg(r?.synced === false ? "Pievienots lokāli; DB sinhronizācija neizdevās." : "Lietotājs pievienots.", r?.synced === false ? "err" : "ok");
+        if (newForm) {
+          newForm.hidden = true;
+          for (const el of newForm.querySelectorAll("input")) el.value = "";
+          const roleSel = newForm.querySelector('[data-new="role"]');
+          if (roleSel) roleSel.value = "user";
+        }
+        renderAdminTable();
+        return;
+      }
+      const tr = btn.closest("tr[data-uid]");
+      if (!tr) return;
+      if (act === "save-row") {
+        await saveRow(tr);
+        return;
+      }
+      if (act === "delete-row") {
+        const uid = tr.getAttribute("data-uid");
+        const name = tr.querySelector('[data-f="name"]')?.value ?? "";
+        if (!uid) return;
+        if (!confirm(`Dzēst lietotāju „${name || uid}"?`)) return;
+        btn.disabled = true;
+        setMsg("Dzēš…", "");
+        const r = await deleteTeamUserWithDb(uid, { syncDb: true });
+        btn.disabled = false;
+        if (r?.error) {
+          setMsg(String(r.error?.message ?? r.error), "err");
+          return;
+        }
+        setMsg(r?.synced === false ? "Dzēsts lokāli; DB dzēšana neizdevās." : "Dzēsts.", r?.synced === false ? "err" : "ok");
+        renderAdminTable();
+      }
+    });
+
+    window.addEventListener("pdd:komanda-team-users-changed", renderAdminTable);
+    renderAdminTable();
+  }
+
+  function scanKomandaAdminPanels() {
+    if (!isActorAdmin()) return;
+    for (const panel of document.querySelectorAll(".team-users-panel")) {
+      mountKomandaAdminUi(panel);
+    }
+  }
+
+  function initKomandaAdminUi() {
+    scanKomandaAdminPanels();
+    const root = document.getElementById("root");
+    if (!root || typeof MutationObserver === "undefined") return;
+    const obs = new MutationObserver(() => {
+      scanKomandaAdminPanels();
+    });
+    obs.observe(root, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initKomandaAdminUi);
+  } else {
+    initKomandaAdminUi();
+  }
+
   // Public API (tikai komandas lietotāji; ziņas atsevišķi Zinas.js)
   window.KOMANDA = {
     loadTeamUsers,
@@ -877,6 +1409,11 @@
     },
     upsertTeamUser,
     deleteTeamUser,
+    createTeamUser,
+    updateTeamUserProfile,
+    deleteTeamUserWithDb,
+    saveTeamUserToSupabase,
+    isActorAdmin,
     getReplacementOptions,
     setUserAizvieto,
     setUserPapilduKompetenceInfo,

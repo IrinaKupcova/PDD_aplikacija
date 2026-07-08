@@ -6,7 +6,10 @@
   "use strict";
 
   const LS_ATV_KEY = "pdd_atvalinajumi_v1";
+  const LS_GRAFIKI_KEY = "pdd_atvalinajumi_grafiki_v1";
+  const LS_ACTIVE_GRAFIKS_KEY = "pdd_atvalinajumi_active_grafiks_v1";
   const TABLE_CANDIDATES = ["Atvalinajumi", "atvalinajumi", "Atvaļinājumi", "ATVALINAJUMI"];
+  const GRAFIKS_TAG_RE = /^\[ATV_GRAFIKS:([^\]]+)\]\s*/i;
 
   const UI = {
     sakuma: "Atvaļinājuma sākuma datums",
@@ -59,6 +62,14 @@
       "show_on_calendar",
       "kalendara",
     ],
+    grafiks: [
+      "Grafiks",
+      "grafiks_id",
+      "grafika_id",
+      "Atvalinajumu grafiks",
+      "Atvaļinājumu grafiks",
+      "grafiksId",
+    ],
   };
 
   const WRITE_DEFAULT = {
@@ -68,6 +79,7 @@
     veids: "Atvaļinājuma veids",
     papildu: "Papildinformācija",
     kalendara: "Atspoguļot kalendārī",
+    grafiks: "Grafiks",
   };
 
   const LS_CALENDAR_IDS = "pdd_atvalinajumi_calendar_ids_v1";
@@ -493,6 +505,152 @@
     return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
   }
 
+  function newGrafiksId() {
+    if (globalThis.crypto?.randomUUID) return `grafiks-${globalThis.crypto.randomUUID()}`;
+    return `grafiks-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  }
+
+  function seedGrafikiList() {
+    const now = new Date().toISOString();
+    return [
+      {
+        id: "grafiks-2026",
+        name: "Atvalinājumu grafiks 2026.gadam",
+        year: 2026,
+        sortOrder: 0,
+        createdAt: now,
+      },
+      {
+        id: "grafiks-2027",
+        name: "Atvalinājumu grafiks 2027.gadam",
+        year: 2027,
+        sortOrder: 1,
+        createdAt: now,
+      },
+    ];
+  }
+
+  function loadGrafiki() {
+    try {
+      const raw = localStorage.getItem(LS_GRAFIKI_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (!Array.isArray(parsed) || !parsed.length) {
+        const seeded = seedGrafikiList();
+        saveGrafiki(seeded);
+        return seeded;
+      }
+      return parsed
+        .map((g) => ({
+          id: String(g?.id ?? "").trim(),
+          name: String(g?.name ?? "").trim(),
+          year: g?.year == null || g?.year === "" ? null : Number(g.year),
+          sortOrder: Number(g?.sortOrder ?? 0) || 0,
+          createdAt: String(g?.createdAt ?? "").trim() || new Date().toISOString(),
+        }))
+        .filter((g) => g.id && g.name)
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "lv"));
+    } catch {
+      const seeded = seedGrafikiList();
+      saveGrafiki(seeded);
+      return seeded;
+    }
+  }
+
+  function saveGrafiki(list) {
+    try {
+      localStorage.setItem(LS_GRAFIKI_KEY, JSON.stringify(Array.isArray(list) ? list : []));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function getActiveGrafiksId() {
+    try {
+      const saved = String(localStorage.getItem(LS_ACTIVE_GRAFIKS_KEY) ?? "").trim();
+      const list = loadGrafiki();
+      if (saved && list.some((g) => g.id === saved)) return saved;
+      const y = new Date().getFullYear();
+      const byYear = list.find((g) => Number(g.year) === y);
+      return byYear?.id || list[0]?.id || "grafiks-2026";
+    } catch {
+      return "grafiks-2026";
+    }
+  }
+
+  function setActiveGrafiksId(id) {
+    const gid = String(id ?? "").trim();
+    if (!gid) return;
+    try {
+      localStorage.setItem(LS_ACTIVE_GRAFIKS_KEY, gid);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function findGrafiksById(id, grafiki) {
+    const gid = String(id ?? "").trim();
+    const list = Array.isArray(grafiki) ? grafiki : loadGrafiki();
+    return list.find((g) => g.id === gid) || null;
+  }
+
+  function createGrafiks({ name, year = null } = {}) {
+    const label = String(name ?? "").trim();
+    if (!label) throw new Error("Norādi grafika nosaukumu.");
+    const list = loadGrafiki();
+    const y = year == null || year === "" ? null : Number(year);
+    const item = {
+      id: newGrafiksId(),
+      name: label,
+      year: Number.isFinite(y) ? y : null,
+      sortOrder: list.length,
+      createdAt: new Date().toISOString(),
+    };
+    list.push(item);
+    saveGrafiki(list);
+    return item;
+  }
+
+  function stripGrafiksTagFromPapildu(papildu) {
+    return String(papildu ?? "")
+      .replace(GRAFIKS_TAG_RE, "")
+      .trim();
+  }
+
+  function extractGrafiksIdFromPapildu(papildu) {
+    const m = GRAFIKS_TAG_RE.exec(String(papildu ?? ""));
+    return m?.[1] ? String(m[1]).trim() : "";
+  }
+
+  function buildPapilduWithGrafiksTag(papildu, grafiksId) {
+    const clean = stripGrafiksTagFromPapildu(papildu);
+    const gid = String(grafiksId ?? "").trim();
+    if (!gid) return clean;
+    return clean ? `[ATV_GRAFIKS:${gid}] ${clean}` : `[ATV_GRAFIKS:${gid}]`;
+  }
+
+  function inferGrafiksIdForRow(row, grafiki) {
+    const list = Array.isArray(grafiki) ? grafiki : loadGrafiki();
+    const sak = toDateInputValue(row?.sakuma);
+    if (sak && /^\d{4}/.test(sak)) {
+      const year = Number(sak.slice(0, 4));
+      const hit = list.find((g) => Number(g.year) === year);
+      if (hit) return hit.id;
+    }
+    return list[0]?.id || "grafiks-2026";
+  }
+
+  function ensureRowGrafiksId(row, grafiki) {
+    const gid = String(row?.grafiksId ?? "").trim();
+    if (gid) return { ...row, grafiksId: gid };
+    return { ...row, grafiksId: inferGrafiksIdForRow(row, grafiki) };
+  }
+
+  function rowBelongsToGrafiks(row, grafiksId) {
+    const gid = String(grafiksId ?? "").trim();
+    if (!gid) return true;
+    return String(row?.grafiksId ?? "").trim() === gid;
+  }
+
   function resolveRowUserGroup(row, userMap) {
     const resolved = resolveUserRefForUi(row?.userRef || row?.userRefRaw, userMap);
     const key =
@@ -653,7 +811,11 @@
     const id = pickByAliases(r, ["id", "ID"], r?.id ?? "");
     const refRaw = String(pickByAliases(r, FIELD_ALIAS.vards, "")).trim();
     const resolved = resolveUserRefForUi(refRaw, userMap);
-    return {
+    const papilduRaw = toStr(pickByAliases(r, FIELD_ALIAS.papildu, ""), 2000);
+    let grafiksId = String(r.grafiksId ?? pickByAliases(r, FIELD_ALIAS.grafiks, "") ?? "").trim();
+    if (!grafiksId) grafiksId = extractGrafiksIdFromPapildu(papilduRaw);
+    const papildu = stripGrafiksTagFromPapildu(papilduRaw);
+    const row = {
       id: id != null && String(id).trim() !== "" ? id : null,
       sakuma: toDateInputValue(pickByAliases(r, FIELD_ALIAS.sakuma, "")),
       beigu: toDateInputValue(pickByAliases(r, FIELD_ALIAS.beigu, "")),
@@ -662,11 +824,13 @@
       userDisplayName: resolved.displayName,
       userId: resolved.userId || (isUuidLike(refRaw) ? refRaw : ""),
       veids: normalizeVeids(pickByAliases(r, FIELD_ALIAS.veids, "")),
-      papildu: toStr(pickByAliases(r, FIELD_ALIAS.papildu, ""), 2000),
+      papildu,
+      grafiksId: grafiksId || "",
       showOnCalendar: parseCalendarFlag(r),
       created_at: String(r.created_at ?? "").trim(),
       _raw: r,
     };
+    return ensureRowGrafiksId(row, loadGrafiki());
   }
 
   function normalizeAppRole(role) {
@@ -788,6 +952,7 @@
       veids: normalizeKey(veidsHit) === "type" ? WRITE_DEFAULT.veids : veidsHit,
       papildu: find(FIELD_ALIAS.papildu, runtimeCols.papildu),
       kalendara: find(FIELD_ALIAS.kalendara, runtimeCols.kalendara),
+      grafiks: find(FIELD_ALIAS.grafiks, runtimeCols.grafiks),
     };
     const idHit = keys.find((k) => normalizeKey(k) === "id");
     if (idHit) runtimeIdCol = idHit;
@@ -873,8 +1038,15 @@
     }
     const veids = normalizeVeids(d?.veids);
     p[veidsDbColumn()] = veids || null;
-    const pap = toStr(d?.papildu, 2000);
-    p[runtimeCols.papildu] = pap || null;
+    const grafiksId = String(d?.grafiksId ?? "").trim();
+    const grafiksCol = String(runtimeCols.grafiks ?? "").trim();
+    if (grafiksId && grafiksCol) p[grafiksCol] = grafiksId;
+    const pap = stripGrafiksTagFromPapildu(toStr(d?.papildu, 2000));
+    if (!grafiksCol && grafiksId) {
+      p[runtimeCols.papildu] = buildPapilduWithGrafiksTag(pap, grafiksId) || null;
+    } else {
+      p[runtimeCols.papildu] = pap || null;
+    }
     return p;
   }
 
@@ -974,21 +1146,27 @@
 
   async function saveRow(sb, draft, teamUsers) {
     if (!draft?.sakuma || !draft?.beigu) throw new Error("Norādi sākuma un beigu datumu.");
+    const draftNorm = {
+      ...draft,
+      grafiksId: String(draft?.grafiksId ?? "").trim() || getActiveGrafiksId(),
+    };
 
     const users = Array.isArray(teamUsers) ? teamUsers : [];
     const userMap = buildUserMap(users);
-    const dbRef = resolveUserRefForDb(draft.userRef, users);
+    const dbRef = resolveUserRefForDb(draftNorm.userRef, users);
 
     if (!sb || isLocalMode()) {
       const rows = loadLocalRows(userMap);
+      const grafiksId = String(draftNorm.grafiksId ?? getActiveGrafiksId()).trim();
       const norm = normalizeRow(
         {
-          id: draft.id || localId(),
-          [WRITE_DEFAULT.sakuma]: draft.sakuma,
-          [WRITE_DEFAULT.beigu]: draft.beigu,
+          id: draftNorm.id || localId(),
+          grafiksId,
+          [WRITE_DEFAULT.sakuma]: draftNorm.sakuma,
+          [WRITE_DEFAULT.beigu]: draftNorm.beigu,
           [WRITE_DEFAULT.vards]: dbRef,
-          [WRITE_DEFAULT.veids]: draft.veids,
-          [WRITE_DEFAULT.papildu]: draft.papildu,
+          [WRITE_DEFAULT.veids]: draftNorm.veids,
+          [WRITE_DEFAULT.papildu]: draftNorm.papildu,
         },
         userMap
       );
@@ -1001,32 +1179,32 @@
 
     const table = await resolveTableName(sb);
     await ensureRuntimeColsByProbe(sb, table);
-    if (draft?._raw) detectRuntimeColsFromRow(draft._raw);
-    let payload = payloadFromDraft(draft, users);
-    if (draft.id) {
-      let r = await updateWithPruning(sb, table, draft.id, payload);
+    if (draftNorm?._raw) detectRuntimeColsFromRow(draftNorm._raw);
+    let payload = payloadFromDraft(draftNorm, users);
+    if (draftNorm.id) {
+      let r = await updateWithPruning(sb, table, draftNorm.id, payload);
       if (r.error && /invalid input syntax for type uuid/i.test(String(r.error?.message ?? ""))) {
         vardsColumnStoresUuid = false;
-        payload = payloadFromDraft(draft, users);
-        r = await updateWithPruning(sb, table, draft.id, payload);
+        payload = payloadFromDraft(draftNorm, users);
+        r = await updateWithPruning(sb, table, draftNorm.id, payload);
       }
       if (r.error && /foreign key constraint/i.test(String(r.error?.message ?? ""))) {
         vardsColumnStoresUuid = true;
-        payload = payloadFromDraft(draft, users);
-        r = await updateWithPruning(sb, table, draft.id, payload);
+        payload = payloadFromDraft(draftNorm, users);
+        r = await updateWithPruning(sb, table, draftNorm.id, payload);
       }
       if (r.error) throw r.error;
-      const rawRow = r.data || (await fetchAtvalinajumsById(sb, table, draft.id));
+      const rawRow = r.data || (await fetchAtvalinajumsById(sb, table, draftNorm.id));
       if (!rawRow) throw new Error("Ieraksts netika atrasts pēc saglabāšanas.");
       detectRuntimeColsFromRow(rawRow);
       let updated = normalizeRow(rawRow, userMap);
-      const wantVeids = normalizeVeids(draft?.veids);
+      const wantVeids = normalizeVeids(draftNorm?.veids);
       if (wantVeids && normalizeVeids(updated.veids) !== wantVeids) {
         const veidsCol = veidsDbColumn();
         const fix = await sb
           .from(table)
           .update({ [veidsCol]: wantVeids })
-          .eq(runtimeIdCol, draft.id)
+          .eq(runtimeIdCol, draftNorm.id)
           .select("*")
           .limit(1)
           .maybeSingle();
@@ -1035,7 +1213,7 @@
             `Neizdevās saglabāt atvaļinājuma veidu (${veidsCol}): ${fix.error.message || fix.error}`
           );
         }
-        const fixedRow = fix.data || (await fetchAtvalinajumsById(sb, table, draft.id));
+        const fixedRow = fix.data || (await fetchAtvalinajumsById(sb, table, draftNorm.id));
         if (fixedRow) {
           detectRuntimeColsFromRow(fixedRow);
           updated = normalizeRow(fixedRow, userMap);
@@ -1058,12 +1236,12 @@
     let r = await insertWithPruning(sb, table, payload);
     if (r.error && /invalid input syntax for type uuid/i.test(String(r.error?.message ?? ""))) {
       vardsColumnStoresUuid = false;
-      payload = payloadFromDraft(draft, users);
+      payload = payloadFromDraft(draftNorm, users);
       r = await insertWithPruning(sb, table, payload);
     }
     if (r.error && /foreign key constraint/i.test(String(r.error?.message ?? ""))) {
       vardsColumnStoresUuid = true;
-      payload = payloadFromDraft(draft, users);
+      payload = payloadFromDraft(draftNorm, users);
       r = await insertWithPruning(sb, table, payload);
     }
     if (r.error) throw r.error;
@@ -1116,7 +1294,7 @@
     return [];
   }
 
-  function emptyDraft(defaultUserRef = "") {
+  function emptyDraft(defaultUserRef = "", grafiksId = "") {
     return {
       id: null,
       sakuma: "",
@@ -1124,6 +1302,7 @@
       userRef: String(defaultUserRef ?? "").trim(),
       veids: "",
       papildu: "",
+      grafiksId: String(grafiksId ?? "").trim(),
     };
   }
 
@@ -1143,6 +1322,21 @@
       .atv-head h2 { margin: 0; font-size: 1.05rem; color: #065f46; }
       .atv-head p { margin: 0.35rem 0 0; font-size: 0.88rem; color: #064e3b; line-height: 1.45; }
       .atv-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between; }
+      .atv-grafiks-bar {
+        display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: flex-end;
+        padding: 0.65rem 0.75rem; border: 1px solid #a7f3d0; border-radius: 10px;
+        background: #f8fffd;
+      }
+      .atv-grafiks-bar label { display: grid; gap: 0.2rem; font-size: 0.76rem; color: #065f46; }
+      .atv-grafiks-bar select,
+      .atv-grafiks-bar input {
+        min-width: 220px; font: inherit; font-size: 0.84rem;
+        border: 1px solid #c5ebe3; border-radius: 8px; padding: 0.3rem 0.45rem; background: #fff;
+      }
+      .atv-grafiks-new {
+        display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: flex-end;
+        margin-top: 0.45rem; padding-top: 0.45rem; border-top: 1px dashed #c5ebe3;
+      }
       .atv-table-wrap {
         overflow: auto;
         border: 1px solid var(--border, #cbd5e1);
@@ -1620,7 +1814,13 @@
       const [highlightRowId, setHighlightRowId] = useState(null);
       const [dataReady, setDataReady] = useState(false);
       const [filtersOpen, setFiltersOpen] = useState(false);
+      const [grafiki, setGrafiki] = useState(() => loadGrafiki());
+      const [activeGrafiksId, setActiveGrafiksIdState] = useState(() => getActiveGrafiksId());
+      const [showNewGrafiksForm, setShowNewGrafiksForm] = useState(false);
+      const [newGrafiksName, setNewGrafiksName] = useState("");
+      const [newGrafiksYear, setNewGrafiksYear] = useState("");
       const editsRef = useRef({});
+      const isAdmin = isAdminAppRole(appRole);
 
       useEffect(() => {
         editsRef.current = edits;
@@ -1656,6 +1856,24 @@
 
       const userMap = useMemo(() => buildUserMap(users), [users]);
 
+      const activeGrafiks = useMemo(
+        () => findGrafiksById(activeGrafiksId, grafiki),
+        [activeGrafiksId, grafiki]
+      );
+
+      const scheduleRows = useMemo(
+        () => (Array.isArray(rows) ? rows : []).filter((r) => rowBelongsToGrafiks(r, activeGrafiksId)),
+        [rows, activeGrafiksId]
+      );
+
+      function selectGrafiks(id) {
+        const gid = String(id ?? "").trim();
+        if (!gid) return;
+        setActiveGrafiksIdState(gid);
+        setActiveGrafiksId(gid);
+        setDraftNew((d) => ({ ...d, grafiksId: gid }));
+      }
+
       function defaultNewUserRef() {
         const uid = String(currentUserId ?? "").trim();
         if (!uid) return "";
@@ -1679,9 +1897,13 @@
 
       useEffect(() => {
         const ref = defaultNewUserRef();
-        if (!ref) return;
-        setDraftNew((d) => (String(d?.userRef ?? "").trim() ? d : { ...d, userRef: ref }));
-      }, [currentUserId, vardsColumnIsUuid]);
+        const gid = String(activeGrafiksId ?? "").trim();
+        setDraftNew((d) => ({
+          ...d,
+          userRef: String(d?.userRef ?? "").trim() ? d.userRef : ref,
+          grafiksId: gid || d.grafiksId,
+        }));
+      }, [currentUserId, vardsColumnIsUuid, activeGrafiksId]);
 
       function rowEditState(row) {
         const id = String(row?.id ?? "");
@@ -1741,12 +1963,12 @@
       }
 
       const filterOptions = useMemo(() => {
-        const list = (Array.isArray(rows) ? rows : []).map((r) => rowEditState(r));
+        const list = (Array.isArray(scheduleRows) ? scheduleRows : []).map((r) => rowEditState(r));
         return buildFilterOptions(list, userMap, users);
-      }, [rows, edits, userMap, users]);
+      }, [scheduleRows, edits, userMap, users]);
 
       const filteredRows = useMemo(() => {
-        const list = Array.isArray(rows) ? rows : [];
+        const list = Array.isArray(scheduleRows) ? scheduleRows : [];
         const f = filters ?? {};
         return list
           .filter((row) => {
@@ -1759,7 +1981,7 @@
             return true;
           })
           .map((row) => rowEditState(row));
-      }, [rows, filters, edits, userMap]);
+      }, [scheduleRows, filters, edits, userMap]);
 
       function setFilter(key, value) {
         setFilters((prev) => ({ ...prev, [key]: value }));
@@ -1969,6 +2191,7 @@
         const toSave = {
           ...draftNew,
           userRef: defaultNewUserRef() || draftNew.userRef,
+          grafiksId: String(activeGrafiksId || draftNew.grafiksId || "").trim(),
         };
         if (!isDraftOwnedByUser(toSave, ownerCtx, userMap)) {
           setError("Jaunu ierakstu vari pievienot tikai sev.");
@@ -1978,7 +2201,7 @@
         setError(null);
         try {
           await saveRow(sb, toSave, users);
-          setDraftNew(emptyDraft(defaultNewUserRef()));
+          setDraftNew(emptyDraft(defaultNewUserRef(), activeGrafiksId));
           await refresh();
         } catch (err) {
           setError(err?.message || String(err));
@@ -2081,6 +2304,23 @@
               : null}
           </select>
         `;
+      }
+
+      async function onCreateGrafiks() {
+        setError(null);
+        try {
+          const created = createGrafiks({
+            name: newGrafiksName,
+            year: newGrafiksYear,
+          });
+          setGrafiki(loadGrafiki());
+          selectGrafiks(created.id);
+          setShowNewGrafiksForm(false);
+          setNewGrafiksName("");
+          setNewGrafiksYear("");
+        } catch (e) {
+          setError(e?.message || String(e));
+        }
       }
 
       function renderVeidsSelect(value, onChange) {
@@ -2278,21 +2518,89 @@
       return html`
         <section class="atv-wrap list-panel">
           <div class="atv-head">
-            <h2>Atvaļinājumu grafiks</h2>
+            <h2>${activeGrafiks?.name || "Atvaļinājumu grafiks"}</h2>
             <p>
-              Ieplānotie atvaļinājumi sinhronizēti ar datubāzi. <strong>Labot</strong>, <strong>dzēst</strong> un
+              Katram periodam ir savs grafiks (piem., 2026. un 2027. gadam atsevišķi). Ieplānotie atvaļinājumi
+              sinhronizēti ar datubāzi. <strong>Labot</strong>, <strong>dzēst</strong> un
               <strong>Atspoguļot kalendārī</strong> vari tikai savus ierakstus — citu darbinieku ierakstus nē.
             </p>
+          </div>
+          <div class="atv-grafiks-bar">
+            <label>
+              Grafiks
+              <select
+                value=${activeGrafiksId}
+                onChange=${(ev) => selectGrafiks(ev.target.value)}
+                disabled=${busy}
+              >
+                ${grafiki.map(
+                  (g) => html`
+                    <option key=${g.id} value=${g.id}>
+                      ${g.name}${g.year ? ` (${g.year})` : ""}
+                    </option>
+                  `
+                )}
+              </select>
+            </label>
+            ${isAdmin
+              ? html`
+                  <button
+                    type="button"
+                    class="btn btn-ghost btn-small"
+                    disabled=${busy}
+                    onClick=${() => setShowNewGrafiksForm((v) => !v)}
+                  >
+                    + Jauns grafiks
+                  </button>
+                `
+              : null}
+            ${showNewGrafiksForm && isAdmin
+              ? html`
+                  <div class="atv-grafiks-new" style=${{ width: "100%" }}>
+                    <label>
+                      Nosaukums
+                      <input
+                        type="text"
+                        placeholder="Atvalinājumu grafiks 2028.gadam"
+                        value=${newGrafiksName}
+                        onInput=${(ev) => setNewGrafiksName(ev.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Gads (neobligāti)
+                      <input
+                        type="number"
+                        min="2000"
+                        max="2100"
+                        placeholder="2028"
+                        value=${newGrafiksYear}
+                        onInput=${(ev) => setNewGrafiksYear(ev.target.value)}
+                      />
+                    </label>
+                    <button type="button" class="btn btn-primary btn-small" disabled=${busy} onClick=${() => void onCreateGrafiks()}>
+                      Pievienot grafiku
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-small"
+                      disabled=${busy}
+                      onClick=${() => setShowNewGrafiksForm(false)}
+                    >
+                      Atcelt
+                    </button>
+                  </div>
+                `
+              : null}
           </div>
           <div class="atv-toolbar">
             <span style=${{ fontSize: "0.88rem", color: "#1e293b", fontWeight: 500 }}>
               ${!dataReady
                 ? "Ielādē datus…"
-                : rows.length
-                  ? filteredRows.length === rows.length
-                    ? `${rows.length} ieraksti`
-                    : `Rāda ${filteredRows.length} no ${rows.length}`
-                  : "Nav ierakstu"}
+                : scheduleRows.length
+                  ? filteredRows.length === scheduleRows.length
+                    ? `${scheduleRows.length} ieraksti šajā grafikā`
+                    : `Rāda ${filteredRows.length} no ${scheduleRows.length}`
+                  : "Nav ierakstu šajā grafikā"}
               ${isLocalMode() ? " · lokālais režīms" : ""}
             </span>
             <button type="button" class="btn btn-ghost btn-small" disabled=${busy} onClick=${() => void refresh()}>
@@ -2333,7 +2641,7 @@
                         <td colspan="6" class="atv-empty">Ielādē atvaļinājumu datus…</td>
                       </tr>
                     `
-                  : rows.length
+                  : scheduleRows.length
                     ? filteredRows.length
                       ? filteredRows.map((r) => {
                           const rowHi = highlightRowId && String(highlightRowId) === String(r?.id ?? "");
@@ -2429,6 +2737,10 @@
     resolveAtvalinajumsIdFromCalendarAbsence,
     requestHighlightAtvalinajumsRow,
     calendarChipStyle,
+    loadGrafiki,
+    createGrafiks,
+    getActiveGrafiksId,
+    setActiveGrafiksId,
     CALENDAR_CHIP_COLOR,
     UI,
     VEIDS_OPTIONS,
