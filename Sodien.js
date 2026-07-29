@@ -561,9 +561,24 @@ function renderEngagePanelHtml(aktualitateId) {
   const actor = currentEngageActor();
   const likes = bucket.reactions.filter((r) => r.reaction === "like").length;
   const dislikes = bucket.reactions.filter((r) => r.reaction === "dislike").length;
+  const total = likes + dislikes;
+  const likePct = total ? Math.round((likes / total) * 100) : 0;
+  const dislikePct = total ? 100 - likePct : 0;
   const mine = bucket.reactions.find((r) => String(r.actorKey) === actor.key);
   const likeActive = mine?.reaction === "like";
   const dislikeActive = mine?.reaction === "dislike";
+  const ratioHtml = total
+    ? `<div class="sodien-akt-ratio" title="Patīk ${likes} · Nepatīk ${dislikes} · kopā ${total}">
+        <div class="sodien-akt-ratio-bar">
+          <div class="sodien-akt-ratio-like" style="width:${likePct}%"></div>
+          <div class="sodien-akt-ratio-dislike" style="width:${dislikePct}%"></div>
+        </div>
+        <div class="sodien-akt-ratio-labels">
+          <span>👍 ${likePct}% (${likes})</span>
+          <span>👎 ${dislikePct}% (${dislikes})</span>
+        </div>
+      </div>`
+    : `<div class="sodien-akt-ratio sodien-akt-ratio-empty">Vēl nav novērtējumu — īpatsvars parādīsies pēc pirmā balsojuma.</div>`;
   const commentsHtml = bucket.comments.length
     ? bucket.comments
         .map((c) => {
@@ -595,6 +610,7 @@ function renderEngagePanelHtml(aktualitateId) {
           👎 Nepatīk <span>${dislikes}</span>
         </button>
       </div>
+      ${ratioHtml}
       <div class="sodien-akt-comments">
         <div class="sodien-akt-comments-title">Komentāri (${bucket.comments.length})</div>
         <div class="sodien-akt-comments-list">${commentsHtml}</div>
@@ -1656,6 +1672,40 @@ function ensureSodienAktStyleOnce() {
     .sodien-akt-react.is-active {
       background: rgba(14,116,144,0.16) !important;
       border-color: rgba(14,116,144,0.55) !important;
+      font-weight: 600;
+    }
+    .sodien-akt-ratio {
+      margin: 0 0 0.55rem;
+    }
+    .sodien-akt-ratio-empty {
+      font-size: 0.78rem;
+      color: var(--muted, #64748b);
+    }
+    .sodien-akt-ratio-bar {
+      display: flex;
+      height: 10px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #e2e8f0;
+      border: 1px solid rgba(14,116,144,0.2);
+    }
+    .sodien-akt-ratio-like {
+      background: linear-gradient(90deg, #34d399, #059669);
+      min-width: 0;
+      transition: width 0.2s ease;
+    }
+    .sodien-akt-ratio-dislike {
+      background: linear-gradient(90deg, #f87171, #dc2626);
+      min-width: 0;
+      transition: width 0.2s ease;
+    }
+    .sodien-akt-ratio-labels {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-top: 0.25rem;
+      font-size: 0.76rem;
+      color: #0f172a;
       font-weight: 600;
     }
     .sodien-akt-comments-title {
