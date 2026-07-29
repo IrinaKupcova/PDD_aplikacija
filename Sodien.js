@@ -1,4 +1,7 @@
 const SODIEN_STORE_KEY = "pdd_sodien_aktualitates_v1";
+const ENGAGE_STORE_KEY = "pdd_aktualitates_engage_v1";
+const TABLE_REACTIONS = "aktualitates_reactions";
+const TABLE_COMMENTS = "aktualitates_comments";
 
 /** DB tabula (ASCII), kā Supabase kļūdziņā: „AKTUALITATES”. */
 const TABLE_AKTUALITATES = "AKTUALITATES";
@@ -306,6 +309,364 @@ async function primeAktualitatesTable(sb) {
 }
 
 /** Pēdējās renderTodayInfo opcijas (add/delete izmanto attālināti). */
+let sodienEngageHydrateTimer = null;
+let sodienEngageCache = null;
+
+function emptyEngageBucket() {
+  return { reactions: [], comments: [] };
+}
+
+function loadEngageStore() {
+  try {
+    const raw = localStorage.getItem(ENGAGE_STORE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveEngageStore(store) {
+  try {
+    localStorage.setItem(ENGAGE_STORE_KEY, JSON.stringify(store && typeof store === "object" ? store : {}));
+  } catch {
+    /* ignore */
+  }
+  sodienEngageCache = store && typeof store === "object" ? store : {};
+}
+
+function getEngageBucket(aktualitateId) {
+  const id = String(aktualitateId ?? "").trim();
+  if (!id) return emptyEngageBucket();
+  if (!sodienEngageCache) sodienEngageCache = loadEngageStore();
+  const bucket = sodienEngageCache[id];
+  if (!bucket || typeof bucket !== "object") return emptyEngageBucket();
+  return {
+    reactions: Array.isArray(bucket.reactions) ? bucket.reactions : [],
+    comments: Array.isArray(bucket.comments) ? bucket.comments : [],
+  };
+}
+
+function setEngageBucket(aktualitateId, bucket) {
+  const id = String(aktualitateId ?? "").trim();
+  if (!id) return;
+  const store = sodienEngageCache ? { ...sodienEngageCache } : loadEngageStore();
+  store[id] = {
+    reactions: Array.isArray(bucket?.reactions) ? bucket.reactions : [],
+    comments: Array.isArray(bucket?.comments) ? bucket.comments : [],
+  };
+  saveEngageStore(store);
+}
+
+function currentEngageActor() {
+  const key =
+    preferredActorUserId() ||
+    preferredLocalUserId() ||
+    normalizeEmailKey(globalThis.__PDD_ACTOR_EMAIL__ || sessionStorage.getItem("pdd_local_email") || "") ||
+    "anon-local";
+  const name =
+    currentActorDisplayName() ||
+    pick(globalThis.__PDD_ACTOR_EMAIL__ || sessionStorage.getItem("pdd_local_email")) ||
+    "Lietotājs";
+  return { key: String(key).trim(), name: String(name).trim() };
+}
+
+function escEngageHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatEngageTs(iso) {
+  const s = String(iso ?? "").trim();
+  if (!s) return "";
+  try {
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return s.slice(0, 16).replace("T", " ");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${dd}.${mm}.${yy} ${hh}:${mi}`;
+  } catch {
+    return s.slice(0, 16).replace("T", " ");
+  }
+}
+
+async function syncEngageFromSupabase(aktualitateId) {
+  const sb = globalThis.__PDD_SUPABASE__;
+  const id = String(aktualitateId ?? "").trim();
+  if (!sb || !id || !sodienUiOpts.useSupabase) return getEngageBucket(id);
+  try {
+    const [rx, cx] = await Promise.all([
+      sb.from(TABLE_REACTIONS).select("*").eq("aktualitate_id", id),
+      sb.from(TABLE_COMMENTS).select("*").eq("aktualitate_id", id).order("created_at", { ascending: true }),
+    ]);
+    if (rx.error && cx.error) return getEngageBucket(id);
+    const reactions = Array.isArray(rx.data)
+      ? rx.data.map((r) => ({
+          actorKey: String(r.actor_key ?? "").trim(),
+          actorName: String(r.actor_name ?? "").trim(),
+          reaction: r.reaction === "dislike" ? "dislike" : "like",
+          updatedAt: String(r.updated_at ?? r.created_at ?? ""),
+        }))
+      : getEngageBucket(id).reactions;
+    const comments = Array.isArray(cx.data)
+      ? cx.data.map((c) => ({
+          id: String(c.id ?? "").trim(),
+          actorKey: String(c.actor_key ?? "").trim(),
+          actorName: String(c.actor_name ?? "").trim(),
+          body: String(c.body ?? "").trim(),
+          createdAt: String(c.created_at ?? ""),
+        }))
+      : getEngageBucket(id).comments;
+    const next = { reactions, comments };
+    setEngageBucket(id, next);
+    return next;
+  } catch {
+    return getEngageBucket(id);
+  }
+}
+
+async function setAktualitateReaction(aktualitateId, reaction) {
+  const id = String(aktualitateId ?? "").trim();
+  if (!id) return;
+  const want = reaction === "dislike" ? "dislike" : reaction === "like" ? "like" : "";
+  const actor = currentEngageActor();
+  const bucket = getEngageBucket(id);
+  const prev = bucket.reactions.find((r) => String(r.actorKey) === actor.key);
+  let reactions;
+  if (!want || (prev && prev.reaction === want)) {
+    reactions = bucket.reactions.filter((r) => String(r.actorKey) !== actor.key);
+  } else {
+    reactions = [
+      ...bucket.reactions.filter((r) => String(r.actorKey) !== actor.key),
+      { actorKey: actor.key, actorName: actor.name, reaction: want, updatedAt: new Date().toISOString() },
+    ];
+  }
+  setEngageBucket(id, { ...bucket, reactions });
+
+  const sb = globalThis.__PDD_SUPABASE__;
+  if (sb && sodienUiOpts.useSupabase) {
+    try {
+      await sb.from(TABLE_REACTIONS).delete().eq("aktualitate_id", id).eq("actor_key", actor.key);
+      if (want) {
+        await sb.from(TABLE_REACTIONS).upsert(
+          {
+            aktualitate_id: id,
+            actor_key: actor.key,
+            actor_name: actor.name,
+            reaction: want,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "aktualitate_id,actor_key" }
+        );
+      }
+    } catch (e) {
+      console.warn("[aktualitates.reactions]", e?.message || e);
+    }
+  }
+  remountEngagePanel(id);
+}
+
+async function addAktualitateComment(aktualitateId, bodyRaw) {
+  const id = String(aktualitateId ?? "").trim();
+  const body = String(bodyRaw ?? "").trim().slice(0, 2000);
+  if (!id || !body) return;
+  const actor = currentEngageActor();
+  const localId =
+    globalThis.crypto?.randomUUID?.() || `c-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const createdAt = new Date().toISOString();
+  const comment = {
+    id: localId,
+    actorKey: actor.key,
+    actorName: actor.name,
+    body,
+    createdAt,
+  };
+  const bucket = getEngageBucket(id);
+  setEngageBucket(id, { ...bucket, comments: [...bucket.comments, comment] });
+
+  const sb = globalThis.__PDD_SUPABASE__;
+  if (sb && sodienUiOpts.useSupabase) {
+    try {
+      const { data, error } = await sb
+        .from(TABLE_COMMENTS)
+        .insert({
+          id: localId,
+          aktualitate_id: id,
+          actor_key: actor.key,
+          actor_name: actor.name,
+          body,
+        })
+        .select("*")
+        .maybeSingle();
+      if (!error && data?.id) {
+        const synced = getEngageBucket(id);
+        setEngageBucket(id, {
+          ...synced,
+          comments: synced.comments.map((c) =>
+            String(c.id) === localId
+              ? {
+                  ...c,
+                  id: String(data.id),
+                  createdAt: String(data.created_at || createdAt),
+                }
+              : c
+          ),
+        });
+      }
+    } catch (e) {
+      console.warn("[aktualitates.comments]", e?.message || e);
+    }
+  }
+  remountEngagePanel(id);
+}
+
+async function deleteAktualitateComment(aktualitateId, commentId) {
+  const id = String(aktualitateId ?? "").trim();
+  const cid = String(commentId ?? "").trim();
+  if (!id || !cid) return;
+  const actor = currentEngageActor();
+  const bucket = getEngageBucket(id);
+  const target = bucket.comments.find((c) => String(c.id) === cid);
+  if (!target) return;
+  const canDelete =
+    isCurrentActorAdmin() || String(target.actorKey) === actor.key || !sodienUiOpts.useSupabase;
+  if (!canDelete) {
+    alert("Dzēst komentāru drīkst autors vai administrators.");
+    return;
+  }
+  setEngageBucket(id, {
+    ...bucket,
+    comments: bucket.comments.filter((c) => String(c.id) !== cid),
+  });
+  const sb = globalThis.__PDD_SUPABASE__;
+  if (sb && sodienUiOpts.useSupabase) {
+    try {
+      await sb.from(TABLE_COMMENTS).delete().eq("id", cid);
+    } catch (e) {
+      console.warn("[aktualitates.comments.delete]", e?.message || e);
+    }
+  }
+  remountEngagePanel(id);
+}
+
+function renderEngagePanelHtml(aktualitateId) {
+  const id = String(aktualitateId ?? "").trim();
+  const bucket = getEngageBucket(id);
+  const actor = currentEngageActor();
+  const likes = bucket.reactions.filter((r) => r.reaction === "like").length;
+  const dislikes = bucket.reactions.filter((r) => r.reaction === "dislike").length;
+  const mine = bucket.reactions.find((r) => String(r.actorKey) === actor.key);
+  const likeActive = mine?.reaction === "like";
+  const dislikeActive = mine?.reaction === "dislike";
+  const commentsHtml = bucket.comments.length
+    ? bucket.comments
+        .map((c) => {
+          const canDel =
+            isCurrentActorAdmin() || String(c.actorKey) === actor.key || !sodienUiOpts.useSupabase;
+          return `<div class="sodien-akt-comment">
+            <div class="sodien-akt-comment-meta">
+              <strong>${escEngageHtml(c.actorName || "Lietotājs")}</strong>
+              <span>${escEngageHtml(formatEngageTs(c.createdAt))}</span>
+              ${
+                canDel
+                  ? `<button type="button" class="btn btn-ghost btn-small sodien-akt-comment-del" data-comment-id="${escEngageHtml(c.id)}">Dzēst</button>`
+                  : ""
+              }
+            </div>
+            <div class="sodien-akt-comment-body">${escEngageHtml(c.body)}</div>
+          </div>`;
+        })
+        .join("")
+    : `<p class="sodien-akt-engage-empty">Vēl nav komentāru.</p>`;
+
+  return `
+    <div class="sodien-akt-engage-inner">
+      <div class="sodien-akt-reactions">
+        <button type="button" class="btn btn-ghost btn-small sodien-akt-react ${likeActive ? "is-active" : ""}" data-reaction="like" title="Patīk">
+          👍 Patīk <span>${likes}</span>
+        </button>
+        <button type="button" class="btn btn-ghost btn-small sodien-akt-react ${dislikeActive ? "is-active" : ""}" data-reaction="dislike" title="Nepatīk">
+          👎 Nepatīk <span>${dislikes}</span>
+        </button>
+      </div>
+      <div class="sodien-akt-comments">
+        <div class="sodien-akt-comments-title">Komentāri (${bucket.comments.length})</div>
+        <div class="sodien-akt-comments-list">${commentsHtml}</div>
+        <div class="sodien-akt-comment-form">
+          <textarea class="textarea sodien-akt-comment-input" rows="2" maxlength="2000" placeholder="Pievieno komentāru…"></textarea>
+          <button type="button" class="btn btn-primary btn-small sodien-akt-comment-add">Publicēt komentāru</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function bindEngagePanel(el, aktualitateId) {
+  const id = String(aktualitateId ?? "").trim();
+  if (!el || !id) return;
+  el.querySelectorAll(".sodien-akt-react").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const reaction = btn.getAttribute("data-reaction");
+      void setAktualitateReaction(id, reaction);
+    });
+  });
+  el.querySelectorAll(".sodien-akt-comment-del").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cid = btn.getAttribute("data-comment-id");
+      if (!confirm("Dzēst šo komentāru?")) return;
+      void deleteAktualitateComment(id, cid);
+    });
+  });
+  const addBtn = el.querySelector(".sodien-akt-comment-add");
+  const input = el.querySelector(".sodien-akt-comment-input");
+  if (addBtn && input) {
+    addBtn.addEventListener("click", () => {
+      const body = String(input.value || "").trim();
+      if (!body) return;
+      input.value = "";
+      void addAktualitateComment(id, body);
+    });
+  }
+}
+
+function remountEngagePanel(aktualitateId) {
+  const id = String(aktualitateId ?? "").trim();
+  if (!id) return;
+  document.querySelectorAll(".sodien-akt-engage[data-akt-id]").forEach((host) => {
+    if (String(host.getAttribute("data-akt-id") || "").trim() !== id) return;
+    host.innerHTML = renderEngagePanelHtml(id);
+    bindEngagePanel(host, id);
+    host.dataset.hydrated = "1";
+  });
+}
+
+function hydrateEngagePanels() {
+  const hosts = document.querySelectorAll(".sodien-akt-engage[data-akt-id]");
+  hosts.forEach((host) => {
+    const id = String(host.getAttribute("data-akt-id") || "").trim();
+    if (!id) return;
+    host.innerHTML = renderEngagePanelHtml(id);
+    bindEngagePanel(host, id);
+    host.dataset.hydrated = "1";
+    void syncEngageFromSupabase(id).then(() => {
+      if (!document.body.contains(host)) return;
+      host.innerHTML = renderEngagePanelHtml(id);
+      bindEngagePanel(host, id);
+    });
+  });
+}
+
+function scheduleHydrateEngagePanels() {
+  clearTimeout(sodienEngageHydrateTimer);
+  sodienEngageHydrateTimer = setTimeout(() => hydrateEngagePanels(), 30);
+}
+
 let sodienUiOpts = {
   useSupabase: false,
   refreshAktualitates: null,
@@ -1281,6 +1642,62 @@ function ensureSodienAktStyleOnce() {
       outline-offset: 2px;
       border-radius: 4px;
     }
+    .sodien-akt-engage {
+      margin-top: 0.55rem;
+      padding-top: 0.5rem;
+      border-top: 1px dashed rgba(2,132,199,0.35);
+    }
+    .sodien-akt-reactions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 0.45rem;
+    }
+    .sodien-akt-react.is-active {
+      background: rgba(14,116,144,0.16) !important;
+      border-color: rgba(14,116,144,0.55) !important;
+      font-weight: 600;
+    }
+    .sodien-akt-comments-title {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #075985;
+      margin-bottom: 0.35rem;
+    }
+    .sodien-akt-comments-list {
+      display: grid;
+      gap: 0.35rem;
+      margin-bottom: 0.45rem;
+    }
+    .sodien-akt-comment {
+      background: rgba(255,255,255,0.9);
+      border: 1px solid rgba(14,116,144,0.25);
+      border-radius: 8px;
+      padding: 0.4rem 0.5rem;
+    }
+    .sodien-akt-comment-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      align-items: center;
+      font-size: 0.75rem;
+      color: var(--muted, #64748b);
+      margin-bottom: 0.2rem;
+    }
+    .sodien-akt-comment-body {
+      font-size: 0.86rem;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .sodien-akt-comment-form {
+      display: grid;
+      gap: 0.35rem;
+    }
+    .sodien-akt-engage-empty {
+      margin: 0;
+      font-size: 0.8rem;
+      color: var(--muted, #64748b);
+    }
   `;
   document.head.appendChild(s);
 }
@@ -1336,7 +1753,7 @@ function renderTodayInfo({
         : visibleAktualitatesActive();
   const tasksToday = Array.isArray(todayTaskItems) ? todayTaskItems : [];
   const today = sodienDraft.start || ymd(new Date());
-  return html`
+  const out = html`
     <section
       id="sodien-aktualitates-panel"
       class="list-panel"
@@ -1444,6 +1861,7 @@ function renderTodayInfo({
                             </div>
                           `
                         : null}
+                      <div class="sodien-akt-engage" data-akt-id=${String(x.id)}></div>
                     </div>
                   `
                 )}
@@ -1593,6 +2011,8 @@ function renderTodayInfo({
         : html`<p style=${{ margin: "0 0 0.9rem", color: "var(--muted)" }}>Šodien nav darba uzdevumu ar aktuālu izpildes periodu.</p>`}
     </section>
   `;
+  scheduleHydrateEngagePanels();
+  return out;
 }
 
 window.PDDSodien = {
