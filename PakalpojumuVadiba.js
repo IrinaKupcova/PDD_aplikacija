@@ -5057,7 +5057,7 @@ ${body}
                     `
                   : null}
               </div>
-              <button type="button" class="pv-btn emphasis" onClick=${() => onToggle(true)}>Apskatīt/Labot</button>
+              <button type="button" class="pv-btn emphasis" onClick=${() => onToggle(true)}>Atvērt uzdevuma informāciju/Labot</button>
             </div>
             ${phase.description
               ? html`<div class="pv-desc-readonly"><strong style=${{ fontSize: "0.76rem", color: "#065f46" }}>Apraksts</strong><div style=${{ marginTop: "0.25rem" }}>${phase.description}</div></div>`
