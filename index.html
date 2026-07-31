@@ -170,8 +170,15 @@
         }
         .card-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 1rem;
+          align-items: stretch;
+        }
+        @media (max-width: 1100px) {
+          .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 560px) {
+          .card-grid { grid-template-columns: minmax(0, 1fr); }
         }
         .card {
           background: var(--surface);
@@ -180,10 +187,35 @@
           padding: 1.1rem;
           text-align: left;
           transition: border-color 0.15s, transform 0.12s;
+          min-height: 8.25rem;
+          height: 100%;
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-start;
+          width: 100%;
         }
         .card:hover { border-color: var(--accent-dim); transform: translateY(-1px); }
-        .card h3 { margin: 0 0 0.35rem; font-size: 1rem; }
-        .card p { margin: 0; font-size: 0.88rem; color: var(--muted); }
+        .card h3 {
+          margin: 0 0 0.35rem;
+          font-size: 1rem;
+          line-height: 1.25;
+          display: -webkit-box;
+          -webkit-line-clamp: 3;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+        .card p {
+          margin: 0;
+          font-size: 0.88rem;
+          color: var(--muted);
+          flex: 1;
+          line-height: 1.35;
+          display: -webkit-box;
+          -webkit-line-clamp: 4;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
         .btn {
           display: inline-flex;
           align-items: center;
@@ -490,9 +522,9 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202606287"></script>
+      <script defer src="./ProcesuVadiba.js?v=202607311"></script>
       <script defer src="./ProcesuVadibaPieslegums.js?v=202606284"></script>
-      <script defer src="./PakalpojumuVadiba.js?v=202607310"></script>
+      <script defer src="./PakalpojumuVadiba.js?v=202607311"></script>
       <script defer src="./PakalpojumuVadibaPieslegums.js?v=202607310"></script>
 
       <script type="module">

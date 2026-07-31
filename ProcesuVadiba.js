@@ -2157,9 +2157,9 @@ ${body}
   }
 
   function ensureStyles() {
-    if (typeof document === "undefined" || document.getElementById("pdd-pv-styles-v9")) return;
+    if (typeof document === "undefined" || document.getElementById("pdd-pv-styles-v9b")) return;
     const el = document.createElement("style");
-    el.id = "pdd-pv-styles-v9";
+    el.id = "pdd-pv-styles-v9b";
     el.textContent = `
       .pv-root {
         --pv-bg: #e8f8f3;
@@ -2389,6 +2389,14 @@ ${body}
       }
       .pv-btn:hover { border-color: #0d9488; }
       .pv-btn.primary { background: #047857; border-color: #047857; color: #fff; }
+      .pv-btn.primary:hover { background: #065f46; border-color: #065f46; }
+      .pv-btn.emphasis {
+        background: #0d9488; border-color: #0f766e; color: #fff;
+        font-weight: 700; box-shadow: 0 2px 8px rgba(13, 148, 136, 0.28);
+      }
+      .pv-btn.emphasis:hover {
+        background: #0f766e; border-color: #115e59; color: #fff;
+      }
       .pv-card {
         background: #fff; border: 1px solid var(--pv-border); border-radius: 12px;
         padding: 1rem; margin-bottom: 1rem;
@@ -4084,7 +4092,7 @@ ${body}
           <div class="pv-toolbar">
             ${childAction
               ? html`
-                  <button type="button" class="pv-btn" onClick=${childAction.onClick}>${childAction.label}</button>
+                  <button type="button" class="pv-btn emphasis" onClick=${childAction.onClick}>${childAction.label}</button>
                 `
               : null}
             ${CONTENT_BLOCK_TYPES.map(
@@ -5047,7 +5055,7 @@ ${body}
                     `
                   : null}
               </div>
-              <button type="button" class="pv-btn" onClick=${() => onToggle(true)}>Apskatīt/Labot</button>
+              <button type="button" class="pv-btn emphasis" onClick=${() => onToggle(true)}>Apskatīt/Labot</button>
             </div>
             ${phase.description
               ? html`<div class="pv-desc-readonly"><strong style=${{ fontSize: "0.76rem", color: "#065f46" }}>Apraksts</strong><div style=${{ marginTop: "0.25rem" }}>${phase.description}</div></div>`
