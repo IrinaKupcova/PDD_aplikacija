@@ -484,7 +484,7 @@
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=202607292"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202606205"></script>
+      <script defer src="./Navigacija.js?v=202607310"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
@@ -492,6 +492,8 @@
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
       <script defer src="./ProcesuVadiba.js?v=202606287"></script>
       <script defer src="./ProcesuVadibaPieslegums.js?v=202606284"></script>
+      <script defer src="./PakalpojumuVadiba.js?v=202607310"></script>
+      <script defer src="./PakalpojumuVadibaPieslegums.js?v=202607310"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -1329,6 +1331,7 @@
         let cachedIadPanel = null;
         let cachedSaliedesanaPanel = null;
         let cachedProcesuVadibaPanel = null;
+        let cachedPakalpojumuVadibaPanel = null;
         function getIadPanel() {
           if (!cachedIadPanel && globalThis.IAD?.createIadModule) {
             cachedIadPanel = globalThis.IAD.createIadModule(html, React);
@@ -1351,10 +1354,25 @@
           }
           return cachedProcesuVadibaPanel;
         }
+        function getPakalpojumuVadibaPanel() {
+          if (!cachedPakalpojumuVadibaPanel && globalThis.PDD_PAKALPOJUMU_VADIBA?.createPakalpojumuVadibaModule) {
+            try {
+              cachedPakalpojumuVadibaPanel = globalThis.PDD_PAKALPOJUMU_VADIBA.createPakalpojumuVadibaModule(html, React);
+            } catch (e) {
+              console.error("[Pakalpojumu vadība] inicializācijas kļūda", e);
+            }
+          }
+          return cachedPakalpojumuVadibaPanel;
+        }
         globalThis.__PDD_DEBUG_PROCESU_VADIBA__ = () => ({
           hasApi: Boolean(globalThis.PDD_PROCESU_VADIBA),
           hasFactory: typeof globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule === "function",
           hasPanel: Boolean(getProcesuVadibaPanel()),
+        });
+        globalThis.__PDD_DEBUG_PAKALPOJUMU_VADIBA__ = () => ({
+          hasApi: Boolean(globalThis.PDD_PAKALPOJUMU_VADIBA),
+          hasFactory: typeof globalThis.PDD_PAKALPOJUMU_VADIBA?.createPakalpojumuVadibaModule === "function",
+          hasPanel: Boolean(getPakalpojumuVadibaPanel()),
         });
         const AppShellWithNav =
           globalThis.PDD_NAV?.createAppShellWithNav?.(html) ??
@@ -2998,7 +3016,7 @@
           return html`<${View} supabase=${supabase} highlightRowId=${highlightRowId || ""} />`;
         }
 
-        function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenSaliedesana, onOpenProcesuVadiba, onOpenTodayTask, absencesToday }) {
+        function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenSaliedesana, onOpenProcesuVadiba, onOpenPakalpojumuVadiba, onOpenTodayTask, absencesToday }) {
           const [sodienRows, setSodienRows] = useState(() => {
             try {
               if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !configured() || !globalThis.__PDD_SUPABASE__) {
@@ -3194,6 +3212,9 @@
                 </button>
                 <button type="button" class="card" onClick=${onOpenProcesuVadiba}>
                   <h3>Procesu vadība</h3>
+                </button>
+                <button type="button" class="card" onClick=${onOpenPakalpojumuVadiba}>
+                  <h3>Pakalpojumu vadība</h3>
                 </button>
               </div>
               ${sodienBlock}
@@ -7919,6 +7940,7 @@
             if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-done") return "IAD: Neaktuālie";
             if (sectionView === "darbaUzdevumiIad") return "IAD ieteikumi";
             if (sectionView === "procesuVadiba") return "Procesu vadība";
+            if (sectionView === "pakalpojumuVadiba") return "Pakalpojumu vadība";
             if (sectionView === "aktualitatesHistory") return "Aktualitāšu vēsture";
             if (sectionView === "pddAppChanges") return "Izmaiņas PDD aplikācijā";
             if (sectionView !== "prombutnes") return "Sadaļa";
@@ -8592,6 +8614,14 @@
                       </div>`
                     : html`<section class="list-panel"><p>Procesu vadība nav ielādēta.</p></section>`;
                 }
+                if (view === "pakalpojumuVadiba") {
+                  const PakalpojumuVadibaPanel = getPakalpojumuVadibaPanel();
+                  return PakalpojumuVadibaPanel
+                    ? html`<div class="pv-embed-host" style=${{ minHeight: "calc(100vh - 6rem)" }}>
+                        <${PakalpojumuVadibaPanel} />
+                      </div>`
+                    : html`<section class="list-panel"><p>Pakalpojumu vadība nav ielādēta.</p></section>`;
+                }
                 return null;
               })()}
               ${view === "home"
@@ -8613,6 +8643,10 @@
                     onOpenProcesuVadiba=${() => {
                       setNavPast((p) => [...p, { view, promSub }]);
                       setView("procesuVadiba");
+                    }}
+                    onOpenPakalpojumuVadiba=${() => {
+                      setNavPast((p) => [...p, { view, promSub }]);
+                      setView("pakalpojumuVadiba");
                     }}
                     onOpenTodayTask=${(task) => {
                       setNavPast((p) => [...p, { view, promSub }]);
@@ -8639,6 +8673,8 @@
                   : view === "darbaUzdevumiIad"
                     ? null
                   : view === "procesuVadiba"
+                    ? null
+                  : view === "pakalpojumuVadiba"
                     ? null
                   : view === "saliedesana"
                     ? null

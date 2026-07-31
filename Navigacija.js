@@ -787,6 +787,13 @@
               >
                 Procesu vadība
               </button>
+              <button
+                type="button"
+                class=${`app-nav-link ${view === "pakalpojumuVadiba" ? "active" : ""}`}
+                onClick=${() => onChangeView("pakalpojumuVadiba")}
+              >
+                Pakalpojumu vadība
+              </button>
               <details class="app-nav-vesture-details" open=${vestureAccordionOpen}>
                 <summary class="app-nav-link app-nav-vesture-summary">Vēsture</summary>
                 <div class="app-nav-sub" role="group" aria-label="Vēstures apakšsadaļas">
