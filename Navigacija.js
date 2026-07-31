@@ -625,7 +625,7 @@
         void navShouldShowAppChangesNew(view === "pddAppChanges" ? "pddAppChanges" : "home");
       }
 
-      const showPddAppChangesBadge = false;
+      const showPddAppChangesBadge = Boolean(_showPddAppChangesBadgeProp);
 
       function openPddAppChangesNav() {
         onChangeView("pddAppChanges");
