@@ -4938,7 +4938,7 @@ ${body}
               style=${{ marginLeft: "0.35rem", padding: "0.2rem 0.45rem", fontSize: "0.76rem" }}
               onClick=${() => {
                 setTeamLoading(true);
-                void hydrateTeamUsersForPv().then((list) => {
+                void hydrateTeamUsersForPv({ force: true }).then((list) => {
                   setTeam(list);
                   setTeamLoading(false);
                 });
