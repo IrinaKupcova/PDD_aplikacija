@@ -2087,9 +2087,9 @@ ${body}
   }
 
   function ensureStyles() {
-    if (typeof document === "undefined" || document.getElementById("pdd-pkv-styles-v9b")) return;
+    if (typeof document === "undefined" || document.getElementById("pdd-pkv-styles-v9c")) return;
     const el = document.createElement("style");
-    el.id = "pdd-pkv-styles-v9b";
+    el.id = "pdd-pkv-styles-v9c";
     el.textContent = `
       .pv-root {
         --pv-bg: #e8f8f3;
@@ -2101,16 +2101,23 @@ ${body}
         --pv-accent-2: #047857;
         font-family: "Segoe UI", system-ui, sans-serif;
         color: var(--pv-text);
-        min-height: 70vh;
+        min-height: 0;
+        height: 100%;
         width: 100%;
-        display: block;
+        display: flex;
+        flex-direction: column;
       }
       .pv-shell {
         display: grid;
         grid-template-columns: minmax(400px, 460px) minmax(0, 1fr);
-        grid-template-rows: 1fr;
+        grid-template-rows: minmax(0, 1fr);
         align-items: stretch;
-        min-height: calc(100vh - 80px);
+        flex: 1;
+        min-height: 0;
+        height: calc(100vh - 80px);
+        max-height: calc(100vh - 80px);
+        height: calc(100dvh - 80px);
+        max-height: calc(100dvh - 80px);
         width: 100%;
         max-width: none;
         border-radius: 14px;
@@ -2119,7 +2126,21 @@ ${body}
         background: linear-gradient(165deg, #f0fdf9 0%, #e8f8f3 50%, #dff5ee 100%);
         box-shadow: 0 8px 28px rgba(13, 148, 136, 0.12);
       }
-      @media (max-width: 900px) { .pv-shell { grid-template-columns: 1fr; } }
+      .pv-embed-host .pv-root,
+      .pv-embed-host .pv-shell {
+        height: 100%;
+        max-height: 100%;
+        min-height: 0;
+      }
+      @media (max-width: 900px) {
+        .pv-shell {
+          grid-template-columns: 1fr;
+          grid-template-rows: minmax(220px, 42vh) minmax(0, 1fr);
+          height: auto;
+          max-height: none;
+          min-height: calc(100dvh - 80px);
+        }
+      }
       .pv-sidebar {
         background: #75ccbd;
         border-right: 1px solid #63c2a5;
@@ -2127,7 +2148,11 @@ ${body}
         display: flex;
         flex-direction: column;
         gap: 0.65rem;
+        min-height: 0;
+        height: 100%;
+        overflow: hidden;
       }
+      .pv-brand, .pv-sidebar > .pv-nav-btn { flex: 0 0 auto; }
       .pv-brand h2 { margin: 0; font-size: 1.05rem; font-weight: 700; color: #01171d; }
       .pv-brand p { margin: 0.3rem 0 0; font-size: 0.78rem; color: #0f3d38; line-height: 1.4; }
       .pv-nav-btn {
@@ -2137,10 +2162,26 @@ ${body}
       }
       .pv-nav-btn:hover { background: rgba(255,255,255,0.55); }
       .pv-nav-btn.active { background: #fff; border-color: #4ab3a5; font-weight: 600; }
-      .pv-sidebar-tasks { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 0.35rem; }
-      .pv-sidebar-tasks .pv-phase-list { flex: 1; }
+      .pv-sidebar-tasks { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 0.35rem; overflow: hidden; }
+      .pv-sidebar-tasks .pv-phase-list { flex: 1 1 auto; min-height: 0; }
       .pv-sidebar-tasks .pv-add-btn { flex: 0 0 auto; }
-      .pv-phase-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 0.35rem; }
+      .pv-phase-list {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
+        scrollbar-width: thin;
+        scrollbar-color: #0f766e rgba(255,255,255,0.35);
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        -webkit-overflow-scrolling: touch;
+      }
+      .pv-phase-list::-webkit-scrollbar { width: 8px; }
+      .pv-phase-list::-webkit-scrollbar-track { background: rgba(255,255,255,0.25); border-radius: 8px; }
+      .pv-phase-list::-webkit-scrollbar-thumb { background: #0f766e; border-radius: 8px; }
       .pv-sidebar-accordion { display: flex; flex-direction: column; gap: 0.15rem; }
       .pv-sidebar-accordion-head { display: flex; align-items: stretch; gap: 0.15rem; }
       .pv-sidebar-accordion-head .pv-phase-item { flex: 1; min-width: 0; }
@@ -2207,7 +2248,7 @@ ${body}
         width: 100%; border: 1px dashed #047857; background: rgba(255,255,255,0.4);
         color: #01171d; border-radius: 10px; padding: 0.5rem; font: inherit; cursor: pointer;
       }
-      .pv-main { padding: 0.85rem 1rem 1.75rem; overflow: auto; min-width: 0; width: 100%; }
+      .pv-main { padding: 0.85rem 1rem 1.75rem; overflow: auto; min-width: 0; min-height: 0; width: 100%; height: 100%; }
       .pv-main.pv-main-overview { padding: 0.65rem 0.85rem 1rem; display: flex; flex-direction: column; min-height: 0; }
       .pv-card { max-width: none; }
       .pv-content-block-card { max-width: none; }

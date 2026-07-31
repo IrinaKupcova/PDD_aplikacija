@@ -61,6 +61,16 @@
         .pv-embed-host {
           width: 100%;
           max-width: none;
+          height: calc(100vh - 6rem);
+          height: calc(100dvh - 6rem);
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+        }
+        .pv-embed-host > * {
+          flex: 1;
+          min-height: 0;
+          height: 100%;
         }
         .app-nav {
           flex: 0 0 200px;
@@ -76,8 +86,13 @@
           overflow-y: auto;
           overscroll-behavior: contain;
           scrollbar-gutter: stable;
+          scrollbar-width: thin;
+          scrollbar-color: #0f766e rgba(0, 0, 0, 0.08);
           -webkit-overflow-scrolling: touch;
         }
+        .app-nav::-webkit-scrollbar { width: 8px; }
+        .app-nav::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.06); border-radius: 8px; }
+        .app-nav::-webkit-scrollbar-thumb { background: #0f766e; border-radius: 8px; }
         .app-nav-inner {
           display: flex;
           flex-direction: column;
@@ -534,9 +549,9 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202607311"></script>
+      <script defer src="./ProcesuVadiba.js?v=202607313"></script>
       <script defer src="./ProcesuVadibaPieslegums.js?v=202606284"></script>
-      <script defer src="./PakalpojumuVadiba.js?v=202607312"></script>
+      <script defer src="./PakalpojumuVadiba.js?v=202607313"></script>
       <script defer src="./PakalpojumuVadibaPieslegums.js?v=202607310"></script>
 
       <script type="module">
@@ -8653,7 +8668,7 @@
                 if (view === "procesuVadiba") {
                   const ProcesuVadibaPanel = getProcesuVadibaPanel();
                   return ProcesuVadibaPanel
-                    ? html`<div class="pv-embed-host" style=${{ minHeight: "calc(100vh - 6rem)" }}>
+                    ? html`<div class="pv-embed-host">
                         <${ProcesuVadibaPanel} />
                       </div>`
                     : html`<section class="list-panel"><p>Procesu vadība nav ielādēta.</p></section>`;
@@ -8661,7 +8676,7 @@
                 if (view === "pakalpojumuVadiba") {
                   const PakalpojumuVadibaPanel = getPakalpojumuVadibaPanel();
                   return PakalpojumuVadibaPanel
-                    ? html`<div class="pv-embed-host" style=${{ minHeight: "calc(100vh - 6rem)" }}>
+                    ? html`<div class="pv-embed-host">
                         <${PakalpojumuVadibaPanel} />
                       </div>`
                     : html`<section class="list-panel"><p>Pakalpojumu vadība nav ielādēta.</p></section>`;
