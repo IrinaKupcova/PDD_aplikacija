@@ -516,7 +516,7 @@
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=202607292"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202607310"></script>
+      <script defer src="./Navigacija.js?v=202607312"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
@@ -524,7 +524,7 @@
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
       <script defer src="./ProcesuVadiba.js?v=202607311"></script>
       <script defer src="./ProcesuVadibaPieslegums.js?v=202606284"></script>
-      <script defer src="./PakalpojumuVadiba.js?v=202607311"></script>
+      <script defer src="./PakalpojumuVadiba.js?v=202607312"></script>
       <script defer src="./PakalpojumuVadibaPieslegums.js?v=202607310"></script>
 
       <script type="module">
@@ -3239,14 +3239,14 @@
                   <h3>Darba uzdevumi</h3>
                   <p>IAD ieteikumi un citi apakšmoduļi.</p>
                 </button>
-                <button type="button" class="card" onClick=${onOpenSaliedesana}>
-                  <h3>Saliedēšanas pasākumi, svētku dienas u.c.</h3>
-                </button>
                 <button type="button" class="card" onClick=${onOpenProcesuVadiba}>
                   <h3>Procesu vadība</h3>
                 </button>
                 <button type="button" class="card" onClick=${onOpenPakalpojumuVadiba}>
                   <h3>Pakalpojumu vadība</h3>
+                </button>
+                <button type="button" class="card" onClick=${onOpenSaliedesana}>
+                  <h3>Saliedēšanas pasākumi, svētku dienas u.c.</h3>
                 </button>
               </div>
               ${sodienBlock}

@@ -8,7 +8,8 @@
  * — Neatgriezties pie local-first / pickNewerState(local) ielādē
  */
 (function (root) {
-  const LS_KEY = "pdd_pakalpojumu_vadiba_v1";
+  const LS_KEY = "pdd_pakalpojumu_vadiba_v2";
+  const LS_EMPTY_BOOT = "pdd_pakalpojumu_empty_boot_v1";
   const MODULE_VERSION = 9;
   const STABLE_RELEASE = "202606270";
   const GANTT_CHART_LABEL = "Gantt Chart";
@@ -382,11 +383,6 @@
   }
 
   function defaultState() {
-    const phaseId = uid();
-    const sub1 = uid();
-    const sub2 = uid();
-    const registryToolId = uid();
-    const t0 = todayIso();
     return {
       version: MODULE_VERSION,
       screen: "overview",
@@ -395,80 +391,14 @@
       overviewBlocks: [],
       workPlanSections: [],
       notes: [],
-      phases: [
-        {
-          id: phaseId,
-          parentId: null,
-          order: 0,
-          title: "Pakalpojumu reģistra jauna koncepta ieviešana",
-          description:
-            "Pārvalžu jaunā koncepta izstrāde un ieviešana pakalpojumu reģistrā. Apkopojums darbam ar pārvaldēm un daļām.",
-          start: t0,
-          end: addDays(t0, 120),
-          progress: 15,
-          status: "Procesā",
-          workPlanTaskId: null,
-          blocks: [],
-          tools: [
-            {
-              id: registryToolId,
-              type: "registry",
-              title: "Pārvalžu un daļu apkopojums",
-              description: "Darbs ar pārvaldēm un struktūrvienībām (aizstāj Excel sarakstu).",
-            },
-          ],
-          registries: {
-            [registryToolId]: {
-              columns: defaultRegistryColumns(),
-              rows: [
-                {
-                  id: uid(),
-                  cells: {},
-                },
-              ],
-            },
-          },
-        },
-        {
-          id: sub1,
-          parentId: phaseId,
-          order: 0,
-          title: "Sagatavošana un vajadzību apkopošana",
-          description: "Identificēt pārvaldes, kontaktpersonas un sākotnējās prasības.",
-          start: t0,
-          end: addDays(t0, 30),
-          progress: 25,
-          status: "Procesā",
-          workPlanTaskId: null,
-          blocks: [],
-          tools: [],
-          registries: {},
-        },
-        {
-          id: sub2,
-          parentId: phaseId,
-          order: 1,
-          title: "Koncepta izstrāde un saskaņošana",
-          description: "Koncepta dokumenta izstrāde un saskaņošana ar pārvaldēm.",
-          start: addDays(t0, 31),
-          end: addDays(t0, 90),
-          progress: 5,
-          status: "Plānots",
-          workPlanTaskId: null,
-          blocks: [],
-          tools: [],
-          registries: {},
-        },
-      ],
+      phases: [],
+      updatedAt: new Date().toISOString(),
     };
   }
 
   function migrateState(s) {
     if (!s || typeof s !== "object") return defaultState();
-    if (!Array.isArray(s.phases)) return defaultState();
-    if (s.phases.length === 0 && !s.workPlanSections?.length && !s.notes?.length && !s.updatedAt && !s.updated_at) {
-      return defaultState();
-    }
+    if (!Array.isArray(s.phases)) s.phases = [];
     for (const p of s.phases) {
       p.tools = Array.isArray(p.tools) ? p.tools : [];
       p.registries = p.registries && typeof p.registries === "object" ? p.registries : {};
@@ -2976,6 +2906,37 @@ ${body}
             return;
           }
           try {
+            let forceEmpty = false;
+            try {
+              forceEmpty = !localStorage.getItem(LS_EMPTY_BOOT);
+            } catch {
+              forceEmpty = true;
+            }
+            if (forceEmpty) {
+              const empty = defaultState();
+              empty.updatedAt = new Date().toISOString();
+              const bootEmpty = await saveRemoteState(sb, empty);
+              if (bootEmpty?.ok) {
+                try {
+                  localStorage.setItem(LS_EMPTY_BOOT, "1");
+                  localStorage.removeItem("pdd_pakalpojumu_vadiba_v1");
+                  localStorage.removeItem("pdd_pakalpojumu_vadiba_v1_backup");
+                } catch {
+                  /* ignore */
+                }
+                if (cancelled || hydratedRef.current) return;
+                hydratedRef.current = true;
+                setState(empty);
+                saveState(empty);
+                stateRef.current = empty;
+                remoteReadyRef.current = true;
+                if (!cancelled) {
+                  setSyncStatus("synced");
+                  setSyncError("");
+                }
+                return;
+              }
+            }
             const local = loadState();
             if (local && stateContentScore(local) > stateContentScore(defaultState())) {
               backupLocalState(local);
@@ -2994,7 +2955,7 @@ ${body}
                   setSyncStatus("error");
                   setSyncError(
                     boot?.error?.message ||
-                      "Neizdevās rakstīt Supabase. Palaid SQL: supabase/PIEMEROT_PROCESU_VADIBAS_MODULIS.sql",
+                      "Neizdevās rakstīt Supabase. Palaid migrāciju 20260731120000_pakalpojumu_vadibas_modulis.sql",
                   );
                 }
                 remoteReadyRef.current = true;

@@ -775,13 +775,6 @@
               </details>
               <button
                 type="button"
-                class=${`app-nav-link ${view === "saliedesana" ? "active" : ""}`}
-                onClick=${() => onChangeView("saliedesana")}
-              >
-                Saliedēšanas pasākumi, svētku dienas u.c.
-              </button>
-              <button
-                type="button"
                 class=${`app-nav-link ${view === "procesuVadiba" ? "active" : ""}`}
                 onClick=${() => onChangeView("procesuVadiba")}
               >
@@ -793,6 +786,13 @@
                 onClick=${() => onChangeView("pakalpojumuVadiba")}
               >
                 Pakalpojumu vadība
+              </button>
+              <button
+                type="button"
+                class=${`app-nav-link ${view === "saliedesana" ? "active" : ""}`}
+                onClick=${() => onChangeView("saliedesana")}
+              >
+                Saliedēšanas pasākumi, svētku dienas u.c.
               </button>
               <details class="app-nav-vesture-details" open=${vestureAccordionOpen}>
                 <summary class="app-nav-link app-nav-vesture-summary">Vēsture</summary>
