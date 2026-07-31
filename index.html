@@ -549,9 +549,9 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202607314"></script>
+      <script defer src="./ProcesuVadiba.js?v=202607315"></script>
       <script defer src="./ProcesuVadibaPieslegums.js?v=202606284"></script>
-      <script defer src="./PakalpojumuVadiba.js?v=202607314"></script>
+      <script defer src="./PakalpojumuVadiba.js?v=202607315"></script>
       <script defer src="./PakalpojumuVadibaPieslegums.js?v=202607310"></script>
 
       <script type="module">
@@ -7294,7 +7294,14 @@
             setApproverCols(detectUserApproverColumns(rawUsers));
             setTeamUsers(normalizedUsers);
             try {
-              window.KOMANDA?.saveTeamUsers?.(normalizedUsers);
+              const existing = window.KOMANDA?.loadTeamUsers?.() ?? [];
+              const existingLen = Array.isArray(existing) ? existing.length : 0;
+              // Nenokauj pilnu kešu ar nepilnu SELECT (anon RLS bieži atgriež 0–1 rindu).
+              if (normalizedUsers.length >= Math.max(existingLen, 2)) {
+                window.KOMANDA?.saveTeamUsers?.(normalizedUsers);
+              } else if (normalizedUsers.length && window.KOMANDA?.mergeTeamUsersCache) {
+                window.KOMANDA.mergeTeamUsersCache(normalizedUsers);
+              }
             } catch {
               // ignore KOMANDA local cache sync errors
             }

@@ -509,9 +509,13 @@
 
   let hydrateTeamUsersPromise = null;
 
-  async function hydrateTeamUsersForPv() {
+  async function hydrateTeamUsersForPv(options = {}) {
+    const force = options.force === true;
     const cached = getTeamUsers();
-    if (cached.length) return cached;
+    // Bez force: ja kešā jau ir saraksts, rādām uzreiz, bet tomēr atjauninām fonā caur RPC.
+    if (!force && cached.length && hydrateTeamUsersPromise) {
+      return hydrateTeamUsersPromise.then(() => getTeamUsers());
+    }
     if (hydrateTeamUsersPromise) return hydrateTeamUsersPromise;
 
     hydrateTeamUsersPromise = (async () => {
@@ -526,8 +530,17 @@
         }
         if (sb) {
           let rows = null;
-          const r1 = await sb.from("users").select("*").order("Vārds uzvārds", { ascending: true });
-          if (!r1.error && Array.isArray(r1.data) && r1.data.length) rows = r1.data;
+          // RPC apejot anon RLS (citādi lietotājs redz tikai savu rindu / tukšu sarakstu).
+          try {
+            const rpc = await sb.rpc("pdd_list_team_directory");
+            if (!rpc.error && Array.isArray(rpc.data) && rpc.data.length) rows = rpc.data;
+          } catch {
+            /* older DB without RPC */
+          }
+          if (!rows?.length) {
+            const r1 = await sb.from("users").select("*").order("Vārds uzvārds", { ascending: true });
+            if (!r1.error && Array.isArray(r1.data) && r1.data.length) rows = r1.data;
+          }
           if (!rows?.length) {
             const r2 = await sb.from("users").select("*");
             if (!r2.error && Array.isArray(r2.data) && r2.data.length) rows = r2.data;
@@ -541,8 +554,25 @@
             }
           }
           if (rows?.length) {
-            if (root.KOMANDA?.mergeTeamUsersCache) root.KOMANDA.mergeTeamUsersCache(rows);
-            else if (root.KOMANDA?.saveTeamUsers) root.KOMANDA.saveTeamUsers(rows);
+            const prev = getTeamUsers();
+            // Pilns katalogs no RPC/SELECT — pārrakstām nepilnu kešu; citādi tikai merge.
+            if (rows.length >= Math.max(prev.length, 2) && root.KOMANDA?.saveTeamUsers) {
+              root.KOMANDA.saveTeamUsers(rows);
+            } else if (root.KOMANDA?.mergeTeamUsersCache) {
+              root.KOMANDA.mergeTeamUsersCache(rows);
+            } else if (root.KOMANDA?.saveTeamUsers) {
+              root.KOMANDA.saveTeamUsers(rows);
+            }
+            try {
+              root.dispatchEvent?.(new CustomEvent("pdd:komanda-team-users-changed"));
+            } catch {
+              /* ignore */
+            }
+            try {
+              window.dispatchEvent(new CustomEvent("pdd:komanda-team-users-changed"));
+            } catch {
+              /* ignore */
+            }
           }
         }
       } catch (e) {
@@ -553,6 +583,10 @@
       hydrateTeamUsersPromise = null;
     });
 
+    if (!force && cached.length) {
+      void hydrateTeamUsersPromise;
+      return cached;
+    }
     return hydrateTeamUsersPromise;
   }
 
@@ -4838,16 +4872,8 @@ ${body}
         let cancelled = false;
 
         async function ensureTeam() {
-          const current = getTeamUsers();
-          if (current.length) {
-            if (!cancelled) {
-              setTeam(current);
-              setTeamLoading(false);
-            }
-            return;
-          }
           if (!cancelled) setTeamLoading(true);
-          const list = await hydrateTeamUsersForPv();
+          const list = await hydrateTeamUsersForPv({ force: true });
           if (!cancelled) {
             setTeam(list);
             setTeamLoading(false);
