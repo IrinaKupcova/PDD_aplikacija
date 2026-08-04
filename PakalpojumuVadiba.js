@@ -5415,7 +5415,6 @@ ${body}
                   ${displayNum ? html`<span class="pv-phase-num">${displayNum}</span>` : null}
                 </div>
                 <strong>${phase.title}</strong>
-                <div class="meta" style=${{ marginTop: "0.2rem" }}>Autors: ${phaseAuthorLabel(phase)}</div>
               </div>
               <button type="button" class="pv-btn emphasis" onClick=${() => onToggle(true)}>Atvērt uzdevuma informāciju/Labot</button>
             </div>
@@ -5437,7 +5436,6 @@ ${body}
 
           <div class="pv-edit-section" style=${{ marginTop: 0, paddingTop: 0, borderTop: 0 }}>
             <h4>Pamatinformācija</h4>
-            <div class="meta" style=${{ marginBottom: "0.55rem" }}>Autors: ${phaseAuthorLabel(phase)}</div>
             <div class="pv-edit-grid">
               <label>
                 Numurs
@@ -5569,6 +5567,8 @@ ${body}
           </div>
 
           ${addToolbar}
+
+          <div class="meta" style=${{ marginTop: "0.7rem", textAlign: "right" }}>Autors: ${phaseAuthorLabel(phase)}</div>
 
           <div class="pv-edit-footer">
             <button type="button" class="pv-btn primary" onClick=${handleSave}>Saglabāt</button>
