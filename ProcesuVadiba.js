@@ -86,7 +86,8 @@
   function currentNoteAuthor() {
     try {
       const name = String(
-        root.__PDD_ACTOR_NAME__ ||
+        root.__PDD_ACTOR_DISPLAY_NAME__ ||
+          root.__PDD_ACTOR_NAME__ ||
           root.__PDD_SESSION_NAME__ ||
           (typeof sessionStorage !== "undefined" && sessionStorage.getItem("pdd_local_display_name")) ||
           "",
