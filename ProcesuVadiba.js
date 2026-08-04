@@ -1,5 +1,5 @@
 /**
- * Procesu vadība — uzdevumi, posmi, apakšposmi, Gantt, Lists reģistri.
+ * Procesu vadība — uzdevumi, apakšuzdevumi, apakšapakšuzdevumi, Gantt, Lists reģistri.
  * Eksports: globalThis.PDD_PROCESU_VADIBA.createProcesuVadibaModule(html, React)
  *
  * STABILA RELĪZE: 202606270 (MODULE_VERSION 9)
@@ -475,6 +475,8 @@
       p.blocks = Array.isArray(p.blocks) ? p.blocks : [];
       if (p.workPlanTaskId === undefined) p.workPlanTaskId = null;
       p.assignees = normalizeAssignees(p.assignees);
+      if (p.kind === "Posms") p.kind = "Apakšuzdevums";
+      else if (p.kind === "Apakšposms") p.kind = "Apakšapakšuzdevums";
     }
     s.overviewBlocks = Array.isArray(s.overviewBlocks) ? s.overviewBlocks : [];
     s.workPlanSections = tidyWorkPlanSections(s.workPlanSections);
@@ -678,10 +680,10 @@
       out.push(withProgress(root, 0, "Uzdevums", String(taskNum)));
       const posmi = list.filter((p) => p.parentId === root.id).sort((a, b) => a.order - b.order);
       posmi.forEach((posm, pi) => {
-        out.push(withProgress(posm, 1, "Posms", `${taskNum}.${pi + 1}`));
+        out.push(withProgress(posm, 1, "Apakšuzdevums", `${taskNum}.${pi + 1}`));
         const subs = list.filter((p) => p.parentId === posm.id).sort((a, b) => a.order - b.order);
         subs.forEach((sub, si) => {
-          out.push(withProgress(sub, 2, "Apakšposms", `${taskNum}.${pi + 1}.${si + 1}`));
+          out.push(withProgress(sub, 2, "Apakšapakšuzdevums", `${taskNum}.${pi + 1}.${si + 1}`));
         });
       });
     }
@@ -717,14 +719,14 @@
       const posmi = phases.filter((p) => p.parentId === root.id);
       if (depth === 1) {
         if (parts[1] < 1 || parts[1] > Math.max(posmi.length, 1)) {
-          return { ok: false, reason: `Posma numurs 1–${Math.max(posmi.length, 1)} šim uzdevumam.` };
+          return { ok: false, reason: `Apakšuzdevuma numurs 1–${Math.max(posmi.length, 1)} šim uzdevumam.` };
         }
       } else {
         const posm = posmi.sort((a, b) => a.order - b.order)[parts[1] - 1];
-        if (!posm) return { ok: false, reason: `Nav posma Nr. ${parts[0]}.${parts[1]}.` };
+        if (!posm) return { ok: false, reason: `Nav apakšuzdevuma Nr. ${parts[0]}.${parts[1]}.` };
         const subs = phases.filter((p) => p.parentId === posm.id);
         if (parts[2] < 1 || parts[2] > Math.max(subs.length, 1)) {
-          return { ok: false, reason: `Apakšposma numurs 1–${Math.max(subs.length, 1)}.` };
+          return { ok: false, reason: `Apakšapakšuzdevuma numurs 1–${Math.max(subs.length, 1)}.` };
         }
       }
     } else if (parts[0] < 1 || parts[0] > Math.max(roots.length, 1)) {
@@ -1142,7 +1144,7 @@
     for (const p of flattenPhasesWithNumbers(phases)) {
       if (p.workPlanTaskId && taskIds.has(p.workPlanTaskId)) {
         rows.push({
-          source: "Uzdevums / posms",
+          source: "Uzdevums / apakšuzdevums",
           workPlanTask: workPlanTaskLabel(sections, p.workPlanTaskId),
           num: p.num,
           kind: p.kind,
@@ -1237,27 +1239,29 @@
 
   function phaseKindMeta(phase, phases) {
     if (!phase?.parentId) {
-      return { kind: "Uzdevums", level: 0, childLabel: "Posms", addChildLabel: "+ Pievienot posmu" };
+      return { kind: "Uzdevums", level: 0, childLabel: "Apakšuzdevums", addChildLabel: "+ Pievienot apakšuzdevumu" };
     }
     const parent = phases.find((p) => p.id === phase.parentId);
     if (parent && !parent.parentId) {
-      return { kind: "Posms", level: 1, childLabel: "Apakšposms", addChildLabel: "+ Pievienot apakšposmu" };
+      return { kind: "Apakšuzdevums", level: 1, childLabel: "Apakšapakšuzdevums", addChildLabel: "+ Pievienot apakšapakšuzdevumu" };
     }
-    return { kind: "Apakšposms", level: 2, childLabel: null, addChildLabel: null };
+    return { kind: "Apakšapakšuzdevums", level: 2, childLabel: null, addChildLabel: null };
   }
 
   function navKindLabel(kind) {
     const k = String(kind || "");
     if (k === "Uzdevums") return "UZDEVUMS";
-    if (k === "Posms") return "posms";
-    if (k === "Apakšposms") return "apakšposms";
+    if (k === "Apakšuzdevums" || k === "Posms") return "apakšuzdevums";
+    if (k === "Apakšapakšuzdevums" || k === "Apakšposms") return "apakšapakšuzdevums";
     return k;
   }
 
   function navKindTagClass(kind) {
     const k = String(kind || "");
     if (k === "Uzdevums") return "pv-kind-tag pv-kind-nav-uzdevums";
-    if (k === "Posms" || k === "Apakšposms") return "pv-kind-tag pv-kind-nav-posms";
+    if (k === "Apakšuzdevums" || k === "Apakšapakšuzdevums" || k === "Posms" || k === "Apakšposms") {
+      return "pv-kind-tag pv-kind-nav-posms";
+    }
     return "pv-kind-tag";
   }
 
@@ -1344,17 +1348,17 @@
     ];
     for (const p of flattenPhasesWithNumbers(phases)) {
       const wpLabel =
-        p.kind === "Uzdevums" || p.kind === "Posms"
+        p.kind === "Uzdevums" || p.kind === "Apakšuzdevums"
           ? workPlanTaskLabel(workPlanSections, p.workPlanTaskId)
           : "";
       const assigneesLabel =
-        p.kind === "Uzdevums" || p.kind === "Posms"
+        p.kind === "Uzdevums" || p.kind === "Apakšuzdevums"
           ? formatAssigneesLabels(p.assignees, getTeamUsers())
           : "";
       lines.push(
         [
           p.num,
-          p.kind || "Posms",
+          p.kind || "Apakšuzdevums",
           p.title,
           p.description,
           p.start,
@@ -1629,7 +1633,7 @@ tr.planned td{background:#f0fdf9}
     for (const p of list) {
       const m = ganttBarMetrics(p, range);
       const assigneesLabel =
-        p.kind === "Uzdevums" || p.kind === "Posms" ? formatAssigneesLabels(p.assignees, getTeamUsers()) : "";
+        p.kind === "Uzdevums" || p.kind === "Apakšuzdevums" ? formatAssigneesLabels(p.assignees, getTeamUsers()) : "";
       lines.push(
         [
           p.num,
@@ -2116,8 +2120,8 @@ ${body}
   }
 
   function progressFromChildrenHint(kind) {
-    if (kind === "Uzdevums") return "Aprēķināts no posmu vērtībām.";
-    if (kind === "Posms") return "Aprēķināts no apakšposmu vērtībām.";
+    if (kind === "Uzdevums") return "Aprēķināts no apakšuzdevumu vērtībām.";
+    if (kind === "Apakšuzdevums") return "Aprēķināts no apakšapakšuzdevumu vērtībām.";
     return "Aprēķināts no apakšelementu vērtībām.";
   }
 
@@ -4493,7 +4497,7 @@ ${body}
         const v = phaseVisualState(p);
         if (v.muted || v.futureExecution) return "pv-gantt-label-muted";
         if (p.kind === "Uzdevums") return "pv-gantt-label-task";
-        if (p.kind === "Posms") return "pv-gantt-label-phase";
+        if (p.kind === "Apakšuzdevums") return "pv-gantt-label-phase";
         return "";
       }
 
@@ -4585,7 +4589,7 @@ ${body}
 
     function GlobalGantt({ phases, onGoPhase, onPatchPhase }) {
       const allItems = useMemo(
-        () => flattenPhasesWithNumbers(phases).filter((p) => p.kind !== "Apakšposms"),
+        () => flattenPhasesWithNumbers(phases).filter((p) => p.kind !== "Apakšapakšuzdevums"),
         [phases],
       );
       const uzdevumi = useMemo(
@@ -4839,7 +4843,7 @@ ${body}
             items,
             onGoPhase,
             onPatchPhase,
-            title: `Kopējais ${GANTT_CHART_LABEL} — visi uzdevumi un posmi`,
+            title: `Kopējais ${GANTT_CHART_LABEL} — visi uzdevumi un apakšuzdevumi`,
             legendSwatches: true,
             fillHeight: true,
             hideKindTag: true,
@@ -5020,23 +5024,23 @@ ${body}
       onAddChild,
       workPlanSections,
     }) {
-      const kind = kindMeta?.kind || "Posms";
-      const showWorkPlan = kind === "Uzdevums" || kind === "Posms";
+      const kind = kindMeta?.kind || "Apakšuzdevums";
+      const showWorkPlan = kind === "Uzdevums" || kind === "Apakšuzdevums";
       const showAssignees = showWorkPlan;
       const wpSections = normalizeWorkPlanSections(workPlanSections);
-      const depth = kindMeta?.level ?? (kind === "Uzdevums" ? 0 : kind === "Posms" ? 1 : 2);
+      const depth = kindMeta?.level ?? (kind === "Uzdevums" ? 0 : kind === "Apakšuzdevums" ? 1 : 2);
       const displayNum = useMemo(
         () => flattenPhasesWithNumbers(phases || []).find((p) => p.id === phase?.id)?.num || "",
         [phases, phase?.id],
       );
       const editTitle =
-        kind === "Uzdevums" ? "Uzdevuma labošana" : kind === "Posms" ? "Posma labošana" : "Apakšposma labošana";
+        kind === "Uzdevums" ? "Uzdevuma labošana" : kind === "Apakšuzdevums" ? "Apakšuzdevuma labošana" : "Apakšapakšuzdevuma labošana";
       const deleteLabel =
         kind === "Uzdevums"
-          ? "Dzēst uzdevumu un visus posmus"
-          : kind === "Posms"
-            ? "Dzēst posmu"
-            : "Dzēst apakšposmu";
+          ? "Dzēst uzdevumu un visus apakšuzdevumus"
+          : kind === "Apakšuzdevums"
+            ? "Dzēst apakšuzdevumu"
+            : "Dzēst apakšapakšuzdevumu";
       const v = phaseVisualState(phase, phases);
       const hasChildPhases = phaseHasChildPhases(phases, phase.id);
       const computedProgress = resolvePhaseProgress(phase, phases);
@@ -5084,9 +5088,9 @@ ${body}
         childAction:
           isUzdevums && onAddChild
             ? {
-                label: kindMeta.addChildLabel || "+ Pievienot posmu",
+                label: kindMeta.addChildLabel || "+ Pievienot apakšuzdevumu",
                 onClick: () =>
-                  onAddChild({ title: "Jauns posms", parentId: phase.id, parentPhase: phase }),
+                  onAddChild({ title: "Jauns apakšuzdevums", parentId: phase.id, parentPhase: phase }),
               }
             : null,
       });
@@ -5698,7 +5702,7 @@ ${body}
           <div class="pv-card">
             <h1>Darba plāna uzdevumi</h1>
             <p class="pv-wp-intro">
-              Apakšsadaļas un uzdevumi, ko var piesaistīt uzdevumiem, posmiem un tabulām. Katrai apakšsadaļai —
+              Apakšsadaļas un uzdevumi, ko var piesaistīt uzdevumiem, apakšuzdevumiem un tabulām. Katrai apakšsadaļai —
               Excel atskaite uz izvēlēto datumu (izdarīts / notiek / plānots).
             </p>
 
@@ -5780,7 +5784,7 @@ ${body}
                           type="button"
                           class="pv-accordion-btn"
                           aria-expanded=${isOpen}
-                          title=${isOpen ? "Sakļaut posmus" : "Atvērt posmus"}
+                          title=${isOpen ? "Sakļaut apakšuzdevumus" : "Atvērt apakšuzdevumus"}
                           onClick=${() => onToggleExpand(uzdevums.id)}
                         >
                           ${isOpen ? "▼" : "▶"}
@@ -5863,10 +5867,10 @@ ${body}
                         onClick=${() => {
                           const msg =
                             node.kind === "Uzdevums"
-                              ? `Dzēst uzdevumu „${node.title}" un visus posmus/apakšposmus?`
-                              : node.kind === "Posms"
-                                ? `Dzēst posmu „${node.title}" un visus apakšposmus?`
-                                : `Dzēst apakšposmu „${node.title}"?`;
+                              ? `Dzēst uzdevumu „${node.title}" un visus apakšuzdevumus/apakšapakšuzdevumus?`
+                              : node.kind === "Apakšuzdevums"
+                                ? `Dzēst apakšuzdevumu „${node.title}" un visus apakšapakšuzdevumus?`
+                                : `Dzēst apakšapakšuzdevumu „${node.title}"?`;
                           if (!askConfirm(msg)) return;
                           onDelete(node);
                         }}
@@ -5935,10 +5939,10 @@ ${body}
       function confirmDelete() {
         const msg =
           kindMeta.kind === "Uzdevums"
-            ? `Dzēst uzdevumu „${phase.title}" un visus posmus/apakšposmus?`
-            : kindMeta.kind === "Posms"
-              ? `Dzēst posmu „${phase.title}" un visus apakšposmus?`
-              : `Dzēst apakšposmu „${phase.title}"?`;
+            ? `Dzēst uzdevumu „${phase.title}" un visus apakšuzdevumus/apakšapakšuzdevumus?`
+            : kindMeta.kind === "Apakšuzdevums"
+              ? `Dzēst apakšuzdevumu „${phase.title}" un visus apakšapakšuzdevumus?`
+              : `Dzēst apakšapakšuzdevumu „${phase.title}"?`;
         if (!askConfirm(msg)) return;
         deletePhase(phase.id);
       }
