@@ -3223,6 +3223,17 @@ ${body}
       .pv-sync-note {
         margin: 0.5rem 0 0; font-size: 0.72rem; color: #0f3d38; line-height: 1.4; opacity: 0.92;
       }
+      .pv-sync-badge {
+        margin: 0.35rem 0 0.55rem; padding: 0.35rem 0.45rem; border-radius: 8px;
+        font-size: 0.7rem; line-height: 1.35; border: 1px solid #c5ebe3; background: #f0fdf9; color: #0f3d38;
+      }
+      .pv-sync-badge.is-error {
+        border-color: #fecaca; background: #fef2f2; color: #991b1b;
+      }
+      .pv-sync-badge.is-saving { border-color: #fde68a; background: #fffbeb; color: #92400e; }
+      .pv-sync-badge.is-local { border-color: #e5e7eb; background: #f9fafb; color: #4b5563; }
+      .pv-sync-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.35rem; }
+      .pv-sync-actions .pv-btn { font-size: 0.68rem; padding: 0.2rem 0.45rem; }
     `;
     document.head.appendChild(el);
   }
@@ -3281,7 +3292,7 @@ ${body}
                   setSyncStatus("error");
                   setSyncError(
                     boot?.error?.message ||
-                      "Neizdevās rakstīt Supabase. Palaid migrāciju 20260731120000_pakalpojumu_vadibas_modulis.sql",
+                      "Supabase tabula Pakalpojumu_vadibas_modulis nav izveidota. Palaid supabase/PIEMEROT_PAKALPOJUMU_VADIBAS_MODULIS.sql",
                   );
                 }
                 remoteReadyRef.current = true;
@@ -3371,7 +3382,7 @@ ${body}
               setSyncStatus("error");
               setSyncError(
                 out?.error?.message ||
-                  "Neizdevās saglabāt Supabase. Pārbaudi tabulu Pakalpojumu_vadibas_modulis un tīkla savienojumu.",
+                  "Neizdevās saglabāt Supabase. Ja tabula nav izveidota — palaid supabase/PIEMEROT_PAKALPOJUMU_VADIBAS_MODULIS.sql",
               );
               return;
             }
@@ -6342,11 +6353,28 @@ ${body}
     }
 
     return function PakalpojumuVadibaPanel() {
-      const [state, setState] = usePersistedState();
+      const [state, setState, syncStatus, syncError, forcePushToTeam, restoreLocalBackup] = usePersistedState();
 
       useEffect(() => {
         console.info("[Pakalpojumu vadība] panelis atvērts");
       }, []);
+
+      const syncLabel =
+        syncStatus === "synced"
+          ? "Sinhronizēts ar Supabase"
+          : syncStatus === "saving"
+            ? "Saglabā Supabase…"
+            : syncStatus === "error"
+              ? "Nav sinhronizācijas — dati tikai šajā pārlūkā"
+              : "Tikai lokāli";
+      const syncBadgeClass =
+        syncStatus === "error"
+          ? "pv-sync-badge is-error"
+          : syncStatus === "saving"
+            ? "pv-sync-badge is-saving"
+            : syncStatus === "synced"
+              ? "pv-sync-badge"
+              : "pv-sync-badge is-local";
 
       const phases = state.phases || [];
       const workPlanSections = state.workPlanSections || [];
@@ -6539,6 +6567,22 @@ ${body}
             <aside class="pv-sidebar">
               <div class="pv-brand">
                 <h2>Pakalpojumu vadība</h2>
+                <div class=${syncBadgeClass} title=${syncError || syncLabel}>
+                  ${syncLabel}
+                  ${syncError ? html`<div style=${{ marginTop: "0.25rem" }}>${syncError}</div>` : null}
+                  ${syncStatus === "error" || syncStatus === "local"
+                    ? html`
+                        <div class="pv-sync-actions">
+                          <button type="button" class="pv-btn" onClick=${() => forcePushToTeam()}>
+                            Augšupielādēt komandai
+                          </button>
+                          <button type="button" class="pv-btn" onClick=${() => restoreLocalBackup()}>
+                            Atjaunot rezerves kopiju
+                          </button>
+                        </div>
+                      `
+                    : null}
+                </div>
               </div>
               <button
                 type="button"
