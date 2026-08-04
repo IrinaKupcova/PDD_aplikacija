@@ -66,6 +66,40 @@
     return new Date().toISOString().slice(0, 10);
   }
 
+  function nowDateTimeIso() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  function formatNoteDateTime(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+      return raw;
+    }
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function currentNoteAuthor() {
+    try {
+      const name = String(
+        root.__PDD_ACTOR_NAME__ ||
+          root.__PDD_SESSION_NAME__ ||
+          (typeof sessionStorage !== "undefined" && sessionStorage.getItem("pdd_local_display_name")) ||
+          "",
+      ).trim();
+      if (name) return name;
+    } catch {
+      /* ignore */
+    }
+    const email = actorEmailForSync();
+    return email || "Nezināms lietotājs";
+  }
+
   function addDays(iso, days) {
     const d = new Date(iso || todayIso());
     d.setDate(d.getDate() + days);
@@ -763,15 +797,25 @@
   function tidyNotes(notes) {
     if (!Array.isArray(notes)) return [];
     return notes
-      .map((n, i) => ({
-        id: n?.id || uid(),
-        title: String(n?.title ?? "").trim() || "Jauna piezīme",
-        body: String(n?.body ?? ""),
-        reminder: Boolean(n?.reminder),
-        order: Number.isFinite(n?.order) ? n.order : i,
-        updatedAt: String(n?.updatedAt || n?.updated_at || todayIso()),
-      }))
-      .sort((a, b) => a.order - b.order);
+      .map((n, i) => {
+        const createdAt = String(n?.createdAt || n?.created_at || n?.updatedAt || n?.updated_at || todayIso());
+        return {
+          id: n?.id || uid(),
+          title: String(n?.title ?? "").trim() || "Jauna piezīme",
+          body: String(n?.body ?? ""),
+          reminder: Boolean(n?.reminder),
+          order: Number.isFinite(n?.order) ? n.order : i,
+          createdAt,
+          updatedAt: String(n?.updatedAt || n?.updated_at || createdAt),
+          author: String(n?.author ?? n?.createdBy ?? "").trim(),
+        };
+      })
+      .sort((a, b) => {
+        const tb = Date.parse(b.createdAt) || 0;
+        const ta = Date.parse(a.createdAt) || 0;
+        if (tb !== ta) return tb - ta;
+        return (b.order || 0) - (a.order || 0);
+      });
   }
 
   function notesHaveReminder(notes) {
@@ -2125,9 +2169,9 @@ ${body}
   }
 
   function ensureStyles() {
-    if (typeof document === "undefined" || document.getElementById("pdd-pkv-styles-v9c")) return;
+    if (typeof document === "undefined" || document.getElementById("pdd-pkv-styles-v9d")) return;
     const el = document.createElement("style");
-    el.id = "pdd-pkv-styles-v9c";
+    el.id = "pdd-pkv-styles-v9d";
     el.textContent = `
       .pv-root {
         --pv-bg: #e8f8f3;
@@ -2629,6 +2673,10 @@ ${body}
       .pv-note-foot {
         display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
         gap: 0.45rem; margin-top: 0.55rem;
+      }
+      .pv-note-meta {
+        display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.35rem;
+        font-size: 0.76rem; color: #0f766e;
       }
       .pv-note-reminder-check {
         display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: #1f4d47; cursor: pointer;
@@ -5388,21 +5436,36 @@ ${body}
       }
 
       function addNote() {
+        const stamp = nowDateTimeIso();
         patchNotes([
-          ...list,
           {
             id: uid(),
             title: "Jauna piezīme",
             body: "",
             reminder: false,
-            order: list.length,
-            updatedAt: todayIso(),
+            order: 0,
+            createdAt: stamp,
+            updatedAt: stamp,
+            author: currentNoteAuthor(),
           },
+          ...list,
         ]);
       }
 
       function updateNote(id, patch) {
-        patchNotes(list.map((n) => (n.id === id ? { ...n, ...patch, updatedAt: todayIso() } : n)));
+        patchNotes(
+          list.map((n) =>
+            n.id === id
+              ? {
+                  ...n,
+                  ...patch,
+                  updatedAt: nowDateTimeIso(),
+                  createdAt: n.createdAt || nowDateTimeIso(),
+                  author: n.author || currentNoteAuthor(),
+                }
+              : n,
+          ),
+        );
       }
 
       function deleteNote(id) {
@@ -5455,6 +5518,11 @@ ${body}
                               />
                               <span>Atgādinājums</span>
                             </label>
+                            <div class="pv-note-meta">
+                              <span>${formatNoteDateTime(note.createdAt) || "—"}</span>
+                              <span>·</span>
+                              <span>${note.author || "Nezināms lietotājs"}</span>
+                            </div>
                           </div>
                         </article>
                       `,
