@@ -943,11 +943,20 @@
   }
 
   function tableColumnStyle(col) {
-    const w = Number(col?.width) || 140;
-    const notes = isNotesColumn(col);
-    const minW = notes ? Math.max(w, 320) : w > 140 ? w : 0;
-    if (!minW) return null;
-    return { minWidth: `${minW}px`, width: notes ? `${minW}px` : undefined };
+    const raw = Number(col?.width);
+    const w = Number.isFinite(raw) && raw > 0 ? raw : 140;
+    const width = isNotesColumn(col) ? Math.max(w, 120) : Math.max(60, Math.min(900, w));
+    return { width: `${width}px`, minWidth: `${width}px` };
+  }
+
+  function patchColumnWidth(columns, colId, widthPx) {
+    const list = Array.isArray(columns) ? columns : [];
+    const w = Math.max(60, Math.min(900, Math.round(Number(widthPx) || 140)));
+    return list.map((c) => {
+      if (c.id !== colId) return c;
+      const nextW = isNotesColumn(c) ? Math.max(w, 120) : w;
+      return migrateTableColumn({ ...c, width: nextW }) || { ...c, width: nextW };
+    });
   }
 
   function tableColumnClass(col) {
@@ -2170,9 +2179,9 @@ ${body}
   }
 
   function ensureStyles() {
-    if (typeof document === "undefined" || document.getElementById("pdd-pkv-styles-v9d")) return;
+    if (typeof document === "undefined" || document.getElementById("pdd-pkv-styles-v9e")) return;
     const el = document.createElement("style");
-    el.id = "pdd-pkv-styles-v9d";
+    el.id = "pdd-pkv-styles-v9e";
     el.textContent = `
       .pv-root {
         --pv-bg: #e8f8f3;
@@ -2521,8 +2530,18 @@ ${body}
         background: rgba(1, 23, 29, 0.2); border-radius: 5px 0 0 5px;
       }
       .pv-table-wrap { overflow: auto; border: 1px solid #c5ebe3; border-radius: 10px; width: 100%; }
-      .pv-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; min-width: 520px; table-layout: auto; }
-      .pv-table.pv-table-quick { min-width: 0; }
+      .pv-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 0.84rem; table-layout: fixed; }
+      .pv-table.pv-table-quick { min-width: 100%; }
+      .pv-content-block-view-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 0.84rem; table-layout: fixed; }
+      .pv-th-resizable { position: relative; }
+      .pv-th-inner { padding-right: 0.55rem; min-width: 0; }
+      .pv-col-resize {
+        position: absolute; top: 0; right: 0; width: 8px; height: 100%;
+        cursor: col-resize; user-select: none; touch-action: none;
+        background: transparent;
+      }
+      .pv-col-resize:hover, .pv-col-resize.is-active { background: rgba(13, 148, 136, 0.35); }
+      body.pv-col-resizing, body.pv-col-resizing * { cursor: col-resize !important; user-select: none !important; }
       .pv-table-quick td, .pv-table-quick th { vertical-align: top; }
       .pv-table-quick .pv-table input,
       .pv-table-quick .pv-table select,
@@ -3601,6 +3620,74 @@ ${body}
       `;
     }
 
+    function ColumnResizeHandle({ col, columns, onPatchColumns }) {
+      return html`<span
+        class="pv-col-resize"
+        title="Velc, lai sašaurinātu vai paplašinātu kolonnu"
+        onMouseDown=${(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const handle = e.currentTarget;
+          const th = handle.closest("th");
+          const startX = e.clientX;
+          const startW = th ? th.getBoundingClientRect().width : Number(col?.width) || 140;
+          let nextW = startW;
+          document.body.classList.add("pv-col-resizing");
+          handle.classList.add("is-active");
+
+          function applyLive(w) {
+            if (!th) return;
+            const px = `${w}px`;
+            th.style.width = px;
+            th.style.minWidth = px;
+            const table = th.closest("table");
+            if (!table) return;
+            const idx = th.cellIndex;
+            table.querySelectorAll("tbody tr").forEach((tr) => {
+              const td = tr.children[idx];
+              if (!td) return;
+              td.style.width = px;
+              td.style.minWidth = px;
+            });
+          }
+
+          function onMove(ev) {
+            nextW = Math.max(60, Math.min(900, Math.round(startW + (ev.clientX - startX))));
+            if (isNotesColumn(col)) nextW = Math.max(nextW, 120);
+            applyLive(nextW);
+          }
+
+          function onUp() {
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
+            document.body.classList.remove("pv-col-resizing");
+            handle.classList.remove("is-active");
+            if (typeof onPatchColumns === "function") {
+              onPatchColumns(patchColumnWidth(columns, col.id, nextW));
+            }
+          }
+
+          window.addEventListener("mousemove", onMove);
+          window.addEventListener("mouseup", onUp);
+        }}
+      ></span>`;
+    }
+
+    function TableHeaderCell({ col, columns, onPatchColumns, children }) {
+      return html`
+        <th
+          key=${col.id}
+          class=${`pv-th-resizable ${tableColumnClass(col)}`.trim()}
+          style=${tableColumnStyle(col)}
+        >
+          <div class="pv-th-inner">${children}</div>
+          ${onPatchColumns
+            ? ce(ColumnResizeHandle, { col, columns, onPatchColumns })
+            : null}
+        </th>
+      `;
+    }
+
     function TableColumnHeader({ col, columns, onPatchColumns, onTypeChange, columnTypes = TABLE_COLUMN_TYPES }) {
       const idx = columns.findIndex((c) => c.id === col.id);
 
@@ -3658,7 +3745,7 @@ ${body}
       `;
     }
 
-    function ContentBlockViewBody({ block, workPlanSections }) {
+    function ContentBlockViewBody({ block, workPlanSections, onPatchColumns }) {
       if (block.type === "richtext") {
         const htmlContent = block.html || "<p class=\"pv-empty\">—</p>";
         return html`<div class="pv-rt-body pv-rt-readonly" dangerouslySetInnerHTML=${{ __html: htmlContent }}></div>`;
@@ -3683,9 +3770,13 @@ ${body}
               <thead>
                 <tr>
                   ${cols.map(
-                    (c) => html`
-                      <th key=${c.id} class=${tableColumnClass(c)} style=${tableColumnStyle(c)}>${c.name || "—"}</th>
-                    `,
+                    (c) =>
+                      ce(TableHeaderCell, {
+                        col: c,
+                        columns: cols,
+                        onPatchColumns,
+                        children: c.name || "—",
+                      }),
                   )}
                 </tr>
               </thead>
@@ -3903,9 +3994,9 @@ ${body}
                 <p class="pv-table-quick-hint">
                   ${tableQuickEdit
                     ? tableStructureEdit
-                      ? "Tabulas struktūras labošana — kolonnas, formāti un izvēlnes."
-                      : "Ātrā labošana — aizpildi šūnas; izmaiņas saglabājas automātiski."
-                    : "Tabula — labo šūnas un nospied Saglabāt."}
+                      ? "Tabulas struktūras labošana — kolonnas, formāti un izvēlnes. Velc kolonnas labo malu, lai mainītu platumu."
+                      : "Ātrā labošana — aizpildi šūnas; izmaiņas saglabājas automātiski. Velc kolonnas labo malu, lai mainītu platumu."
+                    : "Tabula — labo šūnas un nospied Saglabāt. Velc kolonnas labo malu, lai mainītu platumu."}
                 </p>
                 <div class="pv-toolbar">
                   <button type="button" class="pv-btn" onClick=${() => patch({ rows: [...(b.rows || []), { id: uid(), cells: {} }] })}>+ Rinda</button>
@@ -3982,23 +4073,32 @@ ${body}
                     <thead>
                       <tr>
                         ${tableCols.map(
-                          (c) => html`<th key=${c.id} class=${tableColumnClass(c)} style=${tableColumnStyle(c)}>
-                            ${tableStructureEdit
-                              ? ce(TableColumnHeader, {
-                                  col: c,
-                                  columns: tableCols,
-                                  onPatchColumns: (columns) => {
-                                    if (optionsEditColId && !columns.some((x) => x.id === optionsEditColId)) {
-                                      setOptionsEditColId("");
-                                    }
-                                    patch({ columns });
-                                  },
-                                  onTypeChange: (newType, colId) => {
-                                    if (newType === "choice" || newType === "status") setOptionsEditColId(colId);
-                                  },
-                                })
-                              : (c.name || "—")}
-                          </th>`,
+                          (c) =>
+                            ce(TableHeaderCell, {
+                              col: c,
+                              columns: tableCols,
+                              onPatchColumns: (columns) => {
+                                if (optionsEditColId && !columns.some((x) => x.id === optionsEditColId)) {
+                                  setOptionsEditColId("");
+                                }
+                                patch({ columns });
+                              },
+                              children: tableStructureEdit
+                                ? ce(TableColumnHeader, {
+                                    col: c,
+                                    columns: tableCols,
+                                    onPatchColumns: (columns) => {
+                                      if (optionsEditColId && !columns.some((x) => x.id === optionsEditColId)) {
+                                        setOptionsEditColId("");
+                                      }
+                                      patch({ columns });
+                                    },
+                                    onTypeChange: (newType, colId) => {
+                                      if (newType === "choice" || newType === "status") setOptionsEditColId(colId);
+                                    },
+                                  })
+                                : (c.name || "—"),
+                            }),
                         )}
                         ${tableStructureEdit ? html`<th style=${{ width: "4.5rem" }}></th>` : null}
                       </tr>
@@ -4130,7 +4230,16 @@ ${body}
               : html`<span class="pv-content-block-title">${viewBlock.title || contentBlockTypeLabel(viewBlock.type)}</span>`}
           </div>
 
-          ${isTableQuick || editing ? renderEditBody(editBlock) : ce(ContentBlockViewBody, { block: viewBlock, workPlanSections })}
+          ${isTableQuick || editing
+            ? renderEditBody(editBlock)
+            : ce(ContentBlockViewBody, {
+                block: viewBlock,
+                workPlanSections,
+                onPatchColumns:
+                  viewBlock.type === "table"
+                    ? (columns) => onSave(normalizeTableBlock({ ...viewBlock, columns }))
+                    : undefined,
+              })}
 
           ${ce(ExecutionInfoField, {
             value: (isTableQuick || editing ? editBlock : viewBlock).executionInfo || "",
@@ -4391,26 +4500,36 @@ ${body}
               <thead>
                 <tr>
                   ${registry.columns.map(
-                    (c) => html`
-                      <th class=${tableColumnClass(c)} style=${tableColumnStyle(c)}>
-                        ${readOnly || !structureEdit
-                          ? c.name
-                          : ce(TableColumnHeader, {
-                              col: c,
-                              columns: registry.columns,
-                              columnTypes: REGISTRY_COLUMN_TYPES,
-                              onPatchColumns: (columns) => {
-                                if (optionsEditColId && !columns.some((x) => x.id === optionsEditColId)) {
-                                  setOptionsEditColId("");
-                                }
-                                patchRegistry({ ...registry, columns });
-                              },
-                              onTypeChange: (newType, colId) => {
-                                if (newType === "choice" || newType === "status") setOptionsEditColId(colId);
-                              },
-                            })}
-                      </th>
-                    `,
+                    (c) =>
+                      ce(TableHeaderCell, {
+                        col: c,
+                        columns: registry.columns,
+                        onPatchColumns: readOnly
+                          ? undefined
+                          : (columns) => {
+                              if (optionsEditColId && !columns.some((x) => x.id === optionsEditColId)) {
+                                setOptionsEditColId("");
+                              }
+                              patchRegistry({ ...registry, columns });
+                            },
+                        children:
+                          readOnly || !structureEdit
+                            ? c.name
+                            : ce(TableColumnHeader, {
+                                col: c,
+                                columns: registry.columns,
+                                columnTypes: REGISTRY_COLUMN_TYPES,
+                                onPatchColumns: (columns) => {
+                                  if (optionsEditColId && !columns.some((x) => x.id === optionsEditColId)) {
+                                    setOptionsEditColId("");
+                                  }
+                                  patchRegistry({ ...registry, columns });
+                                },
+                                onTypeChange: (newType, colId) => {
+                                  if (newType === "choice" || newType === "status") setOptionsEditColId(colId);
+                                },
+                              }),
+                      }),
                   )}
                   ${!readOnly ? html`<th></th>` : null}
                 </tr>
