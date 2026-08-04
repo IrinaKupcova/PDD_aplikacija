@@ -100,6 +100,10 @@
     return email || "Nezināms lietotājs";
   }
 
+  function phaseAuthorLabel(phase) {
+    return String(phase?.createdBy || phase?.author || "").trim() || "Nezināms lietotājs";
+  }
+
   function addDays(iso, days) {
     const d = new Date(iso || todayIso());
     d.setDate(d.getDate() + days);
@@ -578,6 +582,7 @@
       p.blocks = Array.isArray(p.blocks) ? p.blocks : [];
       if (p.workPlanTaskId === undefined) p.workPlanTaskId = null;
       p.assignees = normalizeAssignees(p.assignees);
+      p.createdBy = String(p.createdBy ?? p.author ?? "").trim();
       if (p.kind === "Posms") p.kind = "Apakšuzdevums";
       else if (p.kind === "Apakšposms") p.kind = "Apakšapakšuzdevums";
     }
@@ -2345,6 +2350,7 @@ ${body}
       status: "Plānots",
       workPlanTaskId: null,
       assignees: [],
+      createdBy: currentNoteAuthor(),
       blocks: [],
       tools: parentId
         ? []
@@ -5409,6 +5415,7 @@ ${body}
                   ${displayNum ? html`<span class="pv-phase-num">${displayNum}</span>` : null}
                 </div>
                 <strong>${phase.title}</strong>
+                <div class="meta" style=${{ marginTop: "0.2rem" }}>Autors: ${phaseAuthorLabel(phase)}</div>
               </div>
               <button type="button" class="pv-btn emphasis" onClick=${() => onToggle(true)}>Atvērt uzdevuma informāciju/Labot</button>
             </div>
@@ -5430,6 +5437,7 @@ ${body}
 
           <div class="pv-edit-section" style=${{ marginTop: 0, paddingTop: 0, borderTop: 0 }}>
             <h4>Pamatinformācija</h4>
+            <div class="meta" style=${{ marginBottom: "0.55rem" }}>Autors: ${phaseAuthorLabel(phase)}</div>
             <div class="pv-edit-grid">
               <label>
                 Numurs
