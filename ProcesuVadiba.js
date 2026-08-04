@@ -708,7 +708,16 @@
     let taskNum = 0;
     const withProgress = (p, depth, kind, num) => {
       const meta = phaseProgressMeta(list, p.id);
-      return { ...p, depth, kind, num, progress: meta.progress, progressManual: meta.progressManual };
+      return {
+        ...p,
+        depth,
+        kind,
+        num,
+        progress: meta.progress,
+        progressManual: meta.progressManual,
+        progressHidden: Boolean(meta.progressHidden),
+        progressSchedule: Boolean(meta.progressSchedule),
+      };
     };
     for (const root of roots) {
       taskNum += 1;
@@ -1594,7 +1603,8 @@ tr.planned td{background:#f0fdf9}
       if (fillW > 0) {
         svg += `<rect x="${barX}" y="${y + 9}" width="${fillW}" height="16" fill="rgba(1,23,29,0.18)" rx="3"/>`;
       }
-      svg += `<text x="${trackX + trackW + 10}" y="${y + 21}" font-family="Segoe UI,system-ui,sans-serif" font-size="10" fill="#1f4d47">${metrics.progress}%</text>`;
+      const pctText = isScheduleDrivenKind(p.kind) ? "—" : `${metrics.progress}%`;
+      svg += `<text x="${trackX + trackW + 10}" y="${y + 21}" font-family="Segoe UI,system-ui,sans-serif" font-size="10" fill="#1f4d47">${escapeXml(pctText)}</text>`;
     });
 
     svg += `</svg>`;
@@ -1659,7 +1669,10 @@ tr.planned td{background:#f0fdf9}
     const e = new Date(phase.end || phase.start || range.min).getTime();
     const left = ((s - new Date(range.min).getTime()) / spanMs) * 100;
     const width = Math.max(2, ((e - s + 86400000) / spanMs) * 100);
-    return { leftPct: left.toFixed(1), widthPct: width.toFixed(1), progress: Number(phase.progress) || 0 };
+    const progress = isScheduleDrivenKind(phase.kind)
+      ? scheduleDrivenProgress(phase)
+      : Number(phase.progress) || 0;
+    return { leftPct: left.toFixed(1), widthPct: width.toFixed(1), progress };
   }
 
   function buildGanttExportCsv(items, title) {
@@ -2138,45 +2151,97 @@ ${body}
     return phaseChildren(phases, phaseId).length > 0;
   }
 
+  function inferPhaseKind(phase, phases) {
+    if (!phase?.parentId) return "Uzdevums";
+    const parent = (Array.isArray(phases) ? phases : []).find((p) => p.id === phase.parentId);
+    if (parent && !parent.parentId) return "Apakšuzdevums";
+    return "Apakšapakšuzdevums";
+  }
+
+  function isScheduleDrivenKind(kind) {
+    return kind === "Apakšuzdevums" || kind === "Apakšapakšuzdevums";
+  }
+
+  /** Apakšuzdevumu izpilde no termiņiem: Procesā → līnija līdz šodienai; Pabeigts → 100%. */
+  function scheduleDrivenProgress(phase) {
+    const status = String(phase?.status || "").trim();
+    if (/pabeigts/i.test(status)) return 100;
+    if (/atcelts/i.test(status)) return 0;
+    if (!/procesā/i.test(status)) return 0;
+
+    const startIso = String(phase?.start || "").slice(0, 10);
+    const endIso = String(phase?.end || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startIso) || !/^\d{4}-\d{2}-\d{2}$/.test(endIso)) return 0;
+
+    const s = new Date(startIso).getTime();
+    const e = new Date(endIso).getTime();
+    const today = new Date(todayIso()).getTime();
+    if (!Number.isFinite(s) || !Number.isFinite(e)) return 0;
+    if (e <= s) return today >= s ? 100 : 0;
+    if (today <= s) return 0;
+    if (today >= e) return 100;
+    return clampProgress(Math.round(((today - s) / (e - s)) * 100));
+  }
+
   function effectivePhaseProgress(phases, phaseId) {
-    const children = phaseChildren(phases, phaseId);
-    if (!children.length) {
-      const p = (Array.isArray(phases) ? phases : []).find((x) => x.id === phaseId);
-      return clampProgress(p?.progress);
-    }
-    const total = children.reduce((sum, c) => sum + effectivePhaseProgress(phases, c.id), 0);
+    const list = Array.isArray(phases) ? phases : [];
+    const p = list.find((x) => x.id === phaseId);
+    if (!p) return 0;
+    const kind = inferPhaseKind(p, list);
+    if (isScheduleDrivenKind(kind)) return scheduleDrivenProgress(p);
+    const children = phaseChildren(list, phaseId);
+    if (!children.length) return clampProgress(p.progress);
+    const total = children.reduce((sum, c) => sum + effectivePhaseProgress(list, c.id), 0);
     return Math.round(total / children.length);
   }
 
   function resolvePhaseProgress(phase, phases) {
     if (!phase) return 0;
-    if (Array.isArray(phases) && phaseHasChildPhases(phases, phase.id)) {
-      return effectivePhaseProgress(phases, phase.id);
+    if (Array.isArray(phases)) {
+      const kind = inferPhaseKind(phase, phases);
+      if (isScheduleDrivenKind(kind)) return scheduleDrivenProgress(phase);
+      if (phaseHasChildPhases(phases, phase.id)) return effectivePhaseProgress(phases, phase.id);
     }
     return clampProgress(phase.progress);
   }
 
   function phaseProgressMeta(phases, phaseId) {
-    const hasChildren = phaseHasChildPhases(phases, phaseId);
-    const p = (Array.isArray(phases) ? phases : []).find((x) => x.id === phaseId);
+    const list = Array.isArray(phases) ? phases : [];
+    const p = list.find((x) => x.id === phaseId);
+    const kind = inferPhaseKind(p, list);
+    const hasChildren = phaseHasChildPhases(list, phaseId);
+    if (isScheduleDrivenKind(kind)) {
+      return {
+        progress: scheduleDrivenProgress(p),
+        progressManual: false,
+        progressHidden: true,
+        progressSchedule: true,
+      };
+    }
     return {
-      progress: hasChildren ? effectivePhaseProgress(phases, phaseId) : clampProgress(p?.progress),
+      progress: hasChildren ? effectivePhaseProgress(list, phaseId) : clampProgress(p?.progress),
       progressManual: !hasChildren,
+      progressHidden: false,
+      progressSchedule: false,
     };
   }
 
   function syncComputedProgressInPhases(phases) {
     const list = Array.isArray(phases) ? phases : [];
     return list.map((p) => {
+      const kind = inferPhaseKind(p, list);
+      if (isScheduleDrivenKind(kind)) return p;
       if (!phaseHasChildPhases(list, p.id)) return p;
       return { ...p, progress: effectivePhaseProgress(list, p.id) };
     });
   }
 
   function progressFromChildrenHint(kind) {
-    if (kind === "Uzdevums") return "Aprēķināts no apakšuzdevumu vērtībām.";
-    if (kind === "Apakšuzdevums") return "Aprēķināts no apakšapakšuzdevumu vērtībām.";
-    return "Aprēķināts no apakšelementu vērtībām.";
+    if (kind === "Uzdevums") {
+      return "Aprēķināts no apakšuzdevumu termiņiem (statuss „Procesā” → līdz šodienai).";
+    }
+    if (kind === "Apakšuzdevums") return "Aprēķināts no termiņiem (sākums–beigas), ja statuss ir „Procesā”.";
+    return "Aprēķināts no termiņiem.";
   }
 
   function collectDescendantIds(phases, phaseId) {
@@ -4675,8 +4740,16 @@ ${body}
         const e = new Date(phase.end || phase.start || range.min).getTime();
         const left = ((s - new Date(range.min).getTime()) / spanMs) * 100;
         const width = Math.max(2, ((e - s + 86400000) / spanMs) * 100);
-        const pr = Math.max(0, Math.min(100, Number(phase.progress) || 0));
-        return { left: `${left}%`, width: `${width}%`, pr };
+        const schedule = isScheduleDrivenKind(phase.kind) || phase.progressSchedule;
+        const pr = schedule
+          ? scheduleDrivenProgress(phase)
+          : Math.max(0, Math.min(100, Number(phase.progress) || 0));
+        return {
+          left: `${left}%`,
+          width: `${width}%`,
+          pr,
+          hidePct: Boolean(phase.progressHidden) || isScheduleDrivenKind(phase.kind),
+        };
       }
 
       function labelClass(p) {
@@ -4750,19 +4823,21 @@ ${body}
                           </div>
                         </div>
                       </div>
-                      <div class=${`pv-gantt-pct ${p.progressManual === false ? "is-computed" : ""}`} title=${p.progressManual === false ? progressFromChildrenHint(p.kind) : ""}>
-                        ${p.progressManual === false
-                          ? html`<span class="pv-gantt-pct-readonly">${p.progress ?? 0}</span>`
-                          : html`
-                              <input
-                                type="number"
-                                min="0"
-                                max="100"
-                                value=${p.progress ?? 0}
-                                onChange=${(e) => onPatchPhase(p.id, { progress: Number(e.target.value) })}
-                              />
-                            `}
-                        <span class="pv-gantt-pct-suffix">%</span>
+                      <div class=${`pv-gantt-pct ${st.hidePct || p.progressManual === false ? "is-computed" : ""}`} title=${st.hidePct ? "Izpilde pēc termiņiem (rādās uzdevuma kopsummā)" : p.progressManual === false ? progressFromChildrenHint(p.kind) : ""}>
+                        ${st.hidePct
+                          ? html`<span class="pv-gantt-pct-readonly">—</span>`
+                          : p.progressManual === false
+                            ? html`<span class="pv-gantt-pct-readonly">${p.progress ?? 0}</span>`
+                            : html`
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  value=${p.progress ?? 0}
+                                  onChange=${(e) => onPatchPhase(p.id, { progress: Number(e.target.value) })}
+                                />
+                              `}
+                        ${st.hidePct ? null : html`<span class="pv-gantt-pct-suffix">%</span>`}
                       </div>
                     </div>
                   `;
@@ -5350,22 +5425,29 @@ ${body}
               </label>
               <label>
                 Progress (%)
-                ${hasChildPhases
+                ${isScheduleDrivenKind(kind)
                   ? html`
-                      <input type="number" value=${computedProgress} disabled />
+                      <input type="number" value=${scheduleDrivenProgress(phase)} disabled />
                       <span class="meta" style=${{ marginTop: "0.2rem", display: "block" }}>
-                        ${progressFromChildrenHint(kind)}
+                        Automātiski no termiņiem: ja statuss ir „Procesā”, izpildes līnija iet līdz šodienai (starp sākumu un beigu datumu). % tiek ieskaitīts tikai uzdevuma kopsummā.
                       </span>
                     `
-                  : html`
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        value=${draft.progress ?? 0}
-                        onChange=${(e) => patchDraft({ progress: Number(e.target.value) })}
-                      />
-                    `}
+                  : hasChildPhases
+                    ? html`
+                        <input type="number" value=${computedProgress} disabled />
+                        <span class="meta" style=${{ marginTop: "0.2rem", display: "block" }}>
+                          ${progressFromChildrenHint(kind)}
+                        </span>
+                      `
+                    : html`
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value=${draft.progress ?? 0}
+                          onChange=${(e) => patchDraft({ progress: Number(e.target.value) })}
+                        />
+                      `}
               </label>
               <label style=${{ gridColumn: "1 / -1" }}>
                 Apraksts
