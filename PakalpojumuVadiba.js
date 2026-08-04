@@ -159,6 +159,139 @@
     return `${roots} uzdev. · ${phases.length} elementi · ${wpTasks} darba plāna uzdev.`;
   }
 
+  function cloneMigratedState(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    try {
+      return migrateState(JSON.parse(JSON.stringify(raw)));
+    } catch {
+      return null;
+    }
+  }
+
+  function historyPhaseLabel(p) {
+    const kind = p?.kind || "Elements";
+    const num = p?.num ? `${p.num} ` : "";
+    const title = String(p?.title || "").trim() || "(bez nosaukuma)";
+    return `${kind} «${num}${title}»`;
+  }
+
+  function historyAssigneesKey(val) {
+    try {
+      return normalizeAssignees(val).slice().sort().join("|");
+    } catch {
+      return "";
+    }
+  }
+
+  function historyWorkPlanTaskMap(state) {
+    const out = new Map();
+    for (const sec of state?.workPlanSections || []) {
+      for (const t of sec.tasks || []) {
+        if (!t?.id) continue;
+        out.set(t.id, { title: String(t.title || "").trim() || "Jauns uzdevums", section: String(sec.title || "") });
+      }
+    }
+    return out;
+  }
+
+  /** Ko saturētiski atšķiras after no before (Latviešu rindas vēsturei). */
+  function describeStateDiff(beforeRaw, afterRaw, options) {
+    const maxLines = Number(options?.maxLines) > 0 ? Number(options.maxLines) : 12;
+    const after = cloneMigratedState(afterRaw);
+    if (!after) return ["Nav datu šajā versijā."];
+    const before = cloneMigratedState(beforeRaw);
+    if (!before) return [`Sākuma stāvoklis — ${stateSummaryLabel(after)}`];
+
+    const lines = [];
+    const beforePhases = new Map((before.phases || []).filter((p) => p?.id).map((p) => [p.id, p]));
+    const afterPhases = new Map((after.phases || []).filter((p) => p?.id).map((p) => [p.id, p]));
+
+    for (const p of afterPhases.values()) {
+      if (!beforePhases.has(p.id)) lines.push(`Pievienots: ${historyPhaseLabel(p)}`);
+    }
+    for (const p of beforePhases.values()) {
+      if (!afterPhases.has(p.id)) lines.push(`Dzēsts: ${historyPhaseLabel(p)}`);
+    }
+
+    for (const a of afterPhases.values()) {
+      const b = beforePhases.get(a.id);
+      if (!b) continue;
+      const label = historyPhaseLabel(a);
+      if (String(b.title || "") !== String(a.title || "")) {
+        lines.push(`Pārdēvēts: «${String(b.title || "").trim() || "(bez nosaukuma)"}» → «${String(a.title || "").trim() || "(bez nosaukuma)"}»`);
+      }
+      if (String(b.kind || "") !== String(a.kind || "")) {
+        lines.push(`${label}: veids ${b.kind || "—"} → ${a.kind || "—"}`);
+      }
+      if (String(b.status || "") !== String(a.status || "")) {
+        lines.push(`${label}: statuss ${b.status || "—"} → ${a.status || "—"}`);
+      }
+      if (String(b.start || "") !== String(a.start || "") || String(b.end || "") !== String(a.end || "")) {
+        lines.push(`${label}: termiņš ${b.start || "—"}–${b.end || "—"} → ${a.start || "—"}–${a.end || "—"}`);
+      }
+      if ((Number(b.progress) || 0) !== (Number(a.progress) || 0)) {
+        lines.push(`${label}: progress ${Number(b.progress) || 0}% → ${Number(a.progress) || 0}%`);
+      }
+      if (historyAssigneesKey(b.assignees) !== historyAssigneesKey(a.assignees)) {
+        lines.push(`${label}: mainīti izpildītāji`);
+      }
+      if (String(b.description || "").trim() !== String(a.description || "").trim()) {
+        lines.push(`${label}: mainīts apraksts`);
+      }
+      if (String(b.executionInfo || "").trim() !== String(a.executionInfo || "").trim()) {
+        lines.push(`${label}: mainīta informācija par izpildi`);
+      }
+      const bb = Array.isArray(b.blocks) ? b.blocks.length : 0;
+      const ab = Array.isArray(a.blocks) ? a.blocks.length : 0;
+      if (bb !== ab) lines.push(`${label}: satura bloki ${bb} → ${ab}`);
+    }
+
+    const beforeNotes = new Map((before.notes || []).filter((n) => n?.id).map((n) => [n.id, n]));
+    const afterNotes = new Map((after.notes || []).filter((n) => n?.id).map((n) => [n.id, n]));
+    for (const n of afterNotes.values()) {
+      if (!beforeNotes.has(n.id)) {
+        lines.push(`Pievienota piezīme: «${String(n.title || "").trim() || "bez nosaukuma"}»`);
+      }
+    }
+    for (const n of beforeNotes.values()) {
+      if (!afterNotes.has(n.id)) {
+        lines.push(`Dzēsta piezīme: «${String(n.title || "").trim() || "bez nosaukuma"}»`);
+      }
+    }
+    for (const a of afterNotes.values()) {
+      const b = beforeNotes.get(a.id);
+      if (!b) continue;
+      const bBody = String(b.body ?? b.text ?? b.content ?? "").trim();
+      const aBody = String(a.body ?? a.text ?? a.content ?? "").trim();
+      if (String(b.title || "") !== String(a.title || "") || bBody !== aBody) {
+        lines.push(`Labota piezīme: «${String(a.title || b.title || "").trim() || "bez nosaukuma"}»`);
+      }
+    }
+
+    const beforeWp = historyWorkPlanTaskMap(before);
+    const afterWp = historyWorkPlanTaskMap(after);
+    for (const [id, t] of afterWp) {
+      if (!beforeWp.has(id)) lines.push(`Darba plāns: pievienots «${t.title}»`);
+    }
+    for (const [id, t] of beforeWp) {
+      if (!afterWp.has(id)) lines.push(`Darba plāns: dzēsts «${t.title}»`);
+    }
+    for (const [id, a] of afterWp) {
+      const b = beforeWp.get(id);
+      if (!b) continue;
+      if (b.title !== a.title) lines.push(`Darba plāns: «${b.title}» → «${a.title}»`);
+    }
+
+    if (!lines.length) {
+      return ["Nav redzamu satura izmaiņu (iespējams, tikai skatījums vai tehnisks sync)."];
+    }
+    if (lines.length > maxLines) {
+      const extra = lines.length - maxLines;
+      return [...lines.slice(0, maxLines), `…un vēl ${extra} izmaiņas`];
+    }
+    return lines;
+  }
+
   function isLikelyDemoState(state) {
     const roots = (state?.phases || []).filter((p) => !p.parentId);
     if (roots.length !== 1) return false;
@@ -339,7 +472,7 @@
       console.warn("[Pakalpojumu vadība] DB saglabāšana", error);
       return { ok: false, error };
     }
-    return { ok: true, updatedAt };
+    return { ok: true, updatedAt, updatedBy: actor };
   }
 
   function formatPvDateTime(iso) {
@@ -364,7 +497,7 @@
 
   async function fetchRemoteHistory(sb, options) {
     if (!REMOTE_SYNC_ENABLED || !sb) {
-      return options?.paginated ? { rows: [], total: 0 } : [];
+      return options?.paginated ? { rows: [], total: 0, olderAnchor: null } : [];
     }
     await ensureDbSession(sb);
     const paginated = Boolean(options?.paginated);
@@ -378,17 +511,23 @@
       .eq("module_id", REMOTE_ROW_ID)
       .order("saved_at", { ascending: false });
     if (paginated) {
-      query = query.range(offset, offset + pageSize - 1);
+      // +1 rinda, lai pēdējam lapas ierakstam varētu aprēķināt izmaiņu diff pret vecāku versiju
+      query = query.range(offset, offset + pageSize);
     } else {
       query = query.limit(limit);
     }
     const { data, error, count } = await query;
     if (error) {
       console.warn("[Pakalpojumu vadība] vēstures lasīšana", error);
-      return paginated ? { rows: [], total: 0 } : [];
+      return paginated ? { rows: [], total: 0, olderAnchor: null } : [];
     }
-    const rows = Array.isArray(data) ? data : [];
-    return paginated ? { rows, total: Number(count) || 0 } : rows;
+    const all = Array.isArray(data) ? data : [];
+    if (!paginated) return all;
+    return {
+      rows: all.slice(0, pageSize),
+      total: Number(count) || 0,
+      olderAnchor: all[pageSize] || null,
+    };
   }
 
   async function restoreRemoteHistory(sb, historyId) {
@@ -3062,16 +3201,20 @@ ${body}
       .pv-history-intro { margin: 0 0 1rem; font-size: 0.84rem; color: var(--pv-muted); line-height: 1.45; }
       .pv-history-list { display: flex; flex-direction: column; gap: 0.45rem; }
       .pv-history-row {
-        display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between;
+        display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-start; justify-content: space-between;
         padding: 0.55rem 0.65rem; border: 1px solid #e0f2ee; border-radius: 10px; background: #f8fffd;
       }
-      .pv-history-meta { font-size: 0.82rem; color: #1f4d47; }
+      .pv-history-meta { font-size: 0.82rem; color: #1f4d47; flex: 1; min-width: 220px; }
       .pv-history-meta strong { color: #01171d; }
       .pv-history-kind {
         display: inline-block; font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
         letter-spacing: 0.02em; color: #047857; background: #e8f8f3; border-radius: 4px;
         padding: 0.06rem 0.35rem; margin-right: 0.35rem;
       }
+      .pv-history-changes {
+        margin: 0.35rem 0 0; padding: 0 0 0 1.05rem; font-size: 0.74rem; color: #134e4a; line-height: 1.35;
+      }
+      .pv-history-changes li { margin: 0.12rem 0; }
       .pv-history-pager {
         display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
         gap: 0.5rem; margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid #e0f2ee;
@@ -3232,7 +3375,7 @@ ${body}
               );
               return;
             }
-            const synced = { ...stateRef.current, updatedAt: out.updatedAt };
+            const synced = { ...stateRef.current, updatedAt: out.updatedAt, updatedBy: out.updatedBy || stateRef.current.updatedBy };
             stateRef.current = synced;
             saveState(synced);
             setSyncStatus("synced");
@@ -5428,8 +5571,9 @@ ${body}
       `;
     }
 
-    function HistoryScreen({ onGoOverview, onRestore }) {
+    function HistoryScreen({ onGoOverview, onRestore, currentState }) {
       const [rows, setRows] = useState([]);
+      const [olderAnchor, setOlderAnchor] = useState(null);
       const [total, setTotal] = useState(0);
       const [page, setPage] = useState(0);
       const [loading, setLoading] = useState(true);
@@ -5440,6 +5584,7 @@ ${body}
         const sb = root.__PDD_SUPABASE__ ?? null;
         const out = await fetchRemoteHistory(sb, { paginated: true, page: nextPage, pageSize: HISTORY_PAGE_SIZE });
         setRows(out.rows || []);
+        setOlderAnchor(out.olderAnchor || null);
         setTotal(out.total || 0);
         setPage(nextPage);
         setLoading(false);
@@ -5452,6 +5597,11 @@ ${body}
       const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
       const pageStart = total ? page * HISTORY_PAGE_SIZE + 1 : 0;
       const pageEnd = Math.min(total, (page + 1) * HISTORY_PAGE_SIZE);
+
+      const currentDiffLines =
+        page === 0 && rows[0]?.state && currentState
+          ? describeStateDiff(rows[0].state, currentState)
+          : [];
 
       async function handleRestore(row) {
         const when = formatPvDateTime(row.saved_at);
@@ -5468,14 +5618,23 @@ ${body}
         alert("Stāvoklis atjaunots. Visi komandas dalībnieki redzēs šo versiju pēc sinhronizācijas.");
       }
 
+      function renderChangeList(lines) {
+        if (!lines?.length) return null;
+        return html`
+          <ul class="pv-history-changes">
+            ${lines.map((line, i) => html`<li key=${i}>${line}</li>`)}
+          </ul>
+        `;
+      }
+
       return html`
         <div class="pv-history-screen">
           <div class="pv-card">
             <h1>Vēsture un atjaunošana</h1>
             <p class="pv-history-intro">
-              Katra saglabāšana tiek arhivēta ar laiku un lietotāju, lai var izsekot, kurš ko mainīja.
-              Ja dati sabojāti vai pazuduši, meklē ierakstu ar
-              <strong> visvairāk elementu</strong> un nospied „Atjaunot šo versiju” — atjaunosies visiem.
+              Zem katra ieraksta redzams, <strong>ko tieši mainīja</strong> pret iepriekšējo versiju
+              (pievienots, dzēsts, pārdēvēts, statuss, termiņš u.c.). Ja dati sabojāti, meklē ierakstu ar
+              <strong> visvairāk elementu</strong> un nospied „Atjaunot šo versiju”.
               Vienā lapā rāda ${HISTORY_PAGE_SIZE} ierakstus.
             </p>
             ${loading
@@ -5483,8 +5642,29 @@ ${body}
               : rows.length
                 ? html`
                     <div class="pv-history-list">
-                      ${rows.map(
-                        (row) => html`
+                      ${page === 0
+                        ? html`
+                            <div class="pv-history-row" key="current-live">
+                              <div class="pv-history-meta">
+                                <span class="pv-history-kind">Pašreizējais</span>
+                                <strong>${formatPvDateTime(currentState?.updatedAt)}</strong>
+                                <div style=${{ marginTop: "0.2rem", fontSize: "0.76rem" }}>
+                                  ${currentState?.updatedBy
+                                    ? `Pēdējais laboja: ${currentState.updatedBy}`
+                                    : "Pēdējais laboja: —"}
+                                </div>
+                                <div style=${{ marginTop: "0.15rem", fontSize: "0.74rem", color: "#047857", fontWeight: 600 }}>
+                                  ${stateSummaryLabel(currentState)}
+                                </div>
+                                ${renderChangeList(currentDiffLines)}
+                              </div>
+                            </div>
+                          `
+                        : null}
+                      ${rows.map((row, idx) => {
+                        const older = idx + 1 < rows.length ? rows[idx + 1] : olderAnchor;
+                        const changeLines = describeStateDiff(older?.state, row.state);
+                        return html`
                           <div class="pv-history-row" key=${row.id}>
                             <div class="pv-history-meta">
                               <span class="pv-history-kind">${historyActionLabel(row.action)}</span>
@@ -5494,9 +5674,10 @@ ${body}
                               </div>
                               ${row.state
                                 ? html`<div style=${{ marginTop: "0.15rem", fontSize: "0.74rem", color: "#047857", fontWeight: 600 }}>
-                                    ${stateSummaryLabel(migrateState(row.state))}
+                                    ${stateSummaryLabel(cloneMigratedState(row.state) || row.state)}
                                   </div>`
                                 : null}
+                              ${renderChangeList(changeLines)}
                             </div>
                             <button
                               type="button"
@@ -5507,8 +5688,8 @@ ${body}
                               ${restoringId === row.id ? "Atjauno…" : "Atjaunot šo versiju"}
                             </button>
                           </div>
-                        `,
-                      )}
+                        `;
+                      })}
                     </div>
                     ${totalPages > 1
                       ? html`
@@ -6425,6 +6606,7 @@ ${body}
                     ? ce(HistoryScreen, {
                         onGoOverview: goOverview,
                         onRestore: restoreHistory,
+                        currentState: state,
                       })
                     : ce(PhaseSpace, {
                       phase: activePhase,
