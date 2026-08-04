@@ -1554,8 +1554,7 @@ tr.planned td{background:#f0fdf9}
     const months = ganttMonthLabels(range);
     const W = 1120;
     const labelW = 250;
-    const pctW = 52;
-    const trackW = W - labelW - pctW - 24;
+    const trackW = W - labelW - 24;
     const rowH = 34;
     const headerH = 48;
     const topPad = 34;
@@ -1603,8 +1602,6 @@ tr.planned td{background:#f0fdf9}
       if (fillW > 0) {
         svg += `<rect x="${barX}" y="${y + 9}" width="${fillW}" height="16" fill="rgba(1,23,29,0.18)" rx="3"/>`;
       }
-      const pctText = isScheduleDrivenKind(p.kind) ? "—" : `${metrics.progress}%`;
-      svg += `<text x="${trackX + trackW + 10}" y="${y + 21}" font-family="Segoe UI,system-ui,sans-serif" font-size="10" fill="#1f4d47">${escapeXml(pctText)}</text>`;
     });
 
     svg += `</svg>`;
@@ -2602,12 +2599,12 @@ ${body}
       .pv-card h3 { margin: 0 0 0.65rem; font-size: 0.95rem; color: #065f46; }
       .pv-gantt-global { overflow-x: auto; }
       .pv-gantt-head {
-        display: grid; grid-template-columns: 260px minmax(720px, 1fr) 70px;
+        display: grid; grid-template-columns: 260px minmax(720px, 1fr);
         gap: 0.5rem; font-size: 0.74rem; color: var(--pv-muted); padding-bottom: 0.35rem;
         border-bottom: 1px solid #c5ebe3;
       }
       .pv-gantt-row {
-        display: grid; grid-template-columns: 260px minmax(720px, 1fr) 70px;
+        display: grid; grid-template-columns: 260px minmax(720px, 1fr);
         gap: 0.5rem; align-items: center; padding: 0.45rem 0;
         border-bottom: 1px solid #e0f2ee; font-size: 0.82rem;
       }
@@ -2635,18 +2632,6 @@ ${body}
       }
       .pv-gantt-track-wrap { min-width: 0; }
       .pv-gantt-row.sub .pv-gantt-label { padding-left: 1rem; font-size: 0.78rem; }
-      .pv-gantt-pct {
-        display: inline-flex; align-items: center; gap: 0.12rem; justify-content: flex-end;
-      }
-      .pv-gantt-pct input {
-        width: 48px; padding: 0.2rem; border: 1px solid #c5ebe3; border-radius: 6px;
-        font: inherit; font-size: 0.82rem; text-align: right;
-      }
-      .pv-gantt-pct-suffix { font-size: 0.82rem; color: #1f4d47; font-weight: 600; }
-      .pv-gantt-pct-readonly {
-        min-width: 1.6rem; text-align: right; font-size: 0.82rem; font-weight: 700; color: #047857;
-      }
-      .pv-gantt-pct.is-computed .pv-gantt-pct-readonly { color: #1f4d47; }
       .pv-gantt-track {
         position: relative; height: 26px; background: #e8f8f3; border-radius: 6px; overflow: hidden;
       }
@@ -4744,12 +4729,7 @@ ${body}
         const pr = schedule
           ? scheduleDrivenProgress(phase)
           : Math.max(0, Math.min(100, Number(phase.progress) || 0));
-        return {
-          left: `${left}%`,
-          width: `${width}%`,
-          pr,
-          hidePct: Boolean(phase.progressHidden) || isScheduleDrivenKind(phase.kind),
-        };
+        return { left: `${left}%`, width: `${width}%`, pr };
       }
 
       function labelClass(p) {
@@ -4794,7 +4774,6 @@ ${body}
                   )}
                 </div>
               </div>
-              <span>%</span>
             </div>
             ${list.length
               ? list.map((p) => {
@@ -4822,22 +4801,6 @@ ${body}
                             <div class="fill" style=${{ width: `${st.pr}%` }}></div>
                           </div>
                         </div>
-                      </div>
-                      <div class=${`pv-gantt-pct ${st.hidePct || p.progressManual === false ? "is-computed" : ""}`} title=${st.hidePct ? "Izpilde pēc termiņiem (rādās uzdevuma kopsummā)" : p.progressManual === false ? progressFromChildrenHint(p.kind) : ""}>
-                        ${st.hidePct
-                          ? html`<span class="pv-gantt-pct-readonly">—</span>`
-                          : p.progressManual === false
-                            ? html`<span class="pv-gantt-pct-readonly">${p.progress ?? 0}</span>`
-                            : html`
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="100"
-                                  value=${p.progress ?? 0}
-                                  onChange=${(e) => onPatchPhase(p.id, { progress: Number(e.target.value) })}
-                                />
-                              `}
-                        ${st.hidePct ? null : html`<span class="pv-gantt-pct-suffix">%</span>`}
                       </div>
                     </div>
                   `;
