@@ -5188,7 +5188,6 @@ ${body}
           : kind === "Apakšuzdevums"
             ? "Dzēst apakšuzdevumu"
             : "Dzēst apakšapakšuzdevumu";
-      const v = phaseVisualState(phase, phases);
       const hasChildPhases = phaseHasChildPhases(phases, phase.id);
       const computedProgress = resolvePhaseProgress(phase, phases);
       const [draft, setDraft] = useState(() => phaseDraftFrom(phase, displayNum));
@@ -5227,8 +5226,6 @@ ${body}
       }
 
       const isUzdevums = kind === "Uzdevums";
-      const wpLabel = showWorkPlan ? workPlanTaskLabel(wpSections, phase.workPlanTaskId) : "";
-      const assigneesSummary = showAssignees ? formatAssigneesLabels(phase.assignees, getTeamUsers()) : "";
 
       const addToolbar = ce(ContentAddToolbar, {
         onAdd: onAddBlock,
@@ -5252,35 +5249,13 @@ ${body}
                   ${displayNum ? html`<span class="pv-phase-num">${displayNum}</span>` : null}
                 </div>
                 <strong>${phase.title}</strong>
-                <div class="meta">
-                  ${phase.start || "—"} — ${phase.end || "—"} · ${computedProgress}% · ${phase.status || "—"}
-                  ${hasChildPhases ? html`<span title=${progressFromChildrenHint(kind)}> (aprēķ.)</span>` : null}
-                  ${v.overdue ? " · Kavē" : ""}
-                </div>
-                ${wpLabel
-                  ? html`<div class="meta" style=${{ marginTop: "0.2rem" }}>Darba plāna uzdevums: ${wpLabel}</div>`
-                  : null}
-                ${assigneesSummary
-                  ? html`
-                      <div class="meta" style=${{ marginTop: "0.2rem" }}>
-                        Izpildītāji:
-                        ${assigneesSummary.split(", ").map(
-                          (name) => html`
-                            <span class="pv-assignee-tag" key=${name} style=${{ marginRight: "0.25rem" }}>${name}</span>
-                          `,
-                        )}
-                      </div>
-                    `
-                  : null}
               </div>
               <button type="button" class="pv-btn emphasis" onClick=${() => onToggle(true)}>Atvērt uzdevuma informāciju/Labot</button>
             </div>
-            ${phase.description
-              ? html`<div class="pv-desc-readonly"><strong style=${{ fontSize: "0.76rem", color: "#065f46" }}>Apraksts</strong><div style=${{ marginTop: "0.25rem" }}>${phase.description}</div></div>`
-              : null}
-            ${phase.executionInfo
-              ? html`<div class="pv-desc-readonly"><strong style=${{ fontSize: "0.76rem", color: "#065f46" }}>${EXECUTION_INFO_LABEL}</strong><div style=${{ marginTop: "0.25rem", whiteSpace: "pre-wrap" }}>${phase.executionInfo}</div></div>`
-              : null}
+            <div class="pv-desc-readonly">
+              <strong style=${{ fontSize: "0.76rem", color: "#065f46" }}>Apraksts</strong>
+              <div style=${{ marginTop: "0.25rem" }}>${phase.description || "—"}</div>
+            </div>
             ${addToolbar}
           </div>
         `;
