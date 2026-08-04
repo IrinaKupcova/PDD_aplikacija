@@ -9,7 +9,6 @@
  */
 (function (root) {
   const LS_KEY = "pdd_pakalpojumu_vadiba_v2";
-  const LS_EMPTY_BOOT = "pdd_pakalpojumu_empty_boot_v1";
   const MODULE_VERSION = 9;
   const STABLE_RELEASE = "202606270";
   const GANTT_CHART_LABEL = "Gantt Chart";
@@ -328,12 +327,12 @@
     if (!REMOTE_SYNC_ENABLED || !sb || !state) return { ok: false, reason: "no_data" };
     await ensureDbSession(sb);
     const updatedAt = new Date().toISOString();
-    const email = actorEmailForSync();
+    const actor = actorEmailForSync() || currentNoteAuthor();
     const payload = {
       id: REMOTE_ROW_ID,
-      state: { ...state, updatedAt },
+      state: { ...state, updatedAt, updatedBy: actor },
       updated_at: updatedAt,
-      updated_by: email,
+      updated_by: actor,
     };
     const { error } = await sb.from(REMOTE_TABLE).upsert(payload, { onConflict: "id" });
     if (error) {
@@ -3121,37 +3120,6 @@ ${body}
             return;
           }
           try {
-            let forceEmpty = false;
-            try {
-              forceEmpty = !localStorage.getItem(LS_EMPTY_BOOT);
-            } catch {
-              forceEmpty = true;
-            }
-            if (forceEmpty) {
-              const empty = defaultState();
-              empty.updatedAt = new Date().toISOString();
-              const bootEmpty = await saveRemoteState(sb, empty);
-              if (bootEmpty?.ok) {
-                try {
-                  localStorage.setItem(LS_EMPTY_BOOT, "1");
-                  localStorage.removeItem("pdd_pakalpojumu_vadiba_v1");
-                  localStorage.removeItem("pdd_pakalpojumu_vadiba_v1_backup");
-                } catch {
-                  /* ignore */
-                }
-                if (cancelled || hydratedRef.current) return;
-                hydratedRef.current = true;
-                setState(empty);
-                saveState(empty);
-                stateRef.current = empty;
-                remoteReadyRef.current = true;
-                if (!cancelled) {
-                  setSyncStatus("synced");
-                  setSyncError("");
-                }
-                return;
-              }
-            }
             const local = loadState();
             if (local && stateContentScore(local) > stateContentScore(defaultState())) {
               backupLocalState(local);
@@ -3311,7 +3279,7 @@ ${body}
           if (!sb || cancelled) return;
           sbRef = sb;
           channel = sb
-            .channel("pv-modulis-team-sync")
+            .channel("pkv-modulis-team-sync")
             .on(
               "postgres_changes",
               {
@@ -5505,8 +5473,10 @@ ${body}
           <div class="pv-card">
             <h1>Vēsture un atjaunošana</h1>
             <p class="pv-history-intro">
-              Katra saglabāšana Supabase tiek arhivēta. Ja pazuduši uzdevumi, meklē ierakstu ar
-              <strong> visvairāk elementu</strong> un nospied „Atjaunot šo versiju”. Vienā lapā rāda ${HISTORY_PAGE_SIZE} ierakstus.
+              Katra saglabāšana tiek arhivēta ar laiku un lietotāju, lai var izsekot, kurš ko mainīja.
+              Ja dati sabojāti vai pazuduši, meklē ierakstu ar
+              <strong> visvairāk elementu</strong> un nospied „Atjaunot šo versiju” — atjaunosies visiem.
+              Vienā lapā rāda ${HISTORY_PAGE_SIZE} ierakstus.
             </p>
             ${loading
               ? html`<p class="pv-empty">Ielādē vēsturi…</p>`
