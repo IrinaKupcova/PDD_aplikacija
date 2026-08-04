@@ -1065,7 +1065,7 @@
         ? col.options.map((o) => String(o))
         : defaultOptionsForColumnType(type);
     }
-    if (isNotesColumn(out)) out.width = Math.max(Number(out.width) || 0, 320);
+    if (isNotesColumn(out)) out.width = Math.max(Number(out.width) || 0, 120);
     return out;
   }
 
