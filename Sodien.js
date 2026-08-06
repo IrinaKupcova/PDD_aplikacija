@@ -1929,6 +1929,7 @@ function renderTodayInfo({
             <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCmd("bold")}>B</button>
             <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCmd("italic")}>I</button>
             <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCmd("underline")}>U</button>
+            <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCmd("strikeThrough")} title="Izsvītrots"><s>S</s></button>
             <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCmd("insertUnorderedList")}>• Saraksts</button>
             <button type="button" class="btn btn-ghost btn-small" onClick=${() => wrapSelectionWithStyle("background:#fef08a;")}>Izcelt</button>
             <label class="btn btn-ghost btn-small" style=${{ cursor: "pointer" }}>

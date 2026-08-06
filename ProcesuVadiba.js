@@ -3490,6 +3490,7 @@ ${body}
             <button type="button" title="Treknraksts" onClick=${() => exec("bold")}><strong>B</strong></button>
             <button type="button" title="Kursīvs" onClick=${() => exec("italic")}><em>I</em></button>
             <button type="button" title="Pasvītrots" onClick=${() => exec("underline")}><u>U</u></button>
+            <button type="button" title="Izsvītrots" onClick=${() => exec("strikeThrough")}><s>S</s></button>
             <button type="button" title="Izcelt" onClick=${() => exec("hiliteColor", "#fff3b0")}>🖍</button>
             <input type="color" title="Teksta krāsa" onChange=${(e) => exec("foreColor", e.target.value)} />
             <input type="color" title="Fona krāsa" onChange=${(e) => exec("hiliteColor", e.target.value)} />

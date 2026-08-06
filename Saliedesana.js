@@ -3810,6 +3810,7 @@
                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoApplyCmd("bold")}>B</button>
                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoApplyCmd("italic")}>I</button>
                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoApplyCmd("underline")}>U</button>
+                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoApplyCmd("strikeThrough")} title="Izsvītrots"><s>S</s></button>
                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoApplyCmd("insertUnorderedList")}>• Saraksts</button>
                   <button
                     type="button"
@@ -4100,6 +4101,7 @@
                                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("bold")}>B</button>
                                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("italic")}><em>I</em></button>
                                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("underline")}><u>U</u></button>
+                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("strikeThrough")} title="Izsvītrots"><s>S</s></button>
                                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("insertUnorderedList")}>• Saraksts</button>
                                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("insertOrderedList")}>1. Saraksts</button>
                                   <select class="select" onChange=${(e) => applyEditorCommand("fontSize", e.target.value)}>
@@ -4756,6 +4758,7 @@
                                           <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("bold")}>B</button>
                                           <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("italic")}><em>I</em></button>
                                           <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("underline")}><u>U</u></button>
+                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("strikeThrough")} title="Izsvītrots"><s>S</s></button>
                                           <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("insertUnorderedList")}>• Saraksts</button>
                                           <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("insertOrderedList")}>1. Saraksts</button>
                                           <select class="select" onChange=${(e) => applyCelProgramEditorCommand("fontSize", e.target.value)}>
