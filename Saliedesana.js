@@ -567,11 +567,41 @@
     }
   }
 
+  function idejuChatBodyIsMeaningful(body) {
+    const s = String(body || "").trim();
+    if (!s) return false;
+    if (/<img\b/i.test(s) || /data-ideju-attachment/i.test(s) || /pdd-saliedesana-files/i.test(s)) return true;
+    const plain = s
+      .replace(/<br\s*\/?>/gi, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return Boolean(plain);
+  }
+
+  function buildIdejuChatBody(text, pendingHtml) {
+    const t = String(text || "").trim();
+    const pending = String(pendingHtml || "").trim();
+    const textPart = t ? `<p>${escapeHtmlLite(t).replace(/\n/g, "<br>")}</p>` : "";
+    return `${textPart}${pending}`.trim();
+  }
+
+  function idejuChatPreviewText(body) {
+    const s = String(body || "");
+    if (/<img\b/i.test(s)) return "🖼️ attēls";
+    if (/data-ideju-attachment|pielikums:/i.test(s)) return "📎 pielikums";
+    return s
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   function normalizeIdejuChatRow(row) {
     if (!row || typeof row !== "object") return null;
     const id = String(row.id || "").trim();
     const body = String(row.body || "").trim();
-    if (!id || !body) return null;
+    if (!id || !idejuChatBodyIsMeaningful(body)) return null;
     const source = String(row.source || "other").trim();
     return {
       id,
@@ -627,11 +657,12 @@
 
   function ensureIdejuChatModalStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-ideju-chat-style-v3")) return;
+    if (document.getElementById("pdd-ideju-chat-style-v4")) return;
+    document.getElementById("pdd-ideju-chat-style-v3")?.remove();
     document.getElementById("pdd-ideju-chat-style-v2")?.remove();
     document.getElementById("pdd-ideju-chat-style")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-ideju-chat-style-v3";
+    s.id = "pdd-ideju-chat-style-v4";
     s.textContent = `
       .pdd-ideju-modal-bg { position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:1rem; }
       .pdd-ideju-modal { width:min(520px,100%); max-height:86vh; display:flex; flex-direction:column; border-radius:16px; overflow:hidden; box-shadow:0 18px 50px rgba(15,23,42,.28); }
@@ -651,12 +682,32 @@
       .pdd-ideju-modal.theme-sal .pdd-ideju-msg.mine { background:#ffedd5; border-color:#fb923c; }
       .pdd-ideju-modal.theme-akt .pdd-ideju-msg.mine { background:#e0f2fe; border-color:#0ea5e9; }
       .pdd-ideju-msg-meta { font-size:.68rem; color:#64748b; margin-bottom:.15rem; }
-      .pdd-ideju-msg-body { font-size:.86rem; white-space:pre-wrap; word-break:break-word; color:#0f172a; }
-      .pdd-ideju-form { display:flex; gap:.4rem; padding:.65rem .75rem; border-top:1px solid rgba(0,0,0,.08); background:rgba(255,255,255,.8); }
+      .pdd-ideju-msg-body { font-size:.86rem; white-space:pre-wrap; word-break:break-word; color:#0f172a; line-height:1.35; }
+      .pdd-ideju-msg-body p { margin:0 0 .35rem; white-space:pre-wrap; }
+      .pdd-ideju-msg-body img {
+        display:block; max-width:100%; width:min(100%,320px); height:auto;
+        border-radius:8px; margin:.3rem 0;
+      }
+      .pdd-ideju-msg-body a { color:inherit; text-decoration:underline; word-break:break-all; }
+      .pdd-ideju-form-wrap { border-top:1px solid rgba(0,0,0,.08); background:rgba(255,255,255,.8); }
+      .pdd-ideju-form { display:flex; gap:.4rem; padding:.65rem .75rem .45rem; }
       .pdd-ideju-form textarea { flex:1; min-height:44px; max-height:90px; resize:vertical; border-radius:10px; padding:.4rem .5rem; font:inherit; font-size:.86rem; }
       .pdd-ideju-modal.theme-sal .pdd-ideju-form textarea { border:1px solid #fdba74; }
       .pdd-ideju-modal.theme-akt .pdd-ideju-form textarea { border:1px solid #7dd3fc; }
-      .pdd-ideju-form button { align-self:flex-end; }
+      .pdd-ideju-form-tools {
+        display:flex; flex-wrap:wrap; gap:.35rem; align-items:center;
+        padding:0 .75rem .45rem; font-size:.72rem;
+      }
+      .pdd-ideju-form-tools label { cursor:pointer; margin:0; }
+      .pdd-ideju-pending {
+        display:none; flex-wrap:wrap; gap:.35rem; padding:0 .75rem .45rem; font-size:.72rem; color:#64748b;
+      }
+      .pdd-ideju-pending.has-items { display:flex; }
+      .pdd-ideju-pending-item {
+        border:1px dashed rgba(100,116,139,.45); border-radius:8px; padding:.2rem .4rem;
+        background:rgba(255,255,255,.85);
+      }
+      .pdd-ideju-form button[type="submit"] { align-self:flex-end; }
       .pdd-ideju-empty { margin:auto; font-size:.82rem; color:#64748b; text-align:center; padding:1rem; }
       .pdd-ideju-status { font-size:.72rem; padding:0 .8rem .35rem; color:#64748b; }
       .pdd-ideju-preview {
@@ -726,7 +777,7 @@
       .map((m) => {
         const who = escapeHtmlLite(m.actor_name || m.actor_key || "Lietotājs");
         const when = escapeHtmlLite(formatSalInfoWhen(m.created_at));
-        const body = escapeHtmlLite(String(m.body || "").replace(/\s+/g, " ").trim());
+        const body = escapeHtmlLite(idejuChatPreviewText(m.body));
         return `<div class="pdd-ideju-preview-item"><div class="pdd-ideju-preview-meta">${who} · ${when}</div><div class="pdd-ideju-preview-body">${body}</div></div>`;
       })
       .join("");
@@ -819,7 +870,7 @@
         const when = formatSalInfoWhen(m.created_at);
         const src =
           m.source === "aktualitates" ? " · no Aktualitātēm" : m.source === "saliedesana" ? " · no Saliedēšanas" : "";
-        div.innerHTML = `<div class="pdd-ideju-msg-meta">${escapeHtmlLite(who)} · ${escapeHtmlLite(when)}${escapeHtmlLite(src)}</div><div class="pdd-ideju-msg-body">${escapeHtmlLite(m.body)}</div>`;
+        div.innerHTML = `<div class="pdd-ideju-msg-meta">${escapeHtmlLite(who)} · ${escapeHtmlLite(when)}${escapeHtmlLite(src)}</div><div class="pdd-ideju-msg-body">${String(m.body || "")}</div>`;
         listEl.appendChild(div);
       }
       listEl.scrollTop = listEl.scrollHeight;
@@ -862,10 +913,23 @@
         </div>
         <div class="pdd-ideju-list" data-ideju-list></div>
         <div class="pdd-ideju-status" data-ideju-status></div>
-        <form class="pdd-ideju-form" data-ideju-form>
-          <textarea data-ideju-input placeholder="Uzraksti ideju…" maxlength="2000" required></textarea>
-          <button type="submit" class="btn btn-primary btn-small">Sūtīt</button>
-        </form>
+        <div class="pdd-ideju-form-wrap">
+          <form class="pdd-ideju-form" data-ideju-form>
+            <textarea data-ideju-input placeholder="Uzraksti ideju…" maxlength="2000"></textarea>
+            <button type="submit" class="btn btn-primary btn-small">Sūtīt</button>
+          </form>
+          <div class="pdd-ideju-pending" data-ideju-pending></div>
+          <div class="pdd-ideju-form-tools">
+            <label class="btn btn-ghost btn-small">
+              Pievienot bildi
+              <input type="file" accept="image/*" data-ideju-img style="display:none" />
+            </label>
+            <label class="btn btn-ghost btn-small">
+              Pievienot pielikumu
+              <input type="file" data-ideju-att style="display:none" />
+            </label>
+          </div>
+        </div>
       </div>
     `;
     document.body.appendChild(root);
@@ -873,14 +937,114 @@
     const statusEl = root.querySelector("[data-ideju-status]");
     const form = root.querySelector("[data-ideju-form]");
     const input = root.querySelector("[data-ideju-input]");
+    const pendingEl = root.querySelector("[data-ideju-pending]");
+    const imgInput = root.querySelector("[data-ideju-img]");
+    const attInput = root.querySelector("[data-ideju-att]");
+    let pendingHtml = "";
+
+    function paintIdejuPending() {
+      if (!pendingEl) return;
+      if (!pendingHtml.trim()) {
+        pendingEl.classList.remove("has-items");
+        pendingEl.innerHTML = "";
+        return;
+      }
+      pendingEl.classList.add("has-items");
+      const imgs = (pendingHtml.match(/<img\b[^>]*>/gi) || []).length;
+      const atts = (pendingHtml.match(/data-ideju-attachment-row/gi) || []).length;
+      const bits = [];
+      if (imgs) bits.push(`${imgs} attēl${imgs === 1 ? "s" : "i"}`);
+      if (atts) bits.push(`${atts} pielikum${atts === 1 ? "s" : "i"}`);
+      pendingEl.innerHTML = `<span class="pdd-ideju-pending-item">Pievienots: ${bits.join(", ") || " fails"}</span>`;
+    }
+
+    async function appendIdejuChatImage(file) {
+      if (!file) return;
+      const sb = globalThis.__PDD_SUPABASE__ ?? null;
+      const insertImg = (src, name) => {
+        const safeSrc = escapeHtmlLite(src);
+        const safeName = escapeHtmlLite(name || "Attēls");
+        pendingHtml += `<img data-ideju-img="1" src="${safeSrc}" alt="${safeName}" style="display:block;max-width:100%;width:min(100%,320px);height:auto;border-radius:8px;margin:0.35rem 0;" />`;
+        paintIdejuPending();
+      };
+      if (sb) {
+        try {
+          const { publicUrl } = await uploadSaliedesanaFileToStorage(sb, file, "ideju-chat");
+          insertImg(publicUrl, file.name);
+          return;
+        } catch (e) {
+          console.warn("[ideju-chat.image.upload]", e?.message || e);
+        }
+      }
+      const fr = new FileReader();
+      fr.onload = () => {
+        const src = String(fr.result || "");
+        if (src) insertImg(src, file.name);
+      };
+      fr.readAsDataURL(file);
+    }
+
+    async function appendIdejuChatAttachment(file) {
+      if (!file) return;
+      const sb = globalThis.__PDD_SUPABASE__ ?? null;
+      const insertAtt = (url, name) => {
+        const safeSrc = escapeHtmlLite(url);
+        const safeName = escapeHtmlLite(name || "pielikums");
+        pendingHtml +=
+          `<p data-ideju-attachment-row="1">Pielikums: <a data-ideju-attachment="1" href="${safeSrc}" target="_blank" rel="noopener noreferrer">${safeName}</a> ` +
+          `(<a href="${safeSrc}" download="${safeName}">Lejupielādēt</a>)</p>`;
+        paintIdejuPending();
+      };
+      if (sb) {
+        try {
+          const { publicUrl } = await uploadSaliedesanaFileToStorage(sb, file, "ideju-chat");
+          insertAtt(publicUrl, file.name);
+          return;
+        } catch (e) {
+          alert(
+            "Neizdevās augšupielādēt pielikumu: " +
+              (e?.message || String(e)) +
+              ". Mēģināšu ievietot lokāli šajā ziņā.",
+          );
+        }
+      }
+      const fr = new FileReader();
+      fr.onload = () => {
+        const src = String(fr.result || "");
+        if (src) insertAtt(src, file.name);
+      };
+      fr.readAsDataURL(file);
+    }
+
+    imgInput?.addEventListener("change", (e) => {
+      const f = e.target?.files?.[0];
+      if (f) void appendIdejuChatImage(f);
+      e.target.value = "";
+    });
+    attInput?.addEventListener("click", (e) => {
+      const ok = confirm(SAL_INFO_ATTACHMENT_WARNING);
+      if (!ok) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.target) e.target.value = "";
+      }
+    });
+    attInput?.addEventListener("change", (e) => {
+      const f = e.target?.files?.[0];
+      if (f) void appendIdejuChatAttachment(f);
+      e.target.value = "";
+    });
     root.querySelector(".pdd-ideju-close")?.addEventListener("click", closeIdejuChatModal);
     root.addEventListener("click", (e) => {
       if (e.target === root) closeIdejuChatModal();
     });
     form?.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const body = String(input?.value || "").trim();
-      if (!body) return;
+      const body = buildIdejuChatBody(input?.value, pendingHtml);
+      if (!idejuChatBodyIsMeaningful(body)) {
+        alert("Ieraksti tekstu vai pievieno bildi/pielikumu.");
+        return;
+      }
       const row = {
         id: salUid(),
         body,
@@ -892,6 +1056,8 @@
       const local = mergeIdejuChatLists(loadLocalIdejuChat(), [row]);
       saveLocalIdejuChat(local);
       if (input) input.value = "";
+      pendingHtml = "";
+      paintIdejuPending();
       await refreshIdejuChatModalList(listEl, statusEl);
       const sb = globalThis.__PDD_SUPABASE__ ?? null;
       if (sb) {
