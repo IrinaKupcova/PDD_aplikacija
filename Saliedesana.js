@@ -9,6 +9,8 @@
   const REMOTE_TABLE = "Saliedesana";
   const SAL_META_MARKER = "\n\n---PDD-SYNC---\n";
   const SALIEDESANA_FILES_BUCKET = "pdd-saliedesana-files";
+  const SAL_INFO_ATTACHMENT_WARNING =
+    "Šobrīd aplikācija atrodas uz ārējā servera, tādēļ esi uzmanīgs ar darba informācijas publicēšanu! Spied OK, ja vēlies turpināt pielikuma pievienošanu.";
   /** No pirmā SELECT * — precīzi PostgREST lauku nosaukumi rakstīšanai. */
   let saliedesanaColumnNames = null;
 
@@ -126,9 +128,10 @@
 
   function ensureStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-saliedesana-style-v3")) return;
+    if (document.getElementById("pdd-saliedesana-style-v4")) return;
+    document.getElementById("pdd-saliedesana-style-v3")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-saliedesana-style-v3";
+    s.id = "pdd-saliedesana-style-v4";
     s.textContent = `
       .sal-wrap { display:grid; gap:1rem; }
       .sal-head { border:1px solid #f59e0b; background:linear-gradient(180deg,#fff7ed,#ffedd5); border-radius:14px; padding:.9rem 1rem; }
@@ -161,15 +164,32 @@
         border:1px solid #fed7aa; border-radius:12px; background:#fff; padding:.55rem .65rem; display:grid; gap:.25rem;
       }
       .sal-info-item strong { color:#7c2d12; font-size:.9rem; }
-      .sal-info-item .sal-info-body { font-size:.84rem; color:#0f172a; white-space:pre-wrap; word-break:break-word; }
+      .sal-info-item .sal-info-body {
+        font-size:.84rem; color:#0f172a; word-break:break-word; overflow-wrap:anywhere; line-height:1.4;
+      }
+      .sal-info-item .sal-info-body img {
+        display:block; max-width:100%; height:auto; border-radius:8px; margin:.35rem 0;
+      }
+      .sal-info-item .sal-info-body a { color:#9a3412; }
       .sal-info-meta { font-size:.72rem; color:#9a3412; }
       .sal-info-actions { display:flex; gap:.35rem; justify-content:flex-end; flex-wrap:wrap; }
       .sal-info-form { display:grid; gap:.4rem; border:1px dashed #fb923c; border-radius:12px; padding:.55rem; background:rgba(255,255,255,.7); }
-      .sal-info-form input, .sal-info-form textarea {
+      .sal-info-form > input[type="text"] {
         width:100%; box-sizing:border-box; border:1px solid #fdba74; border-radius:8px; padding:.4rem .5rem; font:inherit; font-size:.86rem;
       }
-      .sal-info-form textarea { min-height:72px; resize:vertical; }
       .sal-info-form-actions { display:flex; gap:.35rem; flex-wrap:wrap; }
+      .sal-info-rich { border:1px solid #fdba74; border-radius:10px; background:#fff; overflow:hidden; }
+      .sal-info-toolbar { display:flex; flex-wrap:wrap; gap:.3rem; padding:.4rem; border-bottom:1px solid #fed7aa; background:#fff7ed; align-items:center; }
+      .sal-info-toolbar .btn, .sal-info-toolbar select, .sal-info-toolbar label { font-size:.72rem; }
+      .sal-info-editor {
+        min-height:110px; padding:.55rem; outline:none; font-size:.9rem; line-height:1.4;
+        box-sizing:border-box; max-width:100%; overflow-wrap:anywhere; word-break:break-word; overflow-x:auto;
+      }
+      .sal-info-editor:empty:before {
+        content:attr(data-placeholder); color:#9a3412; opacity:.55; pointer-events:none;
+      }
+      .sal-info-selected-img { outline:3px solid #f97316; outline-offset:2px; }
+      .sal-info-selected-attachment { outline:2px solid #ea580c; outline-offset:2px; background:#ffedd5; }
       .sal-banner { border:1px dashed #f59e0b; background:#fffbeb; border-radius:10px; padding:.55rem .65rem; font-size:.78rem; color:#92400e; }
       .sal-accordion { border:1px solid #fdba74; border-radius:12px; background:#fff7ed; overflow:hidden; }
       .sal-accordion summary { list-style:none; cursor:pointer; user-select:none; position:relative; padding:.62rem .75rem; font-weight:700; color:#9a3412; }
@@ -418,11 +438,27 @@
     }
   }
 
+  function salInfoHtmlHasMedia(html) {
+    const s = String(html || "");
+    return /<img\b/i.test(s) || /data-sal-info-attachment/i.test(s) || /pdd-saliedesana-files/i.test(s);
+  }
+
+  function salInfoBodyIsMeaningful(html) {
+    if (salInfoHtmlHasMedia(html)) return true;
+    const plain = String(html || "")
+      .replace(/<br\s*\/?>/gi, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return Boolean(plain);
+  }
+
   function normalizeSalInfoRow(row) {
     if (!row || typeof row !== "object") return null;
     const id = String(row.id || "").trim();
     const body = String(row.body || "").trim();
-    if (!id || !body) return null;
+    if (!id || !salInfoBodyIsMeaningful(body)) return null;
     return {
       id,
       title: String(row.title || "").trim(),
@@ -529,11 +565,6 @@
     }
   }
 
-  function getIdejuChatSeenStamp() {
-    const map = readIdejuChatSeenMap();
-    return String(map[idejuChatSeenActorKey()] || "").trim();
-  }
-
   function markIdejuChatSeen(rows) {
     const stamp = latestIdejuChatStamp(rows);
     if (!stamp) return;
@@ -549,15 +580,6 @@
     } catch {
       /* ignore */
     }
-  }
-
-  function hasUnreadIdejuChat(rows) {
-    const list = Array.isArray(rows) ? rows : loadLocalIdejuChat();
-    const latest = latestIdejuChatStamp(list);
-    if (!latest) return false;
-    const seen = getIdejuChatSeenStamp();
-    if (!seen) return list.length > 0;
-    return latest > seen;
   }
 
   function normalizeIdejuChatRow(row) {
@@ -1888,6 +1910,9 @@
       /** Vienmēr norāda uz jaunāko `openEventCardByRef`, lai globālais tiltiņš ne „pazustu” starp `events` atjauninājumiem. */
       const openEventCardByRefRef = useRef(null);
       const idejuPreviewRef = useRef(null);
+      const salInfoEditorRef = useRef(null);
+      const salInfoSelectedImgRef = useRef(null);
+      const salInfoSelectedAttRef = useRef(null);
       const supabase = globalThis.__PDD_SUPABASE__ ?? null;
       const [dbMessage, setDbMessage] = useState("");
       const [events, setEvents] = useState([]);
@@ -2000,11 +2025,302 @@
         return mountIdejuChatPreview(el, { theme: "sal", source: "saliedesana" });
       }, []);
 
+      function clearSalInfoForm() {
+        setSalInfoEditingId("");
+        setSalInfoTitle("");
+        setSalInfoBody("");
+        const ed = salInfoEditorRef.current;
+        if (ed) ed.innerHTML = "";
+        if (salInfoSelectedImgRef.current) {
+          salInfoSelectedImgRef.current.classList.remove("sal-info-selected-img");
+          salInfoSelectedImgRef.current = null;
+        }
+        if (salInfoSelectedAttRef.current) {
+          salInfoSelectedAttRef.current.classList.remove("sal-info-selected-attachment");
+          salInfoSelectedAttRef.current = null;
+        }
+      }
+
+      function salInfoCurrentEditor() {
+        return salInfoEditorRef.current;
+      }
+
+      function salInfoSyncBodyFromEditor() {
+        const ed = salInfoCurrentEditor();
+        if (!ed) return;
+        setSalInfoBody(String(ed.innerHTML || ""));
+      }
+
+      function salInfoWrapSelectionWithStyle(styleText) {
+        const ed = salInfoCurrentEditor();
+        const sel = window.getSelection?.();
+        if (!ed || !sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+        const r = sel.getRangeAt(0);
+        if (!ed.contains(r.commonAncestorContainer)) return;
+        const txt = r.toString();
+        if (!txt) return;
+        const span = document.createElement("span");
+        span.setAttribute("style", styleText);
+        span.textContent = txt;
+        r.deleteContents();
+        r.insertNode(span);
+        sel.removeAllRanges();
+        salInfoSyncBodyFromEditor();
+      }
+
+      function salInfoInsertAtCursor(htmlText) {
+        const ed = salInfoCurrentEditor();
+        const htmlValue = String(htmlText || "");
+        if (!ed || !htmlValue) return;
+        ed.focus();
+        const sel = window.getSelection?.();
+        if (!sel || sel.rangeCount === 0) {
+          ed.insertAdjacentHTML("beforeend", htmlValue);
+          salInfoSyncBodyFromEditor();
+          return;
+        }
+        const r = sel.getRangeAt(0);
+        if (!ed.contains(r.commonAncestorContainer)) {
+          ed.insertAdjacentHTML("beforeend", htmlValue);
+          salInfoSyncBodyFromEditor();
+          return;
+        }
+        const frag = r.createContextualFragment(htmlValue);
+        r.deleteContents();
+        r.insertNode(frag);
+        salInfoSyncBodyFromEditor();
+      }
+
+      function salInfoApplyCmd(cmd, value) {
+        const ed = salInfoCurrentEditor();
+        if (!ed) return;
+        ed.focus();
+        try {
+          document.execCommand(cmd, false, value ?? null);
+        } catch {
+          /* ignore */
+        }
+        salInfoSyncBodyFromEditor();
+      }
+
+      function salInfoMarkSelectedImage(img) {
+        const ed = salInfoCurrentEditor();
+        if (salInfoSelectedImgRef.current && salInfoSelectedImgRef.current !== img) {
+          salInfoSelectedImgRef.current.classList.remove("sal-info-selected-img");
+        }
+        salInfoSelectedImgRef.current = img && ed?.contains(img) ? img : null;
+        if (salInfoSelectedImgRef.current) salInfoSelectedImgRef.current.classList.add("sal-info-selected-img");
+      }
+
+      function salInfoOnEditorClick(ev) {
+        const ed = salInfoCurrentEditor();
+        if (!ed) return;
+        if (salInfoSelectedAttRef.current) {
+          salInfoSelectedAttRef.current.classList.remove("sal-info-selected-attachment");
+          salInfoSelectedAttRef.current = null;
+        }
+        const link = ev?.target?.closest?.("a");
+        if (link && ed.contains(link)) {
+          salInfoSelectedAttRef.current = link;
+          salInfoSelectedAttRef.current.classList.add("sal-info-selected-attachment");
+          salInfoMarkSelectedImage(null);
+          return;
+        }
+        const img = ev?.target?.closest?.("img");
+        if (img && ed.contains(img)) {
+          salInfoMarkSelectedImage(img);
+          return;
+        }
+        salInfoMarkSelectedImage(null);
+      }
+
+      function salInfoWithSelectedImage(fn) {
+        const ed = salInfoCurrentEditor();
+        const img = salInfoSelectedImgRef.current;
+        if (!ed || !img || !ed.contains(img)) {
+          alert("Vispirms uzklikšķini uz bildes teksta zonā.");
+          return;
+        }
+        fn(img, ed);
+        salInfoSyncBodyFromEditor();
+      }
+
+      function salInfoResizeSelectedImage(multiplier) {
+        salInfoWithSelectedImage((img, ed) => {
+          const edWidth = Math.max(120, Math.floor(ed.clientWidth - 16));
+          const current = Math.max(40, Math.floor(img.getBoundingClientRect().width || 0));
+          const next = Math.min(edWidth, Math.max(60, Math.round(current * multiplier)));
+          img.style.width = `${next}px`;
+          img.style.maxWidth = "100%";
+          img.style.height = "auto";
+        });
+      }
+
+      function salInfoAlignSelectedImage(mode) {
+        salInfoWithSelectedImage((img) => {
+          if (mode === "left") img.style.margin = "0.35rem auto 0.35rem 0";
+          else if (mode === "right") img.style.margin = "0.35rem 0 0.35rem auto";
+          else img.style.margin = "0.35rem auto";
+          img.style.display = "block";
+        });
+      }
+
+      function salInfoMoveSelectedImage(step) {
+        salInfoWithSelectedImage((img, ed) => {
+          const children = Array.from(ed.children);
+          const idx = children.indexOf(img);
+          if (idx < 0) return;
+          const target = idx + step;
+          if (target < 0 || target >= children.length) return;
+          if (step < 0) ed.insertBefore(img, children[target]);
+          else ed.insertBefore(img, children[target].nextSibling);
+        });
+      }
+
+      function salInfoDeleteSelectedImage() {
+        salInfoWithSelectedImage((img) => {
+          img.remove();
+          salInfoMarkSelectedImage(null);
+        });
+      }
+
+      function salInfoSelectedAttachmentStoragePath() {
+        const href = String(salInfoSelectedAttRef.current?.getAttribute?.("href") || "").trim();
+        if (!href) return "";
+        const m = /\/storage\/v1\/object\/public\/pdd-saliedesana-files\/(.+)$/i.exec(href);
+        if (!m) return "";
+        try {
+          return decodeURIComponent(m[1]);
+        } catch {
+          return m[1];
+        }
+      }
+
+      async function salInfoDeleteSelectedAttachment() {
+        const ed = salInfoCurrentEditor();
+        const link = salInfoSelectedAttRef.current;
+        if (!ed || !link || !ed.contains(link)) {
+          alert("Vispirms uzklikšķini uz pielikuma saites teksta zonā.");
+          return;
+        }
+        const path = salInfoSelectedAttachmentStoragePath();
+        if (supabase && path) {
+          const { error } = await supabase.storage.from(SALIEDESANA_FILES_BUCKET).remove([path]);
+          if (error) console.warn("[saliedesana.info.storage.remove]", error.message || error, path);
+        }
+        const p = link.closest("p");
+        if (p && ed.contains(p)) p.remove();
+        else link.remove();
+        link.classList.remove("sal-info-selected-attachment");
+        salInfoSelectedAttRef.current = null;
+        salInfoSyncBodyFromEditor();
+      }
+
+      function salInfoOnPickImage(ev) {
+        const f = ev?.target?.files?.[0];
+        if (!f) return;
+        const fr = new FileReader();
+        fr.onload = () => {
+          const src = String(fr.result || "");
+          if (!src) return;
+          const safeSrc = escapeHtmlLite(src);
+          const safeName = escapeHtmlLite(f.name);
+          salInfoInsertAtCursor(
+            `<img data-sal-info-img="1" draggable="true" src="${safeSrc}" alt="${safeName}"` +
+              ` style="display:block;max-width:100%;width:min(100%,420px);height:auto;border-radius:8px;margin:0.35rem 0;" />`,
+          );
+        };
+        fr.readAsDataURL(f);
+        ev.target.value = "";
+      }
+
+      function salInfoOnBeforePickAttachment(ev) {
+        const ok = confirm(SAL_INFO_ATTACHMENT_WARNING);
+        if (!ok) {
+          ev?.preventDefault?.();
+          ev?.stopPropagation?.();
+          if (ev?.target) ev.target.value = "";
+          return;
+        }
+        if (ev?.target?.dataset) ev.target.dataset.attachmentAllowed = "1";
+      }
+
+      function salInfoOnPickAttachment(ev) {
+        const allowedByClick = String(ev?.target?.dataset?.attachmentAllowed || "") === "1";
+        if (!allowedByClick) {
+          const ok = confirm(SAL_INFO_ATTACHMENT_WARNING);
+          if (!ok) {
+            if (ev?.target) ev.target.value = "";
+            return;
+          }
+        }
+        if (ev?.target?.dataset) ev.target.dataset.attachmentAllowed = "";
+        const f = ev?.target?.files?.[0];
+        if (!f) return;
+
+        const fallbackToInline = () => {
+          const fr = new FileReader();
+          fr.onload = () => {
+            const src = String(fr.result || "");
+            if (!src) return;
+            const safeSrc = escapeHtmlLite(src);
+            const safeName = escapeHtmlLite(f.name);
+            salInfoInsertAtCursor(
+              `<p data-sal-info-attachment-row="1">Pielikums: <a data-sal-info-attachment="1" href="${safeSrc}" target="_blank" rel="noopener noreferrer">${safeName}</a> ` +
+                `(<a href="${safeSrc}" download="${safeName}">Lejupielādēt</a>)</p>`,
+            );
+          };
+          fr.readAsDataURL(f);
+        };
+
+        const uploadToStorage = async () => {
+          const { data: sess } = await supabase.auth.getSession();
+          const uid = String(sess?.session?.user?.id || "").trim();
+          if (!uid) throw new Error("Nav aktīvas sesijas faila augšupielādei.");
+          const safeFileName = String(f.name || "pielikums")
+            .replace(/[^\w.\-()]/g, "_")
+            .replace(/_+/g, "_")
+            .slice(-120);
+          const suffix = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : String(Date.now());
+          const objectPath = `info/${uid}/${Date.now()}-${suffix}-${safeFileName}`;
+          const { error: upErr } = await supabase.storage.from(SALIEDESANA_FILES_BUCKET).upload(objectPath, f, {
+            cacheControl: "3600",
+            upsert: false,
+            contentType: f.type || "application/octet-stream",
+          });
+          if (upErr) throw upErr;
+          const pub = supabase.storage.from(SALIEDESANA_FILES_BUCKET).getPublicUrl(objectPath);
+          const url = String(pub?.data?.publicUrl || "").trim();
+          if (!url) throw new Error("Neizdevās iegūt publisko URL pielikumam.");
+          const safeSrc = escapeHtmlLite(url);
+          const safeName = escapeHtmlLite(f.name);
+          salInfoInsertAtCursor(
+            `<p data-sal-info-attachment-row="1">Pielikums: <a data-sal-info-attachment="1" href="${safeSrc}" target="_blank" rel="noopener noreferrer">${safeName}</a> ` +
+              `(<a href="${safeSrc}" download="${safeName}">Lejupielādēt</a>)</p>`,
+          );
+        };
+
+        if (supabase) {
+          uploadToStorage().catch((e) => {
+            alert(
+              "Neizdevās augšupielādēt pielikumu uz Supabase Storage: " +
+                (e?.message || String(e)) +
+                ". Pielikums tiks ievietots lokāli šajā ierakstā.",
+            );
+            fallbackToInline();
+          });
+        } else {
+          fallbackToInline();
+        }
+        ev.target.value = "";
+      }
+
       async function saveSalInfoPost(e) {
         e?.preventDefault?.();
         const title = String(salInfoTitle || "").trim();
-        const body = String(salInfoBody || "").trim();
-        if (!body) {
+        const ed = salInfoCurrentEditor();
+        const body = String(ed?.innerHTML || salInfoBody || "").trim();
+        if (!salInfoBodyIsMeaningful(body)) {
           alert("Ieraksti tekstu.");
           return;
         }
@@ -2027,9 +2343,7 @@
         );
         saveLocalSalInfo(next);
         setSalInfoRows(next);
-        setSalInfoTitle("");
-        setSalInfoBody("");
-        setSalInfoEditingId("");
+        clearSalInfoForm();
         if (supabase) {
           const out = await upsertSalInfoRemote(supabase, row);
           if (!out.ok) {
@@ -2058,11 +2372,7 @@
         const next = salInfoRows.filter((r) => r.id !== rid);
         saveLocalSalInfo(next);
         setSalInfoRows(next);
-        if (salInfoEditingId === rid) {
-          setSalInfoEditingId("");
-          setSalInfoTitle("");
-          setSalInfoBody("");
-        }
+        if (salInfoEditingId === rid) clearSalInfoForm();
         if (supabase) {
           const out = await deleteSalInfoRemote(supabase, rid);
           if (!out.ok) {
@@ -2075,6 +2385,10 @@
         setSalInfoEditingId(row.id);
         setSalInfoTitle(row.title || "");
         setSalInfoBody(row.body || "");
+        requestAnimationFrame(() => {
+          const ed = salInfoEditorRef.current;
+          if (ed) ed.innerHTML = row.body || "";
+        });
       }
 
       useEffect(() => {
@@ -3517,28 +3831,79 @@
                 value=${salInfoTitle}
                 onInput=${(e) => setSalInfoTitle(e.target.value)}
               />
-              <textarea
-                placeholder="Kas šobrīd aktuāli saliedēšanā…"
-                value=${salInfoBody}
-                onInput=${(e) => setSalInfoBody(e.target.value)}
-                required
-              ></textarea>
+              <div class="sal-info-rich">
+                <div class="sal-info-toolbar">
+                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoApplyCmd("bold")}>B</button>
+                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoApplyCmd("italic")}>I</button>
+                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoApplyCmd("underline")}>U</button>
+                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoApplyCmd("insertUnorderedList")}>• Saraksts</button>
+                  <button
+                    type="button"
+                    class="btn btn-ghost btn-small"
+                    onClick=${() => salInfoWrapSelectionWithStyle("background:#fef08a;")}
+                  >
+                    Izcelt
+                  </button>
+                  <label class="btn btn-ghost btn-small" style=${{ cursor: "pointer" }}>
+                    Teksta krāsa
+                    <input
+                      type="color"
+                      style=${{ width: "24px", height: "20px", marginLeft: "0.35rem", border: "none", background: "transparent" }}
+                      onInput=${(e) => salInfoApplyCmd("foreColor", e.target.value)}
+                    />
+                  </label>
+                  <select class="select" style=${{ maxWidth: "120px" }} onChange=${(e) => salInfoApplyCmd("fontSize", e.target.value)}>
+                    <option value="">Šrifta lielums</option>
+                    <option value="2">Mazs</option>
+                    <option value="3">Parasts</option>
+                    <option value="4">Vidējs</option>
+                    <option value="5">Liels</option>
+                    <option value="6">Ļoti liels</option>
+                  </select>
+                </div>
+                <div
+                  class="sal-info-editor"
+                  contenteditable="true"
+                  ref=${salInfoEditorRef}
+                  onClick=${salInfoOnEditorClick}
+                  onInput=${() => salInfoSyncBodyFromEditor()}
+                  data-placeholder="Kas šobrīd aktuāli saliedēšanā…"
+                ></div>
+              </div>
+              <div class="row" style=${{ gap: "0.45rem", flexWrap: "wrap" }}>
+                <label class="btn btn-ghost btn-small" style=${{ cursor: "pointer" }}>
+                  Pievienot bildi / screenshot
+                  <input type="file" accept="image/*" style=${{ display: "none" }} onChange=${salInfoOnPickImage} />
+                </label>
+                <label class="btn btn-ghost btn-small" style=${{ cursor: "pointer" }}>
+                  Pievienot pielikumu
+                  <input
+                    type="file"
+                    style=${{ display: "none" }}
+                    onClick=${salInfoOnBeforePickAttachment}
+                    onChange=${salInfoOnPickAttachment}
+                  />
+                </label>
+              </div>
+              <div class="row" style=${{ gap: "0.35rem", flexWrap: "wrap" }}>
+                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoResizeSelectedImage(0.8)}>Bilde -</button>
+                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoResizeSelectedImage(1.25)}>Bilde +</button>
+                <button type="button" class="btn btn-danger btn-small" onClick=${salInfoDeleteSelectedImage}>Dzēst bildi</button>
+                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoAlignSelectedImage("left")}>Pa kreisi</button>
+                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoAlignSelectedImage("center")}>Centrā</button>
+                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoAlignSelectedImage("right")}>Pa labi</button>
+                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoMoveSelectedImage(-1)}>Uz augšu</button>
+                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoMoveSelectedImage(1)}>Uz leju</button>
+                <button type="button" class="btn btn-danger btn-small" onClick=${() => void salInfoDeleteSelectedAttachment()}>
+                  Dzēst pielikumu
+                </button>
+              </div>
               <div class="sal-info-form-actions">
                 <button type="submit" class="btn btn-primary btn-small" disabled=${salInfoBusy}>
                   ${salInfoEditingId ? "Saglabāt izmaiņas" : "Publicēt"}
                 </button>
                 ${salInfoEditingId
-                  ? html`<button
-                      type="button"
-                      class="btn btn-ghost btn-small"
-                      onClick=${() => {
-                        setSalInfoEditingId("");
-                        setSalInfoTitle("");
-                        setSalInfoBody("");
-                      }}
-                    >
-                      Atcelt
-                    </button>`
+                  ? html`<button type="button" class="btn btn-ghost btn-small" onClick=${clearSalInfoForm}>Atcelt</button>`
                   : null}
               </div>
             </form>
@@ -3547,8 +3912,17 @@
                 ? salInfoRows.map(
                     (row) => html`
                       <article key=${row.id} class="sal-info-item">
-                        ${row.title ? html`<strong>${row.title}</strong>` : null}
-                        <div class="sal-info-body">${row.body}</div>
+                        ${row.title
+                          ? html`<strong>
+                              ${row.title}
+                              ${salInfoHtmlHasMedia(row.body)
+                                ? html`<span class="pdd-attach-clip" title="Ir pielikums" aria-label="Ir pielikums"> 📎</span>`
+                                : null}
+                            </strong>`
+                          : salInfoHtmlHasMedia(row.body)
+                            ? html`<span class="pdd-attach-clip" title="Ir pielikums" aria-label="Ir pielikums">📎</span>`
+                            : null}
+                        <div class="sal-info-body" dangerouslySetInnerHTML=${{ __html: String(row.body || "") }}></div>
                         <div class="sal-info-meta">
                           ${row.actor_name || row.actor_key || "Lietotājs"} · ${formatSalInfoWhen(row.created_at)}
                         </div>
