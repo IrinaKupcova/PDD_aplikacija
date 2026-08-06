@@ -3,8 +3,11 @@
   const LS_AKTUALITATES_KEY = "pdd_sodien_aktualitates_v1";
   const LS_SAL_INFO_KEY = "pdd_saliedesana_info_v1";
   const LS_IDEJU_CHAT_KEY = "pdd_ideju_chat_v1";
+  const LS_IDEJU_CHAT_REACTIONS_KEY = "pdd_ideju_chat_reactions_v1";
   const REMOTE_SAL_INFO_TABLE = "pdd_saliedesana_info";
   const REMOTE_IDEJU_CHAT_TABLE = "pdd_ideju_chat";
+  const REMOTE_IDEJU_CHAT_REACTIONS_TABLE = "pdd_ideju_chat_reactions";
+  const IDEJU_CHAT_EMOJI = ["👍", "❤️", "😂", "🎉", "👀"];
   /** Supabase: public."Saliedesana" — kolonnas kā Table Editor (arī saīsinātie nosaukumi). */
   const REMOTE_TABLE = "Saliedesana";
   const SAL_META_MARKER = "\n\n---PDD-SYNC---\n";
@@ -523,6 +526,171 @@
     }
   }
 
+  function normalizeIdejuChatReaction(row) {
+    if (!row || typeof row !== "object") return null;
+    const message_id = String(row.message_id || row.messageId || "").trim();
+    const actor_key = String(row.actor_key || row.actorKey || "").trim();
+    const emoji = String(row.emoji || "").trim();
+    if (!message_id || !actor_key || !IDEJU_CHAT_EMOJI.includes(emoji)) return null;
+    return {
+      message_id,
+      actor_key,
+      actor_name: String(row.actor_name || row.actorName || "").trim(),
+      emoji,
+      updated_at: String(row.updated_at || row.updatedAt || row.created_at || new Date().toISOString()),
+    };
+  }
+
+  function loadLocalIdejuChatReactions() {
+    try {
+      const raw = localStorage.getItem(LS_IDEJU_CHAT_REACTIONS_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return (Array.isArray(arr) ? arr : []).map(normalizeIdejuChatReaction).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveLocalIdejuChatReactions(rows, options = {}) {
+    try {
+      localStorage.setItem(LS_IDEJU_CHAT_REACTIONS_KEY, JSON.stringify(Array.isArray(rows) ? rows : []));
+    } catch {
+      /* ignore */
+    }
+    if (options.silent) return;
+    try {
+      window.dispatchEvent(new CustomEvent("pdd:ideju-chat-reactions-changed"));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function mergeIdejuChatReactions(localRows, remoteRows) {
+    const map = new Map();
+    for (const r of [...(localRows || []), ...(remoteRows || [])]) {
+      const n = normalizeIdejuChatReaction(r);
+      if (!n) continue;
+      const key = `${n.message_id}::${n.actor_key}`;
+      const prev = map.get(key);
+      if (!prev || String(n.updated_at) >= String(prev.updated_at)) map.set(key, n);
+    }
+    return [...map.values()];
+  }
+
+  function reactionsForMessage(allReactions, messageId) {
+    const id = String(messageId || "").trim();
+    return (allReactions || []).filter((r) => r.message_id === id);
+  }
+
+  function countReactionsByEmoji(msgReactions) {
+    const counts = {};
+    for (const e of IDEJU_CHAT_EMOJI) counts[e] = 0;
+    for (const r of msgReactions || []) {
+      if (counts[r.emoji] != null) counts[r.emoji] += 1;
+    }
+    return counts;
+  }
+
+  function myReactionEmoji(msgReactions, me) {
+    const mine = (msgReactions || []).find((r) => r.actor_key === me);
+    return mine?.emoji || "";
+  }
+
+  function renderIdejuChatReactionsHtml(messageId, allReactions) {
+    const me = actorKey();
+    const msgRx = reactionsForMessage(allReactions, messageId);
+    const counts = countReactionsByEmoji(msgRx);
+    const mine = myReactionEmoji(msgRx, me);
+    const buttons = IDEJU_CHAT_EMOJI.map((emoji) => {
+      const n = counts[emoji] || 0;
+      const active = mine === emoji ? " is-active" : "";
+      const countHtml = n ? `<span class="pdd-ideju-react-count">${n}</span>` : "";
+      return `<button type="button" class="pdd-ideju-react-btn${active}" data-ideju-react="${escapeHtmlLite(emoji)}" data-msg-id="${escapeHtmlLite(messageId)}" title="Reakcija ${escapeHtmlLite(emoji)}" aria-pressed="${mine === emoji ? "true" : "false"}">${emoji}${countHtml}</button>`;
+    }).join("");
+    return `<div class="pdd-ideju-reacts" data-ideju-reacts="${escapeHtmlLite(messageId)}">${buttons}</div>`;
+  }
+
+  async function fetchIdejuChatReactionsRemote(supabase, messageIds) {
+    if (!supabase) return null;
+    const ids = (Array.isArray(messageIds) ? messageIds : []).map((x) => String(x || "").trim()).filter(Boolean);
+    let q = supabase
+      .from(REMOTE_IDEJU_CHAT_REACTIONS_TABLE)
+      .select("message_id, actor_key, actor_name, emoji, updated_at, created_at")
+      .order("updated_at", { ascending: true })
+      .limit(2000);
+    if (ids.length && ids.length <= 200) q = q.in("message_id", ids);
+    const { data, error } = await q;
+    if (error) {
+      console.warn("[Čats.reactions]", error.message || error);
+      return null;
+    }
+    return (Array.isArray(data) ? data : []).map(normalizeIdejuChatReaction).filter(Boolean);
+  }
+
+  async function upsertIdejuChatReactionRemote(supabase, row) {
+    if (!supabase || !row) return { ok: false };
+    const { error } = await supabase.from(REMOTE_IDEJU_CHAT_REACTIONS_TABLE).upsert(
+      {
+        message_id: row.message_id,
+        actor_key: row.actor_key,
+        actor_name: row.actor_name || "",
+        emoji: row.emoji,
+        updated_at: row.updated_at || new Date().toISOString(),
+      },
+      { onConflict: "message_id,actor_key" },
+    );
+    if (error) {
+      console.warn("[Čats.reactions.upsert]", error.message || error);
+      return { ok: false, error };
+    }
+    return { ok: true };
+  }
+
+  async function deleteIdejuChatReactionRemote(supabase, messageId, actorKeyVal) {
+    if (!supabase) return { ok: false };
+    const { error } = await supabase
+      .from(REMOTE_IDEJU_CHAT_REACTIONS_TABLE)
+      .delete()
+      .eq("message_id", String(messageId || ""))
+      .eq("actor_key", String(actorKeyVal || ""));
+    if (error) {
+      console.warn("[Čats.reactions.delete]", error.message || error);
+      return { ok: false, error };
+    }
+    return { ok: true };
+  }
+
+  async function setIdejuChatReaction(messageId, emoji) {
+    const id = String(messageId || "").trim();
+    const want = String(emoji || "").trim();
+    if (!id || !IDEJU_CHAT_EMOJI.includes(want)) return loadLocalIdejuChatReactions();
+    const me = actorKey();
+    const name = actorDisplayName();
+    const now = new Date().toISOString();
+    let rows = loadLocalIdejuChatReactions();
+    const prev = rows.find((r) => r.message_id === id && r.actor_key === me);
+    if (prev && prev.emoji === want) {
+      rows = rows.filter((r) => !(r.message_id === id && r.actor_key === me));
+      saveLocalIdejuChatReactions(rows);
+      const sb = globalThis.__PDD_SUPABASE__ ?? null;
+      if (sb) await deleteIdejuChatReactionRemote(sb, id, me);
+      return rows;
+    }
+    const nextRow = {
+      message_id: id,
+      actor_key: me,
+      actor_name: name,
+      emoji: want,
+      updated_at: now,
+    };
+    rows = [...rows.filter((r) => !(r.message_id === id && r.actor_key === me)), nextRow];
+    saveLocalIdejuChatReactions(rows);
+    const sb = globalThis.__PDD_SUPABASE__ ?? null;
+    if (sb) await upsertIdejuChatReactionRemote(sb, nextRow);
+    return rows;
+  }
+
   const IDEJU_CHAT_SEEN_KEY = "pdd_ideju_chat_seen_v1";
 
   function idejuChatSeenActorKey() {
@@ -673,7 +841,8 @@
 
   function ensureIdejuChatModalStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-ideju-chat-style-v8")) return;
+    if (document.getElementById("pdd-ideju-chat-style-v9")) return;
+    document.getElementById("pdd-ideju-chat-style-v8")?.remove();
     document.getElementById("pdd-ideju-chat-style-v7")?.remove();
     document.getElementById("pdd-ideju-chat-style-v6")?.remove();
     document.getElementById("pdd-ideju-chat-style-v5")?.remove();
@@ -682,7 +851,7 @@
     document.getElementById("pdd-ideju-chat-style-v2")?.remove();
     document.getElementById("pdd-ideju-chat-style")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-ideju-chat-style-v8";
+    s.id = "pdd-ideju-chat-style-v9";
     s.textContent = `
       .pdd-ideju-modal-bg { position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:1rem; }
       .pdd-ideju-modal { width:min(560px,100%); max-height:90vh; display:flex; flex-direction:column; border-radius:16px; overflow:hidden; box-shadow:0 18px 50px rgba(15,23,42,.28); }
@@ -723,6 +892,22 @@
         border-radius:8px; margin:.3rem 0;
       }
       .pdd-ideju-msg-body a { color:inherit; text-decoration:underline; word-break:break-all; }
+      .pdd-ideju-reacts {
+        display:flex; flex-wrap:wrap; gap:.2rem; margin-top:.35rem; align-items:center;
+      }
+      .pdd-ideju-react-btn {
+        border:1px solid rgba(100,116,139,.28); background:rgba(255,255,255,.85);
+        border-radius:999px; padding:.12rem .35rem; font-size:.78rem; line-height:1.2;
+        cursor:pointer; display:inline-flex; align-items:center; gap:.15rem; color:#334155;
+      }
+      .pdd-ideju-react-btn:hover { border-color:#0ea5e9; background:#f0f9ff; }
+      .pdd-ideju-react-btn.is-active {
+        border-color:#0284c7; background:#e0f2fe; box-shadow:0 0 0 1px rgba(14,165,233,.25);
+      }
+      .pdd-ideju-modal.theme-sal .pdd-ideju-react-btn.is-active {
+        border-color:#ea580c; background:#ffedd5; box-shadow:0 0 0 1px rgba(249,115,22,.25);
+      }
+      .pdd-ideju-react-count { font-size:.68rem; font-weight:700; color:#475569; }
       .pdd-ideju-form-wrap { border-top:1px solid rgba(0,0,0,.08); background:rgba(255,255,255,.8); }
       .pdd-ideju-form { display:flex; gap:.4rem; padding:.65rem .75rem .45rem; }
       .pdd-ideju-form textarea { flex:1; min-height:44px; max-height:90px; resize:vertical; border-radius:10px; padding:.4rem .5rem; font:inherit; font-size:.86rem; }
@@ -1099,7 +1284,15 @@
       }
       idejuChatChannel = null;
     }
-    document.getElementById("pdd-ideju-chat-modal-root")?.remove();
+    const rootEl = document.getElementById("pdd-ideju-chat-modal-root");
+    if (rootEl && typeof rootEl.__pddIdejuCleanup === "function") {
+      try {
+        rootEl.__pddIdejuCleanup();
+      } catch {
+        /* ignore */
+      }
+    }
+    rootEl?.remove();
   }
 
   function idejuChatNearBottom(listEl, thresholdPx = 90) {
@@ -1115,6 +1308,7 @@
     const hasMoreOlder = Boolean(options.hasMoreOlder);
     const loadingOlder = Boolean(options.loadingOlder);
     const showHistoryEnd = Boolean(options.showHistoryEnd);
+    const reactions = Array.isArray(options.reactions) ? options.reactions : loadLocalIdejuChatReactions();
     const prevHeight = listEl.scrollHeight;
     const prevTop = listEl.scrollTop;
     const list = Array.isArray(rows) ? rows : [];
@@ -1144,11 +1338,15 @@
       const mine = m.actor_key && m.actor_key === me;
       const div = document.createElement("div");
       div.className = `pdd-ideju-msg${mine ? " mine" : ""}`;
+      div.setAttribute("data-msg-id", String(m.id || ""));
       const who = m.actor_name || m.actor_key || "Lietotājs";
       const when = formatSalInfoWhen(m.created_at);
       const src =
         m.source === "aktualitates" ? " · no Aktualitātēm" : m.source === "saliedesana" ? " · no Saliedēšanas" : "";
-      div.innerHTML = `<div class="pdd-ideju-msg-meta">${escapeHtmlLite(who)} · ${escapeHtmlLite(when)}${escapeHtmlLite(src)}</div><div class="pdd-ideju-msg-body">${String(m.body || "")}</div>`;
+      div.innerHTML =
+        `<div class="pdd-ideju-msg-meta">${escapeHtmlLite(who)} · ${escapeHtmlLite(when)}${escapeHtmlLite(src)}</div>` +
+        `<div class="pdd-ideju-msg-body">${String(m.body || "")}</div>` +
+        renderIdejuChatReactionsHtml(m.id, reactions);
       listEl.appendChild(div);
     }
 
@@ -1245,6 +1443,7 @@
     const attInput = root.querySelector("[data-ideju-att]");
     let pendingHtml = "";
     let chatRows = [];
+    let chatReactions = loadLocalIdejuChatReactions();
     let hasMoreOlder = false;
     let loadingOlder = false;
     let historyFullyLoaded = false;
@@ -1256,9 +1455,30 @@
         hasMoreOlder: !historyFullyLoaded && hasMoreOlder,
         loadingOlder,
         showHistoryEnd: historyFullyLoaded || (!hasMoreOlder && chatRows.length > 0),
+        reactions: chatReactions,
       });
       const olderBtn = listEl?.querySelector("[data-ideju-load-older]");
       if (olderBtn) olderBtn.onclick = () => void loadOlderIdejuChat();
+    }
+
+    async function syncChatReactions(messageIds) {
+      const local = loadLocalIdejuChatReactions();
+      const sb = globalThis.__PDD_SUPABASE__ ?? null;
+      if (!sb) {
+        chatReactions = local;
+        return chatReactions;
+      }
+      const ids = Array.isArray(messageIds)
+        ? messageIds
+        : chatRows.map((m) => m.id).filter(Boolean);
+      const remote = await fetchIdejuChatReactionsRemote(sb, ids);
+      if (remote) {
+        chatReactions = mergeIdejuChatReactions(local, remote);
+        saveLocalIdejuChatReactions(chatReactions, { silent: true });
+      } else {
+        chatReactions = local;
+      }
+      return chatReactions;
     }
 
     async function loadOlderIdejuChat() {
@@ -1282,6 +1502,7 @@
           }
           chatRows = mergeIdejuChatLists(older, chatRows);
           saveLocalIdejuChat(chatRows, { silent: true });
+          await syncChatReactions(chatRows.map((m) => m.id));
         }
       } else {
         // Bez remote filtra — rādām visu lokālo vēsturi (vai visu, kas jau kešā).
@@ -1289,6 +1510,7 @@
         chatRows = mergeIdejuChatLists(allLocal, chatRows);
         hasMoreOlder = false;
         historyFullyLoaded = true;
+        await syncChatReactions(chatRows.map((m) => m.id));
       }
 
       loadingOlder = false;
@@ -1323,6 +1545,7 @@
           chatRows = mergeIdejuChatLists(chatRows, allLocal);
         }
       }
+      await syncChatReactions(chatRows.map((m) => m.id));
       if (statusEl) {
         statusEl.textContent = remote
           ? "Sinhronizēts ar Supabase"
@@ -1478,6 +1701,27 @@
     root.addEventListener("click", (e) => {
       if (e.target === root) closeIdejuChatModal();
     });
+    listEl?.addEventListener("click", (e) => {
+      const btn = e.target?.closest?.("[data-ideju-react]");
+      if (!btn || !listEl.contains(btn)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const msgId = btn.getAttribute("data-msg-id") || btn.closest("[data-msg-id]")?.getAttribute("data-msg-id");
+      const emoji = btn.getAttribute("data-ideju-react");
+      if (!msgId || !emoji) return;
+      void (async () => {
+        chatReactions = await setIdejuChatReaction(msgId, emoji);
+        repaintChat({ preserveScroll: true });
+      })();
+    });
+    const onReactionsChanged = () => {
+      chatReactions = loadLocalIdejuChatReactions();
+      repaintChat({ preserveScroll: true });
+    };
+    window.addEventListener("pdd:ideju-chat-reactions-changed", onReactionsChanged);
+    root.__pddIdejuCleanup = () => {
+      window.removeEventListener("pdd:ideju-chat-reactions-changed", onReactionsChanged);
+    };
     form?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const body = buildIdejuChatBody(input?.value, pendingHtml);
@@ -1532,6 +1776,15 @@
           .on("postgres_changes", { event: "*", schema: "public", table: REMOTE_IDEJU_CHAT_TABLE }, () => {
             void syncChatList();
           })
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: REMOTE_IDEJU_CHAT_REACTIONS_TABLE },
+            () => {
+              void syncChatReactions(chatRows.map((m) => m.id)).then(() => {
+                repaintChat({ preserveScroll: true });
+              });
+            },
+          )
           .subscribe();
       } catch {
         /* ignore */
