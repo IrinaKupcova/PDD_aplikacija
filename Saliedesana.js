@@ -642,10 +642,11 @@
 
   function ensureIdejuChatModalStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-ideju-chat-style-v2")) return;
+    if (document.getElementById("pdd-ideju-chat-style-v3")) return;
+    document.getElementById("pdd-ideju-chat-style-v2")?.remove();
     document.getElementById("pdd-ideju-chat-style")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-ideju-chat-style-v2";
+    s.id = "pdd-ideju-chat-style-v3";
     s.textContent = `
       .pdd-ideju-modal-bg { position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:1rem; }
       .pdd-ideju-modal { width:min(520px,100%); max-height:86vh; display:flex; flex-direction:column; border-radius:16px; overflow:hidden; box-shadow:0 18px 50px rgba(15,23,42,.28); }
@@ -679,6 +680,7 @@
       }
       .pdd-ideju-preview.theme-akt {
         border:1px solid rgba(14,116,144,.45); background:rgba(255,255,255,.78);
+        max-height:320px;
       }
       .pdd-ideju-preview.theme-sal {
         border:1px solid #fdba74; background:rgba(255,255,255,.88);
@@ -701,6 +703,9 @@
       .pdd-ideju-preview-meta { font-size:.66rem; color:#64748b; margin-bottom:.08rem; }
       .pdd-ideju-preview-body {
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;
+      }
+      .pdd-ideju-preview.theme-akt .pdd-ideju-preview-body {
+        white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
       }
       .pdd-ideju-preview-empty { margin:0; font-size:.74rem; color:#64748b; }
       .pdd-ideju-preview-open {
@@ -726,7 +731,8 @@
 
   function renderIdejuChatPreviewHtml(rows, theme) {
     const list = Array.isArray(rows) ? rows : [];
-    const last = list.slice(-3).reverse();
+    const take = theme === "akt" ? 8 : 3;
+    const last = list.slice(-take).reverse();
     const head = `<div class="pdd-ideju-preview-head"><span>Pēdējās čata ziņas</span></div>`;
     if (!last.length) {
       return `${head}<p class="pdd-ideju-preview-empty">Vēl nav ziņu — nospied pogu, lai rakstītu.</p>`;

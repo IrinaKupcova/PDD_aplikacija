@@ -1623,10 +1623,41 @@ function editAktualitate(id) {
 }
 
 function ensureSodienAktStyleOnce() {
-  if (typeof document === "undefined" || document.getElementById("pdd-sodien-akt-style")) return;
+  if (typeof document === "undefined") return;
+  if (document.getElementById("pdd-sodien-akt-style-v2")) return;
+  document.getElementById("pdd-sodien-akt-style")?.remove();
   const s = document.createElement("style");
-  s.id = "pdd-sodien-akt-style";
+  s.id = "pdd-sodien-akt-style-v2";
   s.textContent = `
+    .sodien-away-chat-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+      gap: 0.85rem;
+      align-items: start;
+      margin-bottom: 0.9rem;
+    }
+    .sodien-away-chat-side {
+      display: grid;
+      gap: 0.45rem;
+      align-content: start;
+      min-width: 0;
+    }
+    .sodien-away-chat-side .btn {
+      width: 100%;
+      box-sizing: border-box;
+      white-space: normal;
+      line-height: 1.25;
+      text-align: center;
+    }
+    .sodien-away-chat-side .pdd-ideju-preview {
+      margin-top: 0;
+      max-height: 320px;
+    }
+    @media (max-width: 820px) {
+      .sodien-away-chat-row {
+        grid-template-columns: 1fr;
+      }
+    }
     #sodien-aktualitates-panel .sodien-akt-html {
       overflow-wrap: anywhere;
       word-break: break-word;
@@ -1844,80 +1875,83 @@ function renderTodayInfo({
     >
       <h3 style=${{ margin: "0 0 0.75rem", fontSize: "1rem", color: "#075985" }}>AKTUALITĀTES</h3>
 
-      <div style=${{ margin: "0 0 0.85rem", maxWidth: "min(420px, 100%)" }}>
-        <button
-          type="button"
-          class="btn btn-primary"
-          style=${{
-            fontWeight: 800,
-            fontSize: "0.92rem",
-            padding: "0.55rem 1rem",
-            borderRadius: "999px",
-            border: "0",
-            background: "linear-gradient(135deg,#0284c7,#0ea5e9 55%,#38bdf8)",
-            boxShadow: "0 8px 22px rgba(14,165,233,.38), 0 0 0 3px rgba(56,189,248,.35)",
-            color: "#fff",
-          }}
-          onClick=${() => {
-            const open = globalThis.PDD_IDEJU_CHAT?.open;
-            if (typeof open === "function") open({ source: "aktualitates", theme: "akt" });
-            else alert("Ideju čats vēl nav ielādējies. Pārlādē lapu (Ctrl+F5).");
-          }}
-        >
-          💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
-        </button>
-        <div id="sodien-ideju-chat-preview"></div>
-      </div>
-
       ${syncError
         ? html`<div class="banner-warn" role="alert" style=${{ marginBottom: "0.75rem", fontSize: "0.88rem" }}>Aktualitāšu sinhronizācija: ${String(syncError)}</div>`
         : null}
 
-      <div style=${{ fontWeight: 700, borderBottom: "1px solid rgba(14,116,144,0.35)", paddingBottom: "0.35rem", marginBottom: "0.55rem" }}>
-        Šodien nav darbā
+      <div class="sodien-away-chat-row">
+        <div style=${{ minWidth: 0 }}>
+          <div style=${{ fontWeight: 700, borderBottom: "1px solid rgba(14,116,144,0.35)", paddingBottom: "0.35rem", marginBottom: "0.55rem" }}>
+            Šodien nav darbā
+          </div>
+          ${awayRows.length
+            ? html`
+                <div class="stack" style=${{ gap: "0.5rem", marginBottom: 0 }}>
+                  ${awayRows.map(
+                    (a, i) => html`
+                      <button
+                        type="button"
+                        key=${`today-away-${a.id ?? i}`}
+                        title="Atvērt pilnu ierakstu sadaļā Vēsture → Prombūtnes vēsture"
+                        style=${{
+                          display: "block",
+                          width: "100%",
+                          boxSizing: "border-box",
+                          textAlign: "left",
+                          font: "inherit",
+                          color: "inherit",
+                          cursor: "pointer",
+                          border: "1px solid rgba(14,116,144,0.4)",
+                          borderRadius: "10px",
+                          padding: "0.55rem 0.65rem",
+                          background: "rgba(255,255,255,0.72)",
+                        }}
+                        onClick=${() => navigateToPrombutnesVestureDetail(a.id)}
+                      >
+                        <div style=${{ fontWeight: 600 }}>
+                          ${displayName(a)} <span style=${{ color: "var(--muted)", fontWeight: 400 }}>(${typeName(a)})</span>
+                        </div>
+                        <div style=${{ fontSize: "0.88rem", color: "var(--muted)", marginTop: "0.2rem" }}>
+                          Mani aizvieto: ${pick(a?.Mani_aizvieto) || "—"}
+                        </div>
+                        <div style=${{ fontSize: "0.88rem", color: "var(--muted)" }}>
+                          Papildu informācija: ${pick(a?.Papildu_info) || "—"}
+                        </div>
+                        ${timeInterval(a)
+                          ? html`<div style=${{ fontSize: "0.88rem", color: "var(--muted)" }}>Laiks: ${timeInterval(a)}</div>`
+                          : null}
+                      </button>
+                    `
+                  )}
+                </div>
+              `
+            : html`<p style=${{ margin: 0, color: "var(--muted)" }}>Šodien nav neviena prombūtnes ieraksta.</p>`}
+        </div>
+        <div class="sodien-away-chat-side">
+          <button
+            type="button"
+            class="btn btn-primary"
+            style=${{
+              fontWeight: 800,
+              fontSize: "0.86rem",
+              padding: "0.55rem 0.85rem",
+              borderRadius: "999px",
+              border: "0",
+              background: "linear-gradient(135deg,#0284c7,#0ea5e9 55%,#38bdf8)",
+              boxShadow: "0 8px 22px rgba(14,165,233,.38), 0 0 0 3px rgba(56,189,248,.35)",
+              color: "#fff",
+            }}
+            onClick=${() => {
+              const open = globalThis.PDD_IDEJU_CHAT?.open;
+              if (typeof open === "function") open({ source: "aktualitates", theme: "akt" });
+              else alert("Ideju čats vēl nav ielādējies. Pārlādē lapu (Ctrl+F5).");
+            }}
+          >
+            💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
+          </button>
+          <div id="sodien-ideju-chat-preview"></div>
+        </div>
       </div>
-      ${awayRows.length
-        ? html`
-            <div class="stack" style=${{ gap: "0.5rem", marginBottom: "0.9rem" }}>
-              ${awayRows.map(
-                (a, i) => html`
-                  <button
-                    type="button"
-                    key=${`today-away-${a.id ?? i}`}
-                    title="Atvērt pilnu ierakstu sadaļā Vēsture → Prombūtnes vēsture"
-                    style=${{
-                      display: "block",
-                      width: "100%",
-                      boxSizing: "border-box",
-                      textAlign: "left",
-                      font: "inherit",
-                      color: "inherit",
-                      cursor: "pointer",
-                      border: "1px solid rgba(14,116,144,0.4)",
-                      borderRadius: "10px",
-                      padding: "0.55rem 0.65rem",
-                      background: "rgba(255,255,255,0.72)",
-                    }}
-                    onClick=${() => navigateToPrombutnesVestureDetail(a.id)}
-                  >
-                    <div style=${{ fontWeight: 600 }}>
-                      ${displayName(a)} <span style=${{ color: "var(--muted)", fontWeight: 400 }}>(${typeName(a)})</span>
-                    </div>
-                    <div style=${{ fontSize: "0.88rem", color: "var(--muted)", marginTop: "0.2rem" }}>
-                      Mani aizvieto: ${pick(a?.Mani_aizvieto) || "—"}
-                    </div>
-                    <div style=${{ fontSize: "0.88rem", color: "var(--muted)" }}>
-                      Papildu informācija: ${pick(a?.Papildu_info) || "—"}
-                    </div>
-                    ${timeInterval(a)
-                      ? html`<div style=${{ fontSize: "0.88rem", color: "var(--muted)" }}>Laiks: ${timeInterval(a)}</div>`
-                      : null}
-                  </button>
-                `
-              )}
-            </div>
-          `
-        : html`<p style=${{ margin: "0 0 0.9rem", color: "var(--muted)" }}>Šodien nav neviena prombūtnes ieraksta.</p>`}
 
       <div style=${{ fontWeight: 700, borderBottom: "1px solid rgba(14,116,144,0.35)", paddingBottom: "0.35rem", marginBottom: "0.55rem" }}>
         Kas šobrīd vēl aktuāls
