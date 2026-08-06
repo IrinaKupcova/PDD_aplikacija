@@ -306,29 +306,57 @@
       .maybeSingle();
     if (error) {
       console.warn(`[Procesu vadība] DB lasīšana (${table})`, error);
-      return null;
+      return { ok: false, error, data: null };
     }
-    return data;
+    return { ok: true, error: null, data };
+  }
+
+  /**
+   * @returns {{ ok: boolean, missing?: boolean, state?: object|null, error?: any }}
+   */
+  async function fetchRemoteStateResult(sb) {
+    if (!REMOTE_SYNC_ENABLED || !sb) return { ok: false, missing: true, state: null };
+    await ensureDbSession(sb);
+    const primary = await readRemoteRow(sb, REMOTE_TABLE);
+    if (!primary.ok) return { ok: false, error: primary.error, state: null };
+    let data = primary.data;
+    if (!data?.state || typeof data.state !== "object") {
+      const legacy = await readRemoteRow(sb, REMOTE_TABLE_LEGACY);
+      if (!legacy.ok) return { ok: false, error: legacy.error, state: null };
+      if (legacy.data?.state && typeof legacy.data.state === "object") data = legacy.data;
+      else return { ok: true, missing: true, state: null };
+    }
+    return {
+      ok: true,
+      missing: false,
+      state: migrateState({
+        ...data.state,
+        updatedAt: data.updated_at || data.state.updatedAt,
+        updatedBy: data.updated_by || data.state.updatedBy,
+      }),
+    };
   }
 
   async function fetchRemoteState(sb) {
-    if (!REMOTE_SYNC_ENABLED || !sb) return null;
-    await ensureDbSession(sb);
-    let data = await readRemoteRow(sb, REMOTE_TABLE);
-    if (!data?.state || typeof data.state !== "object") {
-      const legacy = await readRemoteRow(sb, REMOTE_TABLE_LEGACY);
-      if (legacy?.state && typeof legacy.state === "object") data = legacy;
-      else return null;
-    }
-    return migrateState({
-      ...data.state,
-      updatedAt: data.updated_at || data.state.updatedAt,
-      updatedBy: data.updated_by || data.state.updatedBy,
-    });
+    const r = await fetchRemoteStateResult(sb);
+    return r.ok ? r.state : null;
+  }
+
+  function shouldPreferRemoteOverLocal(remote, local) {
+    if (!remote) return false;
+    if (!local) return true;
+    const rs = stateContentScore(remote);
+    const ls = stateContentScore(local);
+    if (rs < ls) return false;
+    if (rs > ls) return true;
+    return stateTimestamp(remote) > stateTimestamp(local);
   }
 
   async function saveRemoteState(sb, state) {
     if (!REMOTE_SYNC_ENABLED || !sb || !state) return { ok: false, reason: "no_data" };
+    if (stateContentScore(state) <= stateContentScore(defaultState())) {
+      return { ok: false, reason: "empty_guard" };
+    }
     await ensureDbSession(sb);
     const updatedAt = new Date().toISOString();
     const email = actorEmailForSync();
@@ -3198,14 +3226,43 @@ ${body}
           }
           try {
             const local = loadState();
+            const backup = loadLocalBackupState();
             if (local && stateContentScore(local) > stateContentScore(defaultState())) {
               backupLocalState(local);
             }
-            let remote = await fetchRemoteState(sb);
+            const remoteRes = await fetchRemoteStateResult(sb);
+            if (!remoteRes.ok) {
+              const keep = pickTeamState(local, backup) || local || backup;
+              if (keep && !cancelled && !hydratedRef.current) {
+                hydratedRef.current = true;
+                setState(keep);
+                saveState(keep);
+                stateRef.current = keep;
+              }
+              if (!cancelled) {
+                setSyncStatus("error");
+                setSyncError(
+                  remoteRes.error?.message ||
+                    "Neizdevās nolasīt Supabase — rādām lokālos datus, neko nepārrakstām.",
+                );
+              }
+              remoteReadyRef.current = true;
+              return;
+            }
+            let remote = remoteRes.state;
             if (!remote) {
-              const boot = await saveRemoteState(sb, local);
+              const bootSrc = pickTeamState(local, backup) || local || backup;
+              if (!bootSrc || stateContentScore(bootSrc) <= stateContentScore(defaultState())) {
+                if (!cancelled) {
+                  setSyncStatus("synced");
+                  setSyncError("");
+                }
+                remoteReadyRef.current = true;
+                return;
+              }
+              const boot = await saveRemoteState(sb, bootSrc);
               if (boot?.ok) {
-                remote = { ...local, updatedAt: boot.updatedAt };
+                remote = { ...bootSrc, updatedAt: boot.updatedAt };
               } else {
                 console.warn(
                   "[Procesu vadība] Neizdevās saglabāt Supabase — pārbaudi, vai tabula Procesu_vadibas_modulis eksistē.",
@@ -3222,7 +3279,6 @@ ${body}
                 return;
               }
             } else {
-              const backup = loadLocalBackupState();
               const candidates = [local, backup].filter(Boolean);
               let best = remote;
               for (const cand of candidates) {
@@ -3330,7 +3386,7 @@ ${body}
               const remote = await fetchRemoteState(sb);
               if (!remote) return;
               const local = stateRef.current;
-              if (stateTimestamp(remote) > stateTimestamp(local)) {
+              if (shouldPreferRemoteOverLocal(remote, local)) {
                 setState(remote);
                 saveState(remote);
                 stateRef.current = remote;
@@ -3370,7 +3426,7 @@ ${body}
                   if (saveTimerRef.current || savingRef.current) return;
                   const remote = await fetchRemoteState(sb);
                   if (!remote) return;
-                  if (stateTimestamp(remote) > stateTimestamp(stateRef.current)) {
+                  if (shouldPreferRemoteOverLocal(remote, stateRef.current)) {
                     setState(remote);
                     saveState(remote);
                     stateRef.current = remote;

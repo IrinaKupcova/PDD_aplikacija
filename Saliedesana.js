@@ -1489,11 +1489,15 @@
     const imgInput = root.querySelector("[data-ideju-img]");
     const attInput = root.querySelector("[data-ideju-att]");
     let pendingHtml = "";
-    let chatRows = [];
+    // Uzreiz lokālās ziņas — modālis nekad nesāk tukšs, kamēr remote sync vēl nav beidzies.
+    let chatRows = loadLocalIdejuChat();
     let chatReactions = loadLocalIdejuChatReactions();
-    let hasMoreOlder = false;
+    let hasMoreOlder = chatRows.length > IDEJU_CHAT_PAGE_SIZE;
     let loadingOlder = false;
-    let historyFullyLoaded = false;
+    let historyFullyLoaded = !hasMoreOlder;
+    if (chatRows.length > IDEJU_CHAT_PAGE_SIZE) {
+      chatRows = chatRows.slice(-IDEJU_CHAT_PAGE_SIZE);
+    }
 
     function repaintChat(opts = {}) {
       paintIdejuChatMessages(listEl, chatRows, {
@@ -1507,6 +1511,8 @@
       const olderBtn = listEl?.querySelector("[data-ideju-load-older]");
       if (olderBtn) olderBtn.onclick = () => void loadOlderIdejuChat();
     }
+    repaintChat({ stickBottom: true });
+    if (statusEl) statusEl.textContent = chatRows.length ? "Lokālā keša…" : "Ielādē…";
 
     async function syncChatReactions(messageIds) {
       const local = loadLocalIdejuChatReactions();
@@ -1569,14 +1575,25 @@
       const local = loadLocalIdejuChat();
       let remote = null;
       try {
-        if (sb) remote = await fetchIdejuChatRemote(sb, { limit: IDEJU_CHAT_SYNC_LIMIT });
+        if (sb) {
+          try {
+            const ensure = globalThis.__PDD_ENSURE_DB_SESSION__;
+            if (typeof ensure === "function") await ensure();
+          } catch {
+            /* continue with local */
+          }
+          remote = await fetchIdejuChatRemote(sb, { limit: IDEJU_CHAT_SYNC_LIMIT });
+        }
       } catch (e) {
         console.warn("[Čats.sync]", e?.message || e);
         remote = null;
       }
       const nearBottom = opts.forceBottom || idejuChatNearBottom(listEl);
-      const all = remote ? mergeIdejuChatLists(local, remote) : local.slice();
-      // Saglabājam pilnu merge — nepārrakstām vēsturi ar vienu lapu.
+      // Tukšu remote (kļūda/RLS) nepārraksta lokālo vēsturi.
+      const all =
+        remote && (remote.length > 0 || local.length === 0)
+          ? mergeIdejuChatLists(local, remote)
+          : local.slice();
       persistIdejuChatMerge(all, { silent: true });
 
       if (opts.initial) {
@@ -1603,7 +1620,14 @@
           hasMoreOlder = all.length > IDEJU_CHAT_PAGE_SIZE;
         }
       }
-      await syncChatReactions(chatRows.map((m) => m.id));
+      // Reakcijas nedrīkst bloķēt ziņu rādīšanu.
+      repaintChat({ stickBottom: nearBottom });
+      try {
+        await syncChatReactions(chatRows.map((m) => m.id));
+        repaintChat({ stickBottom: nearBottom, preserveScroll: !nearBottom });
+      } catch (e) {
+        console.warn("[Čats.reactions.sync]", e?.message || e);
+      }
       if (statusEl) {
         statusEl.textContent = remote
           ? "Sinhronizēts ar Supabase"
@@ -1611,7 +1635,6 @@
             ? "Lokāli (tabula vēl nav pieejama — palaid PIEMEROT_SALIEDESANA_INFO_UN_IDEJU_CHAT.sql)"
             : "Tikai lokāli";
       }
-      repaintChat({ stickBottom: nearBottom });
       return chatRows;
     }
 
