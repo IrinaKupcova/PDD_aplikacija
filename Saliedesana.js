@@ -134,7 +134,10 @@
       .sal-head { border:1px solid #f59e0b; background:linear-gradient(180deg,#fff7ed,#ffedd5); border-radius:14px; padding:.9rem 1rem; }
       .sal-head h2 { margin:0; font-size:1.08rem; color:#9a3412; }
       .sal-head p { margin:.3rem 0 0; font-size:.82rem; color:#b45309; }
-      .sal-head-actions { margin-top:.65rem; display:flex; flex-wrap:wrap; gap:.45rem; align-items:center; }
+      .sal-head-actions {
+        margin-top:.65rem; display:flex; flex-direction:column; align-items:stretch;
+        gap:.45rem; max-width:min(420px,100%);
+      }
       .sal-idea-btn {
         border:0; cursor:pointer; font-weight:800; font-size:.92rem; letter-spacing:.01em;
         padding:.55rem 1rem; border-radius:999px; color:#fff;
@@ -485,12 +488,76 @@
     }
   }
 
-  function saveLocalIdejuChat(rows) {
+  function saveLocalIdejuChat(rows, options = {}) {
     try {
       localStorage.setItem(LS_IDEJU_CHAT_KEY, JSON.stringify(Array.isArray(rows) ? rows : []));
     } catch {
       /* ignore */
     }
+    if (options.silent) return;
+    try {
+      window.dispatchEvent(new CustomEvent("pdd:ideju-chat-changed"));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const IDEJU_CHAT_SEEN_KEY = "pdd_ideju_chat_seen_v1";
+
+  function idejuChatSeenActorKey() {
+    return actorKey();
+  }
+
+  function latestIdejuChatStamp(rows) {
+    const list = Array.isArray(rows) ? rows : loadLocalIdejuChat();
+    let max = "";
+    for (const r of list) {
+      const s = String(r?.created_at || r?.id || "").trim();
+      if (s && s > max) max = s;
+    }
+    return max;
+  }
+
+  function readIdejuChatSeenMap() {
+    try {
+      const raw = localStorage.getItem(IDEJU_CHAT_SEEN_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function getIdejuChatSeenStamp() {
+    const map = readIdejuChatSeenMap();
+    return String(map[idejuChatSeenActorKey()] || "").trim();
+  }
+
+  function markIdejuChatSeen(rows) {
+    const stamp = latestIdejuChatStamp(rows);
+    if (!stamp) return;
+    try {
+      const map = readIdejuChatSeenMap();
+      map[idejuChatSeenActorKey()] = stamp;
+      localStorage.setItem(IDEJU_CHAT_SEEN_KEY, JSON.stringify(map));
+    } catch {
+      /* ignore */
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("pdd:ideju-chat-seen"));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function hasUnreadIdejuChat(rows) {
+    const list = Array.isArray(rows) ? rows : loadLocalIdejuChat();
+    const latest = latestIdejuChatStamp(list);
+    if (!latest) return false;
+    const seen = getIdejuChatSeenStamp();
+    if (!seen) return list.length > 0;
+    return latest > seen;
   }
 
   function normalizeIdejuChatRow(row) {
@@ -553,9 +620,10 @@
 
   function ensureIdejuChatModalStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-ideju-chat-style")) return;
+    if (document.getElementById("pdd-ideju-chat-style-v2")) return;
+    document.getElementById("pdd-ideju-chat-style")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-ideju-chat-style";
+    s.id = "pdd-ideju-chat-style-v2";
     s.textContent = `
       .pdd-ideju-modal-bg { position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:1rem; }
       .pdd-ideju-modal { width:min(520px,100%); max-height:86vh; display:flex; flex-direction:column; border-radius:16px; overflow:hidden; box-shadow:0 18px 50px rgba(15,23,42,.28); }
@@ -583,8 +651,127 @@
       .pdd-ideju-form button { align-self:flex-end; }
       .pdd-ideju-empty { margin:auto; font-size:.82rem; color:#64748b; text-align:center; padding:1rem; }
       .pdd-ideju-status { font-size:.72rem; padding:0 .8rem .35rem; color:#64748b; }
+      .pdd-ideju-preview {
+        margin-top:.55rem; border-radius:12px; padding:.5rem .55rem; display:grid; gap:.35rem;
+        max-height:148px; overflow:auto; box-sizing:border-box;
+      }
+      .pdd-ideju-preview.theme-akt {
+        border:1px solid rgba(14,116,144,.45); background:rgba(255,255,255,.78);
+      }
+      .pdd-ideju-preview.theme-sal {
+        border:1px solid #fdba74; background:rgba(255,255,255,.88);
+      }
+      .pdd-ideju-preview-head {
+        display:flex; align-items:center; justify-content:space-between; gap:.4rem;
+        font-size:.72rem; font-weight:700;
+      }
+      .pdd-ideju-preview.theme-akt .pdd-ideju-preview-head { color:#075985; }
+      .pdd-ideju-preview.theme-sal .pdd-ideju-preview-head { color:#9a3412; }
+      .pdd-ideju-preview-new {
+        display:inline-flex; align-items:center; padding:.05rem .32rem; border-radius:999px;
+        background:#dc2626; color:#fff; font-size:.62rem; font-weight:800; letter-spacing:.02em;
+      }
+      .pdd-ideju-preview-item {
+        border-radius:8px; padding:.3rem .4rem; font-size:.76rem; line-height:1.3;
+      }
+      .pdd-ideju-preview.theme-akt .pdd-ideju-preview-item {
+        border:1px solid #bae6fd; background:#f0f9ff; color:#0f172a;
+      }
+      .pdd-ideju-preview.theme-sal .pdd-ideju-preview-item {
+        border:1px solid #fed7aa; background:#fff7ed; color:#0f172a;
+      }
+      .pdd-ideju-preview-meta { font-size:.66rem; color:#64748b; margin-bottom:.08rem; }
+      .pdd-ideju-preview-body {
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;
+      }
+      .pdd-ideju-preview-empty { margin:0; font-size:.74rem; color:#64748b; }
+      .pdd-ideju-preview-open {
+        border:0; background:transparent; cursor:pointer; padding:0; font:inherit;
+        font-size:.72rem; font-weight:700; text-align:left; color:inherit; text-decoration:underline;
+      }
     `;
     document.head.appendChild(s);
+  }
+
+  const idejuPreviewTimers = new WeakMap();
+
+  async function loadIdejuChatRowsForPreview() {
+    const local = loadLocalIdejuChat();
+    const sb = globalThis.__PDD_SUPABASE__ ?? null;
+    if (!sb) return local;
+    const remote = await fetchIdejuChatRemote(sb);
+    if (!remote) return local;
+    const merged = mergeIdejuChatLists(local, remote);
+    saveLocalIdejuChat(merged, { silent: true });
+    return merged;
+  }
+
+  function renderIdejuChatPreviewHtml(rows, theme) {
+    const list = Array.isArray(rows) ? rows : [];
+    const last = list.slice(-3).reverse();
+    const unread = hasUnreadIdejuChat(list);
+    const head =
+      `<div class="pdd-ideju-preview-head">` +
+      `<span>Pēdējās čata ziņas</span>` +
+      (unread ? `<span class="pdd-ideju-preview-new">NEW</span>` : ``) +
+      `</div>`;
+    if (!last.length) {
+      return `${head}<p class="pdd-ideju-preview-empty">Vēl nav ziņu — nospied pogu, lai rakstītu.</p>`;
+    }
+    const items = last
+      .map((m) => {
+        const who = escapeHtmlLite(m.actor_name || m.actor_key || "Lietotājs");
+        const when = escapeHtmlLite(formatSalInfoWhen(m.created_at));
+        const body = escapeHtmlLite(String(m.body || "").replace(/\s+/g, " ").trim());
+        return `<div class="pdd-ideju-preview-item"><div class="pdd-ideju-preview-meta">${who} · ${when}</div><div class="pdd-ideju-preview-body">${body}</div></div>`;
+      })
+      .join("");
+    return `${head}${items}<button type="button" class="pdd-ideju-preview-open" data-ideju-preview-open>Atvērt visu čatu →</button>`;
+  }
+
+  function mountIdejuChatPreview(hostEl, options = {}) {
+    if (!hostEl || typeof document === "undefined") return () => {};
+    ensureIdejuChatModalStyles();
+    const theme = options.theme === "sal" ? "sal" : "akt";
+    const source = options.source === "saliedesana" ? "saliedesana" : "aktualitates";
+    hostEl.className = `pdd-ideju-preview theme-${theme}`;
+    hostEl.setAttribute("aria-label", "Čata priekšskatījums");
+
+    let cancelled = false;
+    async function refresh() {
+      if (cancelled || !hostEl.isConnected) return;
+      const rows = await loadIdejuChatRowsForPreview();
+      if (cancelled || !hostEl.isConnected) return;
+      hostEl.innerHTML = renderIdejuChatPreviewHtml(rows, theme);
+      const openBtn = hostEl.querySelector("[data-ideju-preview-open]");
+      if (openBtn) {
+        openBtn.onclick = () => openIdejuChatModal({ source, theme });
+      }
+      hostEl.onclick = (e) => {
+        if (e.target.closest("[data-ideju-preview-open]")) return;
+        if (e.target.closest(".pdd-ideju-preview-item") || e.target === hostEl) {
+          openIdejuChatModal({ source, theme });
+        }
+      };
+    }
+
+    void refresh();
+    const onCh = () => void refresh();
+    window.addEventListener("pdd:ideju-chat-changed", onCh);
+    window.addEventListener("pdd:ideju-chat-seen", onCh);
+    const poll = setInterval(() => void refresh(), 8000);
+    idejuPreviewTimers.set(hostEl, { poll, onCh });
+
+    return function unmount() {
+      cancelled = true;
+      const t = idejuPreviewTimers.get(hostEl);
+      if (t) {
+        clearInterval(t.poll);
+        window.removeEventListener("pdd:ideju-chat-changed", t.onCh);
+        window.removeEventListener("pdd:ideju-chat-seen", t.onCh);
+        idejuPreviewTimers.delete(hostEl);
+      }
+    };
   }
 
   let idejuChatPollTimer = null;
@@ -656,6 +843,7 @@
     closeIdejuChatModal();
     const source = options.source === "aktualitates" ? "aktualitates" : "saliedesana";
     const theme = options.theme === "akt" || source === "aktualitates" ? "akt" : "sal";
+    markIdejuChatSeen();
     const root = document.createElement("div");
     root.id = "pdd-ideju-chat-modal-root";
     root.className = "pdd-ideju-modal-bg";
@@ -713,9 +901,13 @@
         }
       }
     });
-    void refreshIdejuChatModalList(listEl, statusEl);
+    void refreshIdejuChatModalList(listEl, statusEl).then(() => {
+      markIdejuChatSeen(loadLocalIdejuChat());
+    });
     idejuChatPollTimer = setInterval(() => {
-      void refreshIdejuChatModalList(listEl, statusEl);
+      void refreshIdejuChatModalList(listEl, statusEl).then(() => {
+        markIdejuChatSeen(loadLocalIdejuChat());
+      });
     }, 6000);
     const sb = globalThis.__PDD_SUPABASE__ ?? null;
     if (sb) {
@@ -1704,6 +1896,7 @@
       const celProgramEditorRef = useRef(null);
       /** Vienmēr norāda uz jaunāko `openEventCardByRef`, lai globālais tiltiņš ne „pazustu” starp `events` atjauninājumiem. */
       const openEventCardByRefRef = useRef(null);
+      const idejuPreviewRef = useRef(null);
       const supabase = globalThis.__PDD_SUPABASE__ ?? null;
       const [dbMessage, setDbMessage] = useState("");
       const [events, setEvents] = useState([]);
@@ -1809,6 +2002,12 @@
           cancelled = true;
         };
       }, [supabase]);
+
+      useEffect(() => {
+        const el = idejuPreviewRef.current;
+        if (!el) return undefined;
+        return mountIdejuChatPreview(el, { theme: "sal", source: "saliedesana" });
+      }, []);
 
       async function saveSalInfoPost(e) {
         e?.preventDefault?.();
@@ -3312,6 +3511,7 @@
               >
                 💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
               </button>
+              <div ref=${idejuPreviewRef}></div>
             </div>
           </div>
 
@@ -4420,5 +4620,6 @@
   window.PDD_IDEJU_CHAT = {
     open: openIdejuChatModal,
     close: closeIdejuChatModal,
+    mountPreview: mountIdejuChatPreview,
   };
 })();

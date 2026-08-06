@@ -683,6 +683,31 @@ function scheduleHydrateEngagePanels() {
   sodienEngageHydrateTimer = setTimeout(() => hydrateEngagePanels(), 30);
 }
 
+let sodienIdejuPreviewUnmount = null;
+let sodienIdejuPreviewTimer = null;
+
+function hydrateIdejuChatPreview() {
+  const host = document.getElementById("sodien-ideju-chat-preview");
+  if (typeof sodienIdejuPreviewUnmount === "function") {
+    try {
+      sodienIdejuPreviewUnmount();
+    } catch {
+      /* ignore */
+    }
+    sodienIdejuPreviewUnmount = null;
+  }
+  if (!host) return;
+  const mount = globalThis.PDD_IDEJU_CHAT?.mountPreview;
+  if (typeof mount === "function") {
+    sodienIdejuPreviewUnmount = mount(host, { theme: "akt", source: "aktualitates" });
+  }
+}
+
+function scheduleHydrateIdejuChatPreview() {
+  clearTimeout(sodienIdejuPreviewTimer);
+  sodienIdejuPreviewTimer = setTimeout(() => hydrateIdejuChatPreview(), 40);
+}
+
 let sodienUiOpts = {
   useSupabase: false,
   refreshAktualitates: null,
@@ -1819,7 +1844,7 @@ function renderTodayInfo({
     >
       <h3 style=${{ margin: "0 0 0.75rem", fontSize: "1rem", color: "#075985" }}>AKTUALITĀTES</h3>
 
-      <div style=${{ margin: "0 0 0.85rem" }}>
+      <div style=${{ margin: "0 0 0.85rem", maxWidth: "min(420px, 100%)" }}>
         <button
           type="button"
           class="btn btn-primary"
@@ -1841,6 +1866,7 @@ function renderTodayInfo({
         >
           💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
         </button>
+        <div id="sodien-ideju-chat-preview"></div>
       </div>
 
       ${syncError
@@ -2086,6 +2112,7 @@ function renderTodayInfo({
     </section>
   `;
   scheduleHydrateEngagePanels();
+  scheduleHydrateIdejuChatPreview();
   return out;
 }
 
