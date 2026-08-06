@@ -128,31 +128,16 @@
 
   function ensureStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-saliedesana-style-v4")) return;
+    if (document.getElementById("pdd-saliedesana-style-v5")) return;
+    document.getElementById("pdd-saliedesana-style-v4")?.remove();
     document.getElementById("pdd-saliedesana-style-v3")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-saliedesana-style-v4";
+    s.id = "pdd-saliedesana-style-v5";
     s.textContent = `
       .sal-wrap { display:grid; gap:1rem; }
       .sal-head { border:1px solid #f59e0b; background:linear-gradient(180deg,#fff7ed,#ffedd5); border-radius:14px; padding:.9rem 1rem; }
       .sal-head h2 { margin:0; font-size:1.08rem; color:#9a3412; }
       .sal-head p { margin:.3rem 0 0; font-size:.82rem; color:#b45309; }
-      .sal-head-actions {
-        margin-top:.65rem; display:flex; flex-direction:column; align-items:stretch;
-        gap:.45rem; max-width:min(420px,100%);
-      }
-      .sal-idea-btn {
-        border:0; cursor:pointer; font-weight:800; font-size:.92rem; letter-spacing:.01em;
-        padding:.55rem 1rem; border-radius:999px; color:#fff;
-        background:linear-gradient(135deg,#ea580c,#f59e0b 55%,#fb923c);
-        box-shadow:0 8px 22px rgba(234,88,12,.38), 0 0 0 3px rgba(251,146,60,.35);
-        animation: sal-idea-pulse 1.8s ease-in-out infinite;
-      }
-      .sal-idea-btn:hover { filter:brightness(1.05); transform:translateY(-1px); }
-      @keyframes sal-idea-pulse {
-        0%, 100% { box-shadow:0 8px 22px rgba(234,88,12,.38), 0 0 0 3px rgba(251,146,60,.28); }
-        50% { box-shadow:0 10px 28px rgba(234,88,12,.5), 0 0 0 6px rgba(251,146,60,.18); }
-      }
       .sal-info-panel {
         border:1px solid #fb923c; border-radius:14px; padding:.85rem .9rem;
         background:linear-gradient(180deg,#fffbeb,#fff7ed); display:grid; gap:.65rem;
@@ -1915,7 +1900,6 @@
       const celProgramEditorRef = useRef(null);
       /** Vienmēr norāda uz jaunāko `openEventCardByRef`, lai globālais tiltiņš ne „pazustu” starp `events` atjauninājumiem. */
       const openEventCardByRefRef = useRef(null);
-      const idejuPreviewRef = useRef(null);
       const salInfoEditorRef = useRef(null);
       const salInfoSelectedImgRef = useRef(null);
       const salInfoSelectedAttRef = useRef(null);
@@ -2024,12 +2008,6 @@
           cancelled = true;
         };
       }, [supabase]);
-
-      useEffect(() => {
-        const el = idejuPreviewRef.current;
-        if (!el) return undefined;
-        return mountIdejuChatPreview(el, { theme: "sal", source: "saliedesana" });
-      }, []);
 
       function clearSalInfoForm() {
         setSalInfoEditingId("");
@@ -3814,16 +3792,6 @@
           <div class="sal-head">
             <h2>Saliedēšanas pasākumi, svētku dienas u.c.</h2>
             <p>Jautri, atraktīvi un pārskatāmi pasākumi vienuviet! ✨</p>
-            <div class="sal-head-actions">
-              <button
-                type="button"
-                class="sal-idea-btn"
-                onClick=${() => openIdejuChatModal({ source: "saliedesana", theme: "sal" })}
-              >
-                💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
-              </button>
-              <div ref=${idejuPreviewRef}></div>
-            </div>
           </div>
 
           ${dbMessage ? html`<div class="sal-banner">${dbMessage}</div>` : null}
