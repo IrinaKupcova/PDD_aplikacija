@@ -6,10 +6,11 @@
 (function () {
   function ensureNavigacijaExtraStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-navigacija-extra-style-v5")) return;
+    if (document.getElementById("pdd-navigacija-extra-style-v6")) return;
+    document.getElementById("pdd-navigacija-extra-style-v5")?.remove();
     document.getElementById("pdd-navigacija-extra-style-v4")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-navigacija-extra-style-v5";
+    s.id = "pdd-navigacija-extra-style-v6";
     s.textContent = `
       .app-nav-top-row {
         display: flex;
@@ -21,41 +22,50 @@
       .app-nav-top-row .app-nav-title {
         margin: 0;
       }
-      .pdd-nav-ideju-chat {
+      .app-nav .pdd-nav-ideju-chat {
         display: grid;
-        grid-template-columns: minmax(200px, 340px) minmax(0, 1fr);
-        gap: 0.65rem;
+        grid-template-columns: 1fr;
+        gap: 0.45rem;
         align-items: start;
-        margin: 0 0 1rem;
-        padding: 0.65rem 0.75rem;
-        border-radius: 14px;
+        margin: 0.65rem 0 0;
+        padding: 0.5rem;
+        border-radius: 12px;
         border: 1px solid rgba(14,116,144,0.45);
         background: linear-gradient(180deg, rgba(56,189,248,0.16), rgba(14,116,144,0.08));
         box-sizing: border-box;
+        width: 100%;
       }
-      .pdd-nav-ideju-chat-btn {
+      .app-nav .pdd-nav-ideju-chat-btn {
         width: 100%;
         box-sizing: border-box;
         border: 0;
         cursor: pointer;
         font-weight: 800;
-        font-size: 0.86rem;
+        font-size: 0.74rem;
         line-height: 1.25;
         white-space: normal;
         text-align: center;
-        padding: 0.55rem 0.85rem;
+        padding: 0.45rem 0.5rem;
         border-radius: 999px;
         color: #fff;
         background: linear-gradient(135deg,#0284c7,#0ea5e9 55%,#38bdf8);
-        box-shadow: 0 8px 22px rgba(14,165,233,.38), 0 0 0 3px rgba(56,189,248,.35);
+        box-shadow: 0 6px 16px rgba(14,165,233,.32), 0 0 0 2px rgba(56,189,248,.28);
       }
-      .pdd-nav-ideju-chat .pdd-ideju-preview {
+      .app-nav .pdd-nav-ideju-chat .pdd-ideju-preview {
         margin-top: 0;
-        max-height: 220px;
+        max-height: 260px;
+        font-size: 0.72rem;
       }
-      @media (max-width: 820px) {
-        .pdd-nav-ideju-chat {
-          grid-template-columns: 1fr;
+      .app-nav .pdd-nav-ideju-chat .pdd-ideju-preview-body {
+        white-space: normal;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+      @media (max-width: 720px) {
+        .app-nav .pdd-nav-ideju-chat {
+          flex: 1 1 100%;
+          min-width: 100%;
         }
       }
       .app-nav .pdd-nav-pin-btn {
@@ -1060,24 +1070,24 @@
                     </section>
                   `
                 : null}
+              <div class="pdd-nav-ideju-chat" aria-label="Ideju čats">
+                <button
+                  type="button"
+                  class="pdd-nav-ideju-chat-btn"
+                  onClick=${() => {
+                    const open = globalThis.PDD_IDEJU_CHAT?.open;
+                    if (typeof open === "function") open({ source: "aktualitates", theme: "akt" });
+                    else alert("Ideju čats vēl nav ielādējies. Pārlādē lapu (Ctrl+F5).");
+                  }}
+                >
+                  💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
+                </button>
+                <div id="pdd-nav-ideju-chat-preview"></div>
+              </div>
             </div>
           </aside>
           <div class="app-main">
             ${header}
-            <div class="pdd-nav-ideju-chat" aria-label="Ideju čats">
-              <button
-                type="button"
-                class="pdd-nav-ideju-chat-btn"
-                onClick=${() => {
-                  const open = globalThis.PDD_IDEJU_CHAT?.open;
-                  if (typeof open === "function") open({ source: "aktualitates", theme: "akt" });
-                  else alert("Ideju čats vēl nav ielādējies. Pārlādē lapu (Ctrl+F5).");
-                }}
-              >
-                💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
-              </button>
-              <div id="pdd-nav-ideju-chat-preview"></div>
-            </div>
             ${children}
             ${Array.isArray(pinnedSections) && pinnedSections.length
               ? html`
