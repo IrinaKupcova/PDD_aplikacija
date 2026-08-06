@@ -6,11 +6,12 @@
 (function () {
   function ensureNavigacijaExtraStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-navigacija-extra-style-v6")) return;
+    if (document.getElementById("pdd-navigacija-extra-style-v7")) return;
+    document.getElementById("pdd-navigacija-extra-style-v6")?.remove();
     document.getElementById("pdd-navigacija-extra-style-v5")?.remove();
     document.getElementById("pdd-navigacija-extra-style-v4")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-navigacija-extra-style-v6";
+    s.id = "pdd-navigacija-extra-style-v7";
     s.textContent = `
       .app-nav-top-row {
         display: flex;
@@ -21,52 +22,6 @@
       }
       .app-nav-top-row .app-nav-title {
         margin: 0;
-      }
-      .app-nav .pdd-nav-ideju-chat {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 0.45rem;
-        align-items: start;
-        margin: 0.65rem 0 0;
-        padding: 0.5rem;
-        border-radius: 12px;
-        border: 1px solid rgba(14,116,144,0.45);
-        background: linear-gradient(180deg, rgba(56,189,248,0.16), rgba(14,116,144,0.08));
-        box-sizing: border-box;
-        width: 100%;
-      }
-      .app-nav .pdd-nav-ideju-chat-btn {
-        width: 100%;
-        box-sizing: border-box;
-        border: 0;
-        cursor: pointer;
-        font-weight: 800;
-        font-size: 0.74rem;
-        line-height: 1.25;
-        white-space: normal;
-        text-align: center;
-        padding: 0.45rem 0.5rem;
-        border-radius: 999px;
-        color: #fff;
-        background: linear-gradient(135deg,#0284c7,#0ea5e9 55%,#38bdf8);
-        box-shadow: 0 6px 16px rgba(14,165,233,.32), 0 0 0 2px rgba(56,189,248,.28);
-      }
-      .app-nav .pdd-nav-ideju-chat .pdd-ideju-preview {
-        margin-top: 0;
-        max-height: 260px;
-        font-size: 0.72rem;
-      }
-      .app-nav .pdd-nav-ideju-chat .pdd-ideju-preview-body {
-        white-space: normal;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-      }
-      @media (max-width: 720px) {
-        .app-nav .pdd-nav-ideju-chat {
-          flex: 1 1 100%;
-          min-width: 100%;
-        }
       }
       .app-nav .pdd-nav-pin-btn {
         border: 1px solid var(--border);
@@ -565,6 +520,7 @@
   }
 
   const SAL_NEWS_SEEN_KEY = "pdd_saliedesana_news_seen_v1";
+  const SAL_NEWS_INIT_KEY = "pdd_saliedesana_news_init_v1";
 
   function pddSaliedesanaNewsActorKey() {
     const id = String(globalThis.__PDD_ACTOR_USER_ID__ ?? sessionStorage.getItem("pdd_local_user_id") ?? "").trim();
@@ -599,6 +555,33 @@
     return Number.isNaN(ms) ? 0 : ms;
   }
 
+  function pddReadSaliedesanaNewsInitMap() {
+    try {
+      const raw = localStorage.getItem(SAL_NEWS_INIT_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function pddMarkSaliedesanaNewsInitialized(actorKey) {
+    const key = String(actorKey || pddSaliedesanaNewsActorKey());
+    try {
+      const map = pddReadSaliedesanaNewsInitMap();
+      map[key] = true;
+      localStorage.setItem(SAL_NEWS_INIT_KEY, JSON.stringify(map));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function pddIsSaliedesanaNewsInitialized(actorKey) {
+    const key = String(actorKey || pddSaliedesanaNewsActorKey());
+    return Boolean(pddReadSaliedesanaNewsInitMap()[key]);
+  }
+
   function pddSaliedesanaLatestNewsStamp() {
     let maxMs = 0;
     let maxStr = "";
@@ -614,14 +597,9 @@
       const events = pddSafeParseJson(localStorage.getItem("pdd_saliedesana_pasakumi_v2") || "[]", []);
       if (Array.isArray(events)) {
         for (const ev of events) {
+          // Tikai izveides/labošanas laiks — NE pasākuma kalendāra datums (tas bieži ir nākotnē un «noslāpē» NEW).
           bump(ev?.updatedAt || ev?.updated_at);
           bump(ev?.createdAt || ev?.created_at);
-          const d = String(ev?.date || "").trim();
-          const t = String(ev?.time || "00:00").trim() || "00:00";
-          if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-            const hhmm = t.length === 5 ? `${t}:00` : t;
-            bump(`${d}T${hhmm}`);
-          }
         }
       }
     } catch {
@@ -641,29 +619,6 @@
     return maxStr;
   }
 
-  function pddEnsureSaliedesanaNewsBaseline() {
-    const actorKey = pddSaliedesanaNewsActorKey();
-    const map = pddReadSaliedesanaNewsSeenMap();
-    const raw = String(map[actorKey] || "").trim();
-    if (raw && !pddNormalizeNewsStamp(raw)) {
-      delete map[actorKey];
-      try {
-        localStorage.setItem(SAL_NEWS_SEEN_KEY, JSON.stringify(map));
-      } catch {
-        /* ignore */
-      }
-    }
-    if (Object.prototype.hasOwnProperty.call(map, actorKey)) return;
-    const latest = pddSaliedesanaLatestNewsStamp();
-    if (!latest) return;
-    map[actorKey] = latest;
-    try {
-      localStorage.setItem(SAL_NEWS_SEEN_KEY, JSON.stringify(map));
-    } catch {
-      /* ignore */
-    }
-  }
-
   function pddReadSaliedesanaNewsSeenMap() {
     try {
       const raw = localStorage.getItem(SAL_NEWS_SEEN_KEY);
@@ -673,6 +628,53 @@
     } catch {
       return {};
     }
+  }
+
+  function pddWriteSaliedesanaNewsSeenMap(map) {
+    try {
+      localStorage.setItem(SAL_NEWS_SEEN_KEY, JSON.stringify(map && typeof map === "object" ? map : {}));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function pddHealSaliedesanaNewsSeenIfNeeded() {
+    const actorKey = pddSaliedesanaNewsActorKey();
+    const map = pddReadSaliedesanaNewsSeenMap();
+    const raw = String(map[actorKey] || "").trim();
+    if (!raw) return;
+    if (!pddNormalizeNewsStamp(raw)) {
+      delete map[actorKey];
+      pddWriteSaliedesanaNewsSeenMap(map);
+      return;
+    }
+    const latest = pddSaliedesanaLatestNewsStamp();
+    if (!latest) return;
+    // Vecā loģika ņēma pasākuma datumu → seen varēja būt nākotnē un NEW nekad nerādījās.
+    if (pddNewsStampMs(raw) > pddNewsStampMs(latest)) {
+      delete map[actorKey];
+      pddWriteSaliedesanaNewsSeenMap(map);
+      pddMarkSaliedesanaNewsInitialized(actorKey);
+    }
+  }
+
+  function pddEnsureSaliedesanaNewsBaseline() {
+    const actorKey = pddSaliedesanaNewsActorKey();
+    pddHealSaliedesanaNewsSeenIfNeeded();
+    const map = pddReadSaliedesanaNewsSeenMap();
+    const raw = String(map[actorKey] || "").trim();
+    if (raw && pddNormalizeNewsStamp(raw)) {
+      pddMarkSaliedesanaNewsInitialized(actorKey);
+      return;
+    }
+    // Ja lietotājs jau reiz bijis inicializēts, bet seen tika notīrīts (heal) — NERAKSTĀM baseline vēlreiz,
+    // lai NEW varētu parādīties.
+    if (pddIsSaliedesanaNewsInitialized(actorKey)) return;
+    const latest = pddSaliedesanaLatestNewsStamp();
+    if (!latest) return;
+    map[actorKey] = latest;
+    pddWriteSaliedesanaNewsSeenMap(map);
+    pddMarkSaliedesanaNewsInitialized(actorKey);
   }
 
   function pddGetSaliedesanaNewsSeenStamp() {
@@ -686,7 +688,10 @@
     const latest = pddSaliedesanaLatestNewsStamp();
     if (!latest) return false;
     const seen = pddGetSaliedesanaNewsSeenStamp();
-    if (!seen) return false;
+    if (!seen) {
+      // Inicializēts lietotājs bez seen (pēc heal) → rādām NEW.
+      return pddIsSaliedesanaNewsInitialized();
+    }
     return pddNewsStampMs(latest) > pddNewsStampMs(seen);
   }
 
@@ -696,7 +701,8 @@
     try {
       const map = pddReadSaliedesanaNewsSeenMap();
       map[pddSaliedesanaNewsActorKey()] = latest;
-      localStorage.setItem(SAL_NEWS_SEEN_KEY, JSON.stringify(map));
+      pddWriteSaliedesanaNewsSeenMap(map);
+      pddMarkSaliedesanaNewsInitialized();
     } catch {
       /* ignore */
     }
@@ -770,31 +776,6 @@
     }
     if (!found.length) return null;
     return { count: found.length, first: found[0], preview: found.slice(0, 2) };
-  }
-
-  let navIdejuPreviewUnmount = null;
-  let navIdejuPreviewTimer = null;
-
-  function hydrateNavIdejuChatPreview() {
-    const host = document.getElementById("pdd-nav-ideju-chat-preview");
-    if (typeof navIdejuPreviewUnmount === "function") {
-      try {
-        navIdejuPreviewUnmount();
-      } catch {
-        /* ignore */
-      }
-      navIdejuPreviewUnmount = null;
-    }
-    if (!host) return;
-    const mount = globalThis.PDD_IDEJU_CHAT?.mountPreview;
-    if (typeof mount === "function") {
-      navIdejuPreviewUnmount = mount(host, { theme: "akt", source: "aktualitates" });
-    }
-  }
-
-  function scheduleHydrateNavIdejuChatPreview() {
-    clearTimeout(navIdejuPreviewTimer);
-    navIdejuPreviewTimer = setTimeout(() => hydrateNavIdejuChatPreview(), 40);
   }
 
   function createAppShellWithNav(html) {
@@ -1126,20 +1107,6 @@
                     </section>
                   `
                 : null}
-              <div class="pdd-nav-ideju-chat" aria-label="Ideju čats">
-                <button
-                  type="button"
-                  class="pdd-nav-ideju-chat-btn"
-                  onClick=${() => {
-                    const open = globalThis.PDD_IDEJU_CHAT?.open;
-                    if (typeof open === "function") open({ source: "aktualitates", theme: "akt" });
-                    else alert("Ideju čats vēl nav ielādējies. Pārlādē lapu (Ctrl+F5).");
-                  }}
-                >
-                  💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
-                </button>
-                <div id="pdd-nav-ideju-chat-preview"></div>
-              </div>
             </div>
           </aside>
           <div class="app-main">
@@ -1181,7 +1148,6 @@
           </div>
         </div>
       `;
-      scheduleHydrateNavIdejuChatPreview();
       return shell;
     };
   }

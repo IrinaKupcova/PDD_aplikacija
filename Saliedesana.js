@@ -567,6 +567,14 @@
     }
   }
 
+  function idejuChatHasUnread(rows) {
+    const list = Array.isArray(rows) ? rows : loadLocalIdejuChat();
+    const latest = latestIdejuChatStamp(list);
+    if (!latest) return false;
+    const seen = String(readIdejuChatSeenMap()[idejuChatSeenActorKey()] || "").trim();
+    return !seen || latest > seen;
+  }
+
   function idejuChatBodyIsMeaningful(body) {
     const s = String(body || "").trim();
     if (!s) return false;
@@ -657,12 +665,14 @@
 
   function ensureIdejuChatModalStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-ideju-chat-style-v4")) return;
+    if (document.getElementById("pdd-ideju-chat-style-v6")) return;
+    document.getElementById("pdd-ideju-chat-style-v5")?.remove();
+    document.getElementById("pdd-ideju-chat-style-v4")?.remove();
     document.getElementById("pdd-ideju-chat-style-v3")?.remove();
     document.getElementById("pdd-ideju-chat-style-v2")?.remove();
     document.getElementById("pdd-ideju-chat-style")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-ideju-chat-style-v4";
+    s.id = "pdd-ideju-chat-style-v6";
     s.textContent = `
       .pdd-ideju-modal-bg { position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:1rem; }
       .pdd-ideju-modal { width:min(520px,100%); max-height:86vh; display:flex; flex-direction:column; border-radius:16px; overflow:hidden; box-shadow:0 18px 50px rgba(15,23,42,.28); }
@@ -700,9 +710,20 @@
       }
       .pdd-ideju-form-tools label { cursor:pointer; margin:0; }
       .pdd-ideju-pending {
-        display:none; flex-wrap:wrap; gap:.35rem; padding:0 .75rem .45rem; font-size:.72rem; color:#64748b;
+        display:none; flex-direction:column; gap:.4rem; padding:0 .75rem .5rem; font-size:.72rem; color:#64748b;
       }
       .pdd-ideju-pending.has-items { display:flex; }
+      .pdd-ideju-pending-top {
+        display:flex; align-items:center; justify-content:space-between; gap:.4rem;
+      }
+      .pdd-ideju-pending-media {
+        display:flex; flex-direction:column; gap:.35rem; max-height:180px; overflow:auto;
+      }
+      .pdd-ideju-pending-media img {
+        display:block; max-width:100%; width:min(100%,240px); height:auto;
+        border-radius:8px; border:1px solid rgba(100,116,139,.35); background:#fff;
+      }
+      .pdd-ideju-pending-media p { margin:0; font-size:.74rem; }
       .pdd-ideju-pending-item {
         border:1px dashed rgba(100,116,139,.45); border-radius:8px; padding:.2rem .4rem;
         background:rgba(255,255,255,.85);
@@ -748,6 +769,63 @@
         border:0; background:transparent; cursor:pointer; padding:0; font:inherit;
         font-size:.72rem; font-weight:700; text-align:left; color:inherit; text-decoration:underline;
       }
+      .pdd-ideju-float {
+        position:fixed; right:1rem; bottom:1rem; z-index:65;
+        display:flex; flex-direction:column; align-items:flex-end; gap:.5rem;
+        pointer-events:none;
+      }
+      .pdd-ideju-float > * { pointer-events:auto; }
+      .pdd-ideju-float-panel {
+        width:min(320px,calc(100vw - 2rem)); max-height:min(360px,50vh);
+        display:none; flex-direction:column; border-radius:16px; overflow:hidden;
+        box-shadow:0 14px 44px rgba(15,23,42,.24), 0 0 0 1px rgba(14,116,144,.18);
+        border:1px solid rgba(14,116,144,.42);
+        background:linear-gradient(180deg,#fff,#e0f2fe);
+        animation:pddIdejuFloatIn .18s ease;
+      }
+      @keyframes pddIdejuFloatIn {
+        from { opacity:0; transform:translateY(8px) scale(.98); }
+        to { opacity:1; transform:translateY(0) scale(1); }
+      }
+      .pdd-ideju-float.is-open .pdd-ideju-float-panel { display:flex; }
+      .pdd-ideju-float-head {
+        display:flex; align-items:center; justify-content:space-between; gap:.45rem;
+        padding:.5rem .6rem; background:#bae6fd; color:#075985;
+        font-size:.78rem; font-weight:700; border-bottom:1px solid #7dd3fc;
+      }
+      .pdd-ideju-float-head-actions { display:flex; align-items:center; gap:.25rem; }
+      .pdd-ideju-float-head-btn {
+        border:0; background:transparent; cursor:pointer; font:inherit;
+        color:inherit; font-size:1rem; line-height:1; padding:.15rem .25rem; border-radius:6px;
+      }
+      .pdd-ideju-float-head-btn:hover { background:rgba(255,255,255,.45); }
+      .pdd-ideju-float-preview-host {
+        flex:1; overflow:auto; min-height:0;
+      }
+      .pdd-ideju-float-preview-host .pdd-ideju-preview {
+        margin:0; border:0; border-radius:0; max-height:none;
+        background:transparent; padding:.45rem .55rem .55rem;
+      }
+      .pdd-ideju-float-fab {
+        width:52px; height:52px; border-radius:999px; border:0; cursor:pointer;
+        font-size:1.35rem; line-height:1;
+        background:linear-gradient(135deg,#0284c7,#0ea5e9 55%,#38bdf8);
+        color:#fff; box-shadow:0 8px 24px rgba(14,165,233,.38), 0 0 0 2px rgba(56,189,248,.22);
+        position:relative; transition:transform .15s ease;
+      }
+      .pdd-ideju-float-fab:hover { transform:scale(1.05); }
+      .pdd-ideju-float-fab:focus-visible { outline:2px solid #0ea5e9; outline-offset:2px; }
+      .pdd-ideju-float-badge {
+        position:absolute; top:-2px; right:-2px; min-width:18px; height:18px; padding:0 5px;
+        border-radius:999px; background:#ef4444; color:#fff; font-size:.62rem; font-weight:800;
+        line-height:18px; text-align:center; border:2px solid #fff; box-sizing:border-box;
+      }
+      .pdd-ideju-float-badge[hidden] { display:none; }
+      @media (max-width:720px) {
+        .pdd-ideju-float { right:.65rem; bottom:.65rem; }
+        .pdd-ideju-float-panel { width:min(300px,calc(100vw - 1.3rem)); max-height:min(300px,44vh); }
+        .pdd-ideju-float-fab { width:48px; height:48px; font-size:1.2rem; }
+      }
     `;
     document.head.appendChild(s);
   }
@@ -765,13 +843,14 @@
     return merged;
   }
 
-  function renderIdejuChatPreviewHtml(rows, theme) {
+  function renderIdejuChatPreviewHtml(rows, theme, previewOpts = {}) {
     const list = Array.isArray(rows) ? rows : [];
-    const take = theme === "akt" ? 8 : 3;
+    const take = Number(previewOpts.take) > 0 ? Number(previewOpts.take) : theme === "akt" ? 8 : 3;
     const last = list.slice(-take).reverse();
-    const head = `<div class="pdd-ideju-preview-head"><span>Pēdējās čata ziņas</span></div>`;
+    const showHead = previewOpts.showHead !== false;
+    const head = showHead ? `<div class="pdd-ideju-preview-head"><span>Pēdējās čata ziņas</span></div>` : "";
     if (!last.length) {
-      return `${head}<p class="pdd-ideju-preview-empty">Vēl nav ziņu — nospied pogu, lai rakstītu.</p>`;
+      return `${head}<p class="pdd-ideju-preview-empty">Vēl nav ziņu — nospied 💡, lai rakstītu.</p>`;
     }
     const items = last
       .map((m) => {
@@ -789,6 +868,10 @@
     ensureIdejuChatModalStyles();
     const theme = options.theme === "sal" ? "sal" : "akt";
     const source = options.source === "saliedesana" ? "saliedesana" : "aktualitates";
+    const previewOpts = {
+      take: options.take,
+      showHead: options.showHead,
+    };
     hostEl.className = `pdd-ideju-preview theme-${theme}`;
     hostEl.setAttribute("aria-label", "Čata priekšskatījums");
 
@@ -797,7 +880,14 @@
       if (cancelled || !hostEl.isConnected) return;
       const rows = await loadIdejuChatRowsForPreview();
       if (cancelled || !hostEl.isConnected) return;
-      hostEl.innerHTML = renderIdejuChatPreviewHtml(rows, theme);
+      hostEl.innerHTML = renderIdejuChatPreviewHtml(rows, theme, previewOpts);
+      if (typeof options.onRows === "function") {
+        try {
+          options.onRows(rows);
+        } catch {
+          /* ignore */
+        }
+      }
       const openBtn = hostEl.querySelector("[data-ideju-preview-open]");
       if (openBtn) {
         openBtn.onclick = () => openIdejuChatModal({ source, theme });
@@ -827,6 +917,136 @@
         idejuPreviewTimers.delete(hostEl);
       }
     };
+  }
+
+  const IDEJU_FLOAT_OPEN_KEY = "pdd_ideju_chat_float_open_v1";
+  let idejuFloatPreviewUnmount = null;
+
+  function readIdejuFloatOpenPref() {
+    try {
+      const v = localStorage.getItem(IDEJU_FLOAT_OPEN_KEY);
+      if (v === null) return true;
+      return v === "1";
+    } catch {
+      return true;
+    }
+  }
+
+  function writeIdejuFloatOpenPref(open) {
+    try {
+      localStorage.setItem(IDEJU_FLOAT_OPEN_KEY, open ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function updateIdejuFloatBadge(rootEl, rows, panelOpen) {
+    const badge = rootEl?.querySelector?.("[data-ideju-float-badge]");
+    if (!badge) return;
+    const unread = idejuChatHasUnread(rows);
+    const show = unread && !panelOpen;
+    badge.hidden = !show;
+    badge.textContent = show ? "!" : "";
+    badge.setAttribute("aria-label", show ? "Jaunas čata ziņas" : "");
+  }
+
+  function setIdejuFloatOpen(rootEl, open, options = {}) {
+    if (!rootEl) return;
+    rootEl.classList.toggle("is-open", Boolean(open));
+    const fab = rootEl.querySelector("[data-ideju-float-fab]");
+    if (fab) fab.setAttribute("aria-expanded", open ? "true" : "false");
+    if (options.persist !== false) writeIdejuFloatOpenPref(Boolean(open));
+    if (options.rows) updateIdejuFloatBadge(rootEl, options.rows, Boolean(open));
+  }
+
+  function mountIdejuChatFloatWidget() {
+    if (typeof document === "undefined") return () => {};
+    if (document.getElementById("pdd-ideju-float-root")) return () => {};
+    ensureIdejuChatModalStyles();
+
+    const root = document.createElement("div");
+    root.id = "pdd-ideju-float-root";
+    root.className = "pdd-ideju-float";
+    root.setAttribute("aria-label", "Ideju čats");
+    root.innerHTML = `
+      <div class="pdd-ideju-float-panel" data-ideju-float-panel>
+        <div class="pdd-ideju-float-head">
+          <span>💡 Ideju čats</span>
+          <div class="pdd-ideju-float-head-actions">
+            <button type="button" class="pdd-ideju-float-head-btn" data-ideju-float-open-full title="Atvērt pilnu čatu" aria-label="Atvērt pilnu čatu">↗</button>
+            <button type="button" class="pdd-ideju-float-head-btn" data-ideju-float-collapse title="Sakļaut" aria-label="Sakļaut">−</button>
+          </div>
+        </div>
+        <div class="pdd-ideju-float-preview-host" data-ideju-float-preview></div>
+      </div>
+      <button type="button" class="pdd-ideju-float-fab" data-ideju-float-fab aria-label="Ideju čats" aria-expanded="false" title="Ideju čats">
+        💡
+        <span class="pdd-ideju-float-badge" data-ideju-float-badge hidden aria-hidden="true">!</span>
+      </button>
+    `;
+    document.body.appendChild(root);
+
+    const previewHost = root.querySelector("[data-ideju-float-preview]");
+    const initialOpen = readIdejuFloatOpenPref();
+    setIdejuFloatOpen(root, initialOpen, { persist: false });
+
+    if (typeof idejuFloatPreviewUnmount === "function") {
+      try {
+        idejuFloatPreviewUnmount();
+      } catch {
+        /* ignore */
+      }
+    }
+    idejuFloatPreviewUnmount = mountIdejuChatPreview(previewHost, {
+      theme: "akt",
+      source: "aktualitates",
+      take: 3,
+      showHead: false,
+      onRows: (rows) => {
+        updateIdejuFloatBadge(root, rows, root.classList.contains("is-open"));
+      },
+    });
+
+    root.querySelector("[data-ideju-float-fab]")?.addEventListener("click", () => {
+      const open = !root.classList.contains("is-open");
+      setIdejuFloatOpen(root, open);
+      if (open) {
+        void loadIdejuChatRowsForPreview().then((rows) => updateIdejuFloatBadge(root, rows, true));
+      }
+    });
+    root.querySelector("[data-ideju-float-collapse]")?.addEventListener("click", () => {
+      setIdejuFloatOpen(root, false);
+      void loadIdejuChatRowsForPreview().then((rows) => updateIdejuFloatBadge(root, rows, false));
+    });
+    root.querySelector("[data-ideju-float-open-full]")?.addEventListener("click", () => {
+      openIdejuChatModal({ source: "aktualitates", theme: "akt" });
+    });
+
+    return function unmountFloat() {
+      if (typeof idejuFloatPreviewUnmount === "function") {
+        try {
+          idejuFloatPreviewUnmount();
+        } catch {
+          /* ignore */
+        }
+        idejuFloatPreviewUnmount = null;
+      }
+      root.remove();
+    };
+  }
+
+  function ensureIdejuChatFloatWidget() {
+    if (typeof document === "undefined") return;
+    if (document.getElementById("pdd-ideju-float-root")) return;
+    mountIdejuChatFloatWidget();
+  }
+
+  if (typeof document !== "undefined") {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", ensureIdejuChatFloatWidget, { once: true });
+    } else {
+      ensureIdejuChatFloatWidget();
+    }
   }
 
   let idejuChatPollTimer = null;
@@ -915,7 +1135,7 @@
         <div class="pdd-ideju-status" data-ideju-status></div>
         <div class="pdd-ideju-form-wrap">
           <form class="pdd-ideju-form" data-ideju-form>
-            <textarea data-ideju-input placeholder="Uzraksti ideju…" maxlength="2000"></textarea>
+            <textarea data-ideju-input placeholder="Uzraksti ideju… Var ielīmēt arī screenshot (Ctrl+V)." maxlength="2000"></textarea>
             <button type="submit" class="btn btn-primary btn-small">Sūtīt</button>
           </form>
           <div class="pdd-ideju-pending" data-ideju-pending></div>
@@ -955,33 +1175,61 @@
       const bits = [];
       if (imgs) bits.push(`${imgs} attēl${imgs === 1 ? "s" : "i"}`);
       if (atts) bits.push(`${atts} pielikum${atts === 1 ? "s" : "i"}`);
-      pendingEl.innerHTML = `<span class="pdd-ideju-pending-item">Pievienots: ${bits.join(", ") || " fails"}</span>`;
+      pendingEl.innerHTML =
+        `<div class="pdd-ideju-pending-top"><span class="pdd-ideju-pending-item">Pievienots: ${bits.join(", ") || "fails"}</span>` +
+        `<button type="button" class="btn btn-ghost btn-small" data-ideju-pending-clear>Noņemt</button></div>` +
+        `<div class="pdd-ideju-pending-media">${pendingHtml}</div>`;
+      pendingEl.querySelector("[data-ideju-pending-clear]")?.addEventListener("click", () => {
+        pendingHtml = "";
+        paintIdejuPending();
+      });
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result || ""));
+        fr.onerror = () => reject(fr.error || new Error("Neizdevās nolasīt failu"));
+        fr.readAsDataURL(file);
+      });
     }
 
     async function appendIdejuChatImage(file) {
       if (!file) return;
-      const sb = globalThis.__PDD_SUPABASE__ ?? null;
-      const insertImg = (src, name) => {
+      const token = `ideju-img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const safeName = escapeHtmlLite(file.name || "Attēls");
+      let previewSrc = "";
+      try {
+        previewSrc = await readFileAsDataUrl(file);
+      } catch (e) {
+        console.warn("[ideju-chat.image.read]", e?.message || e);
+        alert("Neizdevās nolasīt attēlu no starpliktuves/faila.");
+        return;
+      }
+      if (!previewSrc) return;
+
+      const insertOrReplace = (src) => {
         const safeSrc = escapeHtmlLite(src);
-        const safeName = escapeHtmlLite(name || "Attēls");
-        pendingHtml += `<img data-ideju-img="1" src="${safeSrc}" alt="${safeName}" style="display:block;max-width:100%;width:min(100%,320px);height:auto;border-radius:8px;margin:0.35rem 0;" />`;
+        const tag =
+          `<img data-ideju-img="1" data-ideju-tmp="${token}" src="${safeSrc}" alt="${safeName}" ` +
+          `style="display:block;max-width:100%;width:min(100%,320px);height:auto;border-radius:8px;margin:0.35rem 0;" />`;
+        const re = new RegExp(`<img\\b[^>]*data-ideju-tmp="${token}"[^>]*>`, "i");
+        if (re.test(pendingHtml)) pendingHtml = pendingHtml.replace(re, tag);
+        else pendingHtml += tag;
         paintIdejuPending();
       };
-      if (sb) {
-        try {
-          const { publicUrl } = await uploadSaliedesanaFileToStorage(sb, file, "ideju-chat");
-          insertImg(publicUrl, file.name);
-          return;
-        } catch (e) {
-          console.warn("[ideju-chat.image.upload]", e?.message || e);
-        }
+
+      // Uzreiz rāda bildi; pēc tam mēģina aizvietot ar Supabase URL.
+      insertOrReplace(previewSrc);
+
+      const sb = globalThis.__PDD_SUPABASE__ ?? null;
+      if (!sb) return;
+      try {
+        const { publicUrl } = await uploadSaliedesanaFileToStorage(sb, file, "ideju-chat");
+        if (publicUrl) insertOrReplace(publicUrl);
+      } catch (e) {
+        console.warn("[ideju-chat.image.upload]", e?.message || e);
       }
-      const fr = new FileReader();
-      fr.onload = () => {
-        const src = String(fr.result || "");
-        if (src) insertImg(src, file.name);
-      };
-      fr.readAsDataURL(file);
     }
 
     async function appendIdejuChatAttachment(file) {
@@ -1020,6 +1268,26 @@
       const f = e.target?.files?.[0];
       if (f) void appendIdejuChatImage(f);
       e.target.value = "";
+    });
+    input?.addEventListener("paste", (e) => {
+      const cd = e.clipboardData;
+      if (!cd) return;
+      const fromItems = [...(cd.items || [])].find((item) => item.kind === "file" && item.type.startsWith("image/"));
+      if (fromItems) {
+        e.preventDefault();
+        const file = fromItems.getAsFile();
+        if (file) {
+          const ext = (file.type.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
+          const name = file.name && file.name.trim() ? file.name : `screenshot-${Date.now()}.${ext}`;
+          void appendIdejuChatImage(new File([file], name, { type: file.type || "image/png" }));
+        }
+        return;
+      }
+      const fromFiles = [...(cd.files || [])].find((f) => f.type.startsWith("image/"));
+      if (fromFiles) {
+        e.preventDefault();
+        void appendIdejuChatImage(fromFiles);
+      }
     });
     attInput?.addEventListener("click", (e) => {
       const ok = confirm(SAL_INFO_ATTACHMENT_WARNING);
@@ -5166,5 +5434,6 @@
     open: openIdejuChatModal,
     close: closeIdejuChatModal,
     mountPreview: mountIdejuChatPreview,
+    mountFloat: mountIdejuChatFloatWidget,
   };
 })();
