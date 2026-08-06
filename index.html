@@ -539,7 +539,7 @@
       <script defer src="./Komanda.js?v=202606182"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608085"></script>
+      <script defer src="./Saliedesana.js?v=202608086"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=202608073"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
@@ -2794,6 +2794,9 @@
         /** Lietotājam — īsas ziņas latviski; tehniskās detaļas tikai konsolē ([auth]). */
         function authUserMessage(raw) {
           const m = raw ? String(raw).toLowerCase() : "";
+          if (/timeout|timed out|aborterror|signal timed out/i.test(m)) {
+            return "Savienojums ar serveri aizņēma pārāk ilgu laiku. Pārbaudi tīklu un mēģini vēlreiz.";
+          }
           if (/signups not allowed|signup.*disabled|email signups.*disabled/i.test(m)) {
             console.error("[auth]", raw);
             return "Jaunu kontu reģistrācija šajā vidē ir izslēgta. Izmanto „Ieiet”, ja konts jau izveidots, vai sazinies ar administratoru.";
@@ -2825,6 +2828,17 @@
           return "Neizdevās. Mēģini vēlreiz.";
         }
 
+        function withTimeout(promise, ms, label = "Timeout") {
+          const wait = Math.max(1000, Number(ms) || 12000);
+          let timer = null;
+          const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${label} (${wait} ms)`)), wait);
+          });
+          return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+            if (timer) clearTimeout(timer);
+          });
+        }
+
         function AuthScreen() {
           const [email, setEmail] = useState("");
           const [busy, setBusy] = useState(false);
@@ -2844,17 +2858,40 @@
                 return;
               }
               let uid = "";
-              const { data: rpcRows, error: rpcErr } = await supabase.rpc("pdd_lookup_user_by_email", {
-                p_email: entered,
-              });
-              if (!rpcErr && Array.isArray(rpcRows) && rpcRows.length > 0) {
-                const r0 = rpcRows[0];
-                uid = String(r0?.user_id ?? r0?.pdd_lookup_user_by_email ?? "").trim();
+              let rpcErr = null;
+              try {
+                const rpcRes = await withTimeout(
+                  supabase.rpc("pdd_lookup_user_by_email", { p_email: entered }),
+                  12000,
+                  "Lietotāja meklēšana",
+                );
+                rpcErr = rpcRes?.error || null;
+                const rpcRows = rpcRes?.data;
+                if (!rpcErr && Array.isArray(rpcRows) && rpcRows.length > 0) {
+                  const r0 = rpcRows[0];
+                  uid = String(r0?.user_id ?? r0?.pdd_lookup_user_by_email ?? "").trim();
+                }
+              } catch (err) {
+                console.warn("[auth.rpc]", err?.message || err);
+                rpcErr = err;
               }
               if (!uid) {
-                const { data, error } = await supabase.from("users").select("*");
+                let data = null;
+                let error = null;
+                try {
+                  const sel = await withTimeout(
+                    supabase.from("users").select("*"),
+                    15000,
+                    "Lietotāju saraksts",
+                  );
+                  data = sel?.data;
+                  error = sel?.error || null;
+                } catch (err) {
+                  console.warn("[auth.users]", err?.message || err);
+                  error = err;
+                }
                 if (error) {
-                  setMessage(authUserMessage(error.message));
+                  setMessage(authUserMessage(error.message || error));
                   return;
                 }
                 const list = Array.isArray(data) ? data : [];
@@ -2862,7 +2899,7 @@
                 if (!user) {
                   if (rpcErr) {
                     setMessage(
-                      authUserMessage(rpcErr.message) +
+                      authUserMessage(rpcErr.message || rpcErr) +
                         "\n\nJa esi administrators: palaid Supabase SQL skriptu `pdd_lookup_user_by_email` (migration)."
                     );
                   } else {
@@ -2878,14 +2915,25 @@
                 return;
               }
               if (uid && supabase) {
-                const { data: urow } = await supabase.from("users").select("*").eq("id", uid).maybeSingle();
-                if (urow && isGuestRole(urow)) {
-                  setMessage("Lietotājiem ar lomu „viesis” pieeja nav atļauta.");
-                  return;
+                try {
+                  const { data: urow } = await withTimeout(
+                    supabase.from("users").select("*").eq("id", uid).maybeSingle(),
+                    10000,
+                    "Profila pārbaude",
+                  );
+                  if (urow && isGuestRole(urow)) {
+                    setMessage("Lietotājiem ar lomu „viesis” pieeja nav atļauta.");
+                    return;
+                  }
+                } catch (err) {
+                  console.warn("[auth.profile]", err?.message || err);
+                  // Nebloķējam ieeju, ja profila pārbaude timeout — RPC/saraksts jau atrada lietotāju.
                 }
               }
               setEmailAuthSession({ userId: uid, email: entered });
               location.reload();
+            } catch (err) {
+              setMessage(authUserMessage(err?.message || err));
             } finally {
               setBusy(false);
             }

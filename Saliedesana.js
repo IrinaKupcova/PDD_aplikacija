@@ -1264,9 +1264,25 @@
     };
   }
 
+  function canMountIdejuChatFloat() {
+    try {
+      if (typeof sessionStorage === "undefined") return false;
+      if (sessionStorage.getItem("pdd_local_ok") !== "1") return false;
+      const em = String(sessionStorage.getItem("pdd_local_email") || "").trim();
+      const uid = String(sessionStorage.getItem("pdd_local_user_id") || "").trim();
+      return Boolean(em.includes("@") && uid);
+    } catch {
+      return false;
+    }
+  }
+
   function ensureIdejuChatFloatWidget() {
     if (typeof document === "undefined") return;
     try {
+      if (!canMountIdejuChatFloat()) {
+        document.getElementById("pdd-ideju-float-root")?.remove();
+        return;
+      }
       if (document.getElementById("pdd-ideju-float-root")) return;
       mountIdejuChatFloatWidget();
     } catch (e) {
@@ -1287,6 +1303,9 @@
     } else {
       setTimeout(bootFloat, 0);
     }
+    // Pēc pieslēgšanās (reload) vai ja sesija parādās vēlāk.
+    window.addEventListener("storage", bootFloat);
+    setTimeout(bootFloat, 1500);
   }
 
   let idejuChatPollTimer = null;
