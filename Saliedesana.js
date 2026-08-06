@@ -1145,7 +1145,7 @@
         <div class="pdd-ideju-status" data-ideju-status></div>
         <div class="pdd-ideju-form-wrap">
           <form class="pdd-ideju-form" data-ideju-form>
-            <textarea data-ideju-input placeholder="Uzraksti ideju… Var ielīmēt arī screenshot (Ctrl+V)." maxlength="2000"></textarea>
+            <textarea data-ideju-input placeholder="Var ielīmēt arī screenshot (Ctrl+V)." maxlength="2000"></textarea>
             <button type="submit" class="btn btn-primary btn-small">Sūtīt</button>
           </form>
           <div class="pdd-ideju-pending" data-ideju-pending></div>
