@@ -431,24 +431,57 @@
     }
   }
 
-  async function readRemoteRow(sb, table) {
-    try {
-      const result = await Promise.race([
-        sb.from(table).select("state, updated_at, updated_by").eq("id", REMOTE_ROW_ID).maybeSingle(),
-        new Promise((resolve) =>
-          setTimeout(() => resolve({ data: null, error: { message: `DB lasīšana noildza (${table})` } }), 8000),
-        ),
-      ]);
-      const { data, error } = result || {};
-      if (error) {
-        console.warn(`[Pakalpojumu vadība] DB lasīšana (${table})`, error);
-        return { ok: false, error, data: null };
+  async function readRemoteRowViaRest(table) {
+    const cfg = getSupabaseConfig();
+    if (!cfg) return { ok: false, error: new Error("Nav Supabase config"), data: null };
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = setTimeout(() => {
+      try {
+        ctrl?.abort?.();
+      } catch {
+        /* ignore */
       }
+    }, 10000);
+    try {
+      const resp = await fetch(
+        `${cfg.url}/rest/v1/${encodeURIComponent(table)}?id=eq.${encodeURIComponent(REMOTE_ROW_ID)}&select=state,updated_at,updated_by`,
+        {
+          method: "GET",
+          headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}` },
+          signal: ctrl?.signal,
+        },
+      );
+      if (!resp.ok) {
+        const txt = await resp.text();
+        return { ok: false, error: new Error(txt || `HTTP ${resp.status}`), data: null };
+      }
+      const rows = await resp.json();
+      const data = Array.isArray(rows) ? rows[0] || null : rows;
       return { ok: true, error: null, data };
     } catch (e) {
-      console.warn(`[Pakalpojumu vadība] DB lasīšana (${table})`, e);
       return { ok: false, error: e, data: null };
+    } finally {
+      clearTimeout(timer);
     }
+  }
+
+  async function readRemoteRow(sb, table) {
+    if (sb) {
+      try {
+        const result = await Promise.race([
+          sb.from(table).select("state, updated_at, updated_by").eq("id", REMOTE_ROW_ID).maybeSingle(),
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ data: null, error: { message: `DB lasīšana noildza (${table})` } }), 6000),
+          ),
+        ]);
+        const { data, error } = result || {};
+        if (!error) return { ok: true, error: null, data };
+        console.warn(`[Pakalpojumu vadība] DB lasīšana (${table})`, error);
+      } catch (e) {
+        console.warn(`[Pakalpojumu vadība] DB lasīšana (${table})`, e);
+      }
+    }
+    return readRemoteRowViaRest(table);
   }
 
   /**

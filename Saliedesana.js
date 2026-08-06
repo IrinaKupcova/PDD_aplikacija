@@ -798,24 +798,87 @@
     return merged;
   }
 
-  async function fetchIdejuChatRemote(supabase, options = {}) {
-    if (!supabase) return null;
+  async function fetchIdejuChatRemoteRest(options = {}) {
+    const cfgUrl =
+      String(globalThis.__PDD_SUPABASE__?.supabaseUrl || "").trim() ||
+      "https://fdnkvecgqetmwilwolgt.supabase.co";
+    const cfgKey =
+      String(globalThis.__PDD_SUPABASE__?.supabaseKey || "").trim() ||
+      (typeof localStorage !== "undefined" ? localStorage.getItem("pdd_supabase_anon_key") : "") ||
+      "";
+    // Publishable key no index.html konfigurācijas (ja pieejama caur loadConfig nav šeit).
+    const apiKey =
+      cfgKey ||
+      String(document?.querySelector?.("meta[name='pdd-supabase-anon']")?.content || "").trim();
+    // Fallback: izmantojam to pašu atslēgu, kas iebūvēta Pakalpojumu modulī / tipiski FILE_SUPABASE.
+    const key =
+      apiKey ||
+      "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
+    const base = String(cfgUrl || "https://fdnkvecgqetmwilwolgt.supabase.co").replace(/\/+$/, "");
     const limit = Math.min(500, Math.max(1, Number(options.limit) || IDEJU_CHAT_PAGE_SIZE));
-    let q = supabase
-      .from(REMOTE_IDEJU_CHAT_TABLE)
-      .select("id, body, actor_key, actor_name, source, created_at")
-      .order("created_at", { ascending: false })
-      .limit(limit);
+    const params = new URLSearchParams();
+    params.set("select", "id,body,actor_key,actor_name,source,created_at");
+    params.set("order", "created_at.desc");
+    params.set("limit", String(limit));
     const before = String(options.before || "").trim();
-    if (before) q = q.lt("created_at", before);
-    const { data, error } = await q;
-    if (error) {
-      console.warn("[Čats]", error.message || error);
+    if (before) params.set("created_at", `lt.${before}`);
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = setTimeout(() => {
+      try {
+        ctrl?.abort?.();
+      } catch {
+        /* ignore */
+      }
+    }, 10000);
+    try {
+      const resp = await fetch(`${base}/rest/v1/${REMOTE_IDEJU_CHAT_TABLE}?${params}`, {
+        method: "GET",
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+        signal: ctrl?.signal,
+      });
+      if (!resp.ok) {
+        console.warn("[Čats.rest]", await resp.text());
+        return null;
+      }
+      const data = await resp.json();
+      const rows = (Array.isArray(data) ? data : []).map(normalizeIdejuChatRow).filter(Boolean);
+      return rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    } catch (e) {
+      console.warn("[Čats.rest]", e?.message || e);
       return null;
+    } finally {
+      clearTimeout(timer);
     }
-    const rows = (Array.isArray(data) ? data : []).map(normalizeIdejuChatRow).filter(Boolean);
-    // Atgriežam hronoloģiski (vecākais → jaunākais) attēlošanai.
-    return rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  }
+
+  async function fetchIdejuChatRemote(supabase, options = {}) {
+    const limit = Math.min(500, Math.max(1, Number(options.limit) || IDEJU_CHAT_PAGE_SIZE));
+    if (supabase) {
+      try {
+        let q = supabase
+          .from(REMOTE_IDEJU_CHAT_TABLE)
+          .select("id, body, actor_key, actor_name, source, created_at")
+          .order("created_at", { ascending: false })
+          .limit(limit);
+        const before = String(options.before || "").trim();
+        if (before) q = q.lt("created_at", before);
+        const raced = await Promise.race([
+          q,
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ data: null, error: { message: "Čats noildza" } }), 8000),
+          ),
+        ]);
+        const { data, error } = raced || {};
+        if (!error && Array.isArray(data)) {
+          const rows = data.map(normalizeIdejuChatRow).filter(Boolean);
+          return rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+        }
+        if (error) console.warn("[Čats]", error.message || error);
+      } catch (e) {
+        console.warn("[Čats]", e?.message || e);
+      }
+    }
+    return fetchIdejuChatRemoteRest(options);
   }
 
   async function insertIdejuChatRemote(supabase, row) {

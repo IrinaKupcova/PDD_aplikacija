@@ -1078,34 +1078,90 @@ function visibleAktualitatesActive() {
  * Aktuālās aktualitātes pēc perioda (šodien iekļauts [Sakums, Beigas]).
  * @param {import('@supabase/supabase-js').SupabaseClient} sb
  */
-async function fetchActiveAktualitatesFromSupabase(sb) {
-  const t = await resolveAktualitatesTableName(sb);
+async function fetchActiveAktualitatesViaRest() {
+  const url =
+    String(globalThis.__PDD_SUPABASE__?.supabaseUrl || "").trim() ||
+    "https://fdnkvecgqetmwilwolgt.supabase.co";
+  const key =
+    String(globalThis.__PDD_SUPABASE__?.supabaseKey || "").trim() ||
+    "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
+  const base = url.replace(/\/+$/, "");
   const today = ymd(new Date());
-  const { data, error } = await sb
-    .from(t)
-    .select("*")
-    .lte("Sakums", today)
-    .gte("Beigas", today)
-    .order("Sakums", { ascending: false })
-    .order("Beigas", { ascending: false });
-  if (error) throw error;
-  // Autoru vārdus mēģinām ātri; neļaujam karāties un bloķēt mājas ekrānu.
-  let nameMap = new Map();
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = setTimeout(() => {
+    try {
+      ctrl?.abort?.();
+    } catch {
+      /* ignore */
+    }
+  }, 10000);
   try {
-    nameMap = await Promise.race([
-      fetchAuthorNameMap(sb, data ?? []),
-      new Promise((resolve) => setTimeout(() => resolve(new Map()), 2500)),
-    ]);
-  } catch {
-    nameMap = new Map();
+    const params = new URLSearchParams();
+    params.set("select", "*");
+    params.set("Sakums", `lte.${today}`);
+    params.set("Beigas", `gte.${today}`);
+    params.set("order", "Sakums.desc,Beigas.desc");
+    const resp = await fetch(`${base}/rest/v1/AKTUALITATES?${params}`, {
+      method: "GET",
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+      signal: ctrl?.signal,
+    });
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(txt || `HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    return (Array.isArray(data) ? data : []).map((row) => rowFromDb(row, new Map())).filter(Boolean);
+  } finally {
+    clearTimeout(timer);
   }
-  const list = (data ?? []).map((row) => rowFromDb(row, nameMap)).filter(Boolean);
+}
+
+async function fetchActiveAktualitatesFromSupabase(sb) {
   try {
-    if (list.length) saveAktualitates(mergeAktualitatesPreferRemote(loadAktualitates(), list));
+    const t = await resolveAktualitatesTableName(sb);
+    const today = ymd(new Date());
+    const { data, error } = await Promise.race([
+      sb
+        .from(t)
+        .select("*")
+        .lte("Sakums", today)
+        .gte("Beigas", today)
+        .order("Sakums", { ascending: false })
+        .order("Beigas", { ascending: false }),
+      new Promise((resolve) =>
+        setTimeout(() => resolve({ data: null, error: { message: "Aktualitātes noildza" } }), 8000),
+      ),
+    ]);
+    if (!error && Array.isArray(data)) {
+      let nameMap = new Map();
+      try {
+        nameMap = await Promise.race([
+          fetchAuthorNameMap(sb, data ?? []),
+          new Promise((resolve) => setTimeout(() => resolve(new Map()), 2500)),
+        ]);
+      } catch {
+        nameMap = new Map();
+      }
+      const list = data.map((row) => rowFromDb(row, nameMap)).filter(Boolean);
+      try {
+        if (list.length) saveAktualitates(mergeAktualitatesPreferRemote(loadAktualitates(), list));
+      } catch {
+        /* ignore */
+      }
+      return list;
+    }
+    if (error) console.warn("[aktualitates.sb]", error.message || error);
+  } catch (e) {
+    console.warn("[aktualitates.sb]", e?.message || e);
+  }
+  const viaRest = await fetchActiveAktualitatesViaRest();
+  try {
+    if (viaRest.length) saveAktualitates(mergeAktualitatesPreferRemote(loadAktualitates(), viaRest));
   } catch {
     /* ignore */
   }
-  return list;
+  return viaRest;
 }
 
 function mergeAktualitatesPreferRemote(localRows, remoteRows) {
@@ -1114,7 +1170,6 @@ function mergeAktualitatesPreferRemote(localRows, remoteRows) {
     if (!r || !r.id) continue;
     map.set(String(r.id), r);
   }
-  // Remote pārraksta to pašu id.
   for (const r of remoteRows || []) {
     if (r?.id) map.set(String(r.id), r);
   }
