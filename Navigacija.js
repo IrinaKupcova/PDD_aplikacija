@@ -575,21 +575,33 @@
     return em || "anonymous";
   }
 
+  function pddIsIsoLikeStamp(v) {
+    const s = String(v || "").trim();
+    if (!s) return false;
+    // ISO / DB timestamps; ignore raw UUIDs and other non-temporal ids.
+    if (/^\d{4}-\d{2}-\d{2}([T\s]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/i.test(s)) return true;
+    return false;
+  }
+
   function pddSaliedesanaLatestNewsStamp() {
     let max = "";
     const bump = (v) => {
       const s = String(v || "").trim();
-      if (s && s > max) max = s;
+      if (!pddIsIsoLikeStamp(s)) return;
+      if (s > max) max = s;
     };
     try {
       const events = pddSafeParseJson(localStorage.getItem("pdd_saliedesana_pasakumi_v2") || "[]", []);
       if (Array.isArray(events)) {
         for (const ev of events) {
-          bump(ev?.updatedAt || ev?.updated_at || ev?.createdAt || ev?.created_at);
+          bump(ev?.updatedAt || ev?.updated_at);
+          bump(ev?.createdAt || ev?.created_at);
           const d = String(ev?.date || "").trim();
           const t = String(ev?.time || "00:00").trim() || "00:00";
-          if (/^\d{4}-\d{2}-\d{2}$/.test(d)) bump(`${d}T${t.length === 5 ? `${t}:00` : t}`);
-          bump(ev?.id);
+          if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+            const hhmm = t.length === 5 ? `${t}:00` : t;
+            bump(`${d}T${hhmm}`);
+          }
         }
       }
     } catch {
@@ -599,8 +611,8 @@
       const info = pddSafeParseJson(localStorage.getItem("pdd_saliedesana_info_v1") || "[]", []);
       if (Array.isArray(info)) {
         for (const row of info) {
-          bump(row?.updated_at || row?.updatedAt || row?.created_at || row?.createdAt);
-          bump(row?.id);
+          bump(row?.updated_at || row?.updatedAt);
+          bump(row?.created_at || row?.createdAt);
         }
       }
     } catch {
@@ -622,7 +634,10 @@
 
   function pddGetSaliedesanaNewsSeenStamp() {
     const map = pddReadSaliedesanaNewsSeenMap();
-    return String(map[pddSaliedesanaNewsActorKey()] || "").trim();
+    const raw = String(map[pddSaliedesanaNewsActorKey()] || "").trim();
+    // Vecā loģika glabāja arī UUID — tie sabojā salīdzinājumu ar datumiem.
+    if (!pddIsIsoLikeStamp(raw)) return "";
+    return raw;
   }
 
   function pddShouldShowSaliedesanaNewBadge() {
