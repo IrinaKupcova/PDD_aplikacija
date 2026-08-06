@@ -1819,6 +1819,33 @@ function renderTodayInfo({
     >
       <h3 style=${{ margin: "0 0 0.75rem", fontSize: "1rem", color: "#075985" }}>AKTUALITĀTES</h3>
 
+      <div style=${{ margin: "0 0 0.85rem" }}>
+        <button
+          type="button"
+          class="btn btn-primary"
+          style=${{
+            fontWeight: 800,
+            fontSize: "0.92rem",
+            padding: "0.55rem 1rem",
+            borderRadius: "999px",
+            border: "0",
+            background: "linear-gradient(135deg,#0284c7,#0ea5e9 55%,#38bdf8)",
+            boxShadow: "0 8px 22px rgba(14,165,233,.38), 0 0 0 3px rgba(56,189,248,.35)",
+            color: "#fff",
+          }}
+          onClick=${() => {
+            const open = globalThis.PDD_IDEJU_CHAT?.open;
+            if (typeof open === "function") open({ source: "aktualitates", theme: "akt" });
+            else alert("Ideju čats vēl nav ielādējies. Pārlādē lapu (Ctrl+F5).");
+          }}
+        >
+          💡 Vēlos izteikt ideju
+        </button>
+        <div style=${{ marginTop: "0.35rem", fontSize: "0.78rem", color: "#0369a1" }}>
+          Kopīgs ideju čats — redzams arī Saliedēšanā.
+        </div>
+      </div>
+
       ${syncError
         ? html`<div class="banner-warn" role="alert" style=${{ marginBottom: "0.75rem", fontSize: "0.88rem" }}>Aktualitāšu sinhronizācija: ${String(syncError)}</div>`
         : null}

@@ -1,6 +1,10 @@
 (function () {
   const LS_EVENTS_KEY = "pdd_saliedesana_pasakumi_v2";
   const LS_AKTUALITATES_KEY = "pdd_sodien_aktualitates_v1";
+  const LS_SAL_INFO_KEY = "pdd_saliedesana_info_v1";
+  const LS_IDEJU_CHAT_KEY = "pdd_ideju_chat_v1";
+  const REMOTE_SAL_INFO_TABLE = "pdd_saliedesana_info";
+  const REMOTE_IDEJU_CHAT_TABLE = "pdd_ideju_chat";
   /** Supabase: public."Saliedesana" — kolonnas kā Table Editor (arī saīsinātie nosaukumi). */
   const REMOTE_TABLE = "Saliedesana";
   const SAL_META_MARKER = "\n\n---PDD-SYNC---\n";
@@ -122,14 +126,47 @@
 
   function ensureStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-saliedesana-style-v2")) return;
+    if (document.getElementById("pdd-saliedesana-style-v3")) return;
     const s = document.createElement("style");
-    s.id = "pdd-saliedesana-style-v2";
+    s.id = "pdd-saliedesana-style-v3";
     s.textContent = `
       .sal-wrap { display:grid; gap:1rem; }
       .sal-head { border:1px solid #f59e0b; background:linear-gradient(180deg,#fff7ed,#ffedd5); border-radius:14px; padding:.9rem 1rem; }
       .sal-head h2 { margin:0; font-size:1.08rem; color:#9a3412; }
       .sal-head p { margin:.3rem 0 0; font-size:.82rem; color:#b45309; }
+      .sal-head-actions { margin-top:.65rem; display:flex; flex-wrap:wrap; gap:.45rem; align-items:center; }
+      .sal-idea-btn {
+        border:0; cursor:pointer; font-weight:800; font-size:.92rem; letter-spacing:.01em;
+        padding:.55rem 1rem; border-radius:999px; color:#fff;
+        background:linear-gradient(135deg,#ea580c,#f59e0b 55%,#fb923c);
+        box-shadow:0 8px 22px rgba(234,88,12,.38), 0 0 0 3px rgba(251,146,60,.35);
+        animation: sal-idea-pulse 1.8s ease-in-out infinite;
+      }
+      .sal-idea-btn:hover { filter:brightness(1.05); transform:translateY(-1px); }
+      @keyframes sal-idea-pulse {
+        0%, 100% { box-shadow:0 8px 22px rgba(234,88,12,.38), 0 0 0 3px rgba(251,146,60,.28); }
+        50% { box-shadow:0 10px 28px rgba(234,88,12,.5), 0 0 0 6px rgba(251,146,60,.18); }
+      }
+      .sal-info-panel {
+        border:1px solid #fb923c; border-radius:14px; padding:.85rem .9rem;
+        background:linear-gradient(180deg,#fffbeb,#fff7ed); display:grid; gap:.65rem;
+      }
+      .sal-info-panel h3 { margin:0; font-size:.98rem; color:#9a3412; }
+      .sal-info-intro { margin:0; font-size:.8rem; color:#b45309; line-height:1.4; }
+      .sal-info-list { display:grid; gap:.45rem; }
+      .sal-info-item {
+        border:1px solid #fed7aa; border-radius:12px; background:#fff; padding:.55rem .65rem; display:grid; gap:.25rem;
+      }
+      .sal-info-item strong { color:#7c2d12; font-size:.9rem; }
+      .sal-info-item .sal-info-body { font-size:.84rem; color:#0f172a; white-space:pre-wrap; word-break:break-word; }
+      .sal-info-meta { font-size:.72rem; color:#9a3412; }
+      .sal-info-actions { display:flex; gap:.35rem; justify-content:flex-end; flex-wrap:wrap; }
+      .sal-info-form { display:grid; gap:.4rem; border:1px dashed #fb923c; border-radius:12px; padding:.55rem; background:rgba(255,255,255,.7); }
+      .sal-info-form input, .sal-info-form textarea {
+        width:100%; box-sizing:border-box; border:1px solid #fdba74; border-radius:8px; padding:.4rem .5rem; font:inherit; font-size:.86rem;
+      }
+      .sal-info-form textarea { min-height:72px; resize:vertical; }
+      .sal-info-form-actions { display:flex; gap:.35rem; flex-wrap:wrap; }
       .sal-banner { border:1px dashed #f59e0b; background:#fffbeb; border-radius:10px; padding:.55rem .65rem; font-size:.78rem; color:#92400e; }
       .sal-accordion { border:1px solid #fdba74; border-radius:12px; background:#fff7ed; overflow:hidden; }
       .sal-accordion summary { list-style:none; cursor:pointer; user-select:none; position:relative; padding:.62rem .75rem; font-weight:700; color:#9a3412; }
@@ -323,6 +360,372 @@
     const em = String(globalThis.__PDD_ACTOR_EMAIL__ ?? sessionStorage.getItem("pdd_local_email") ?? "").trim().toLowerCase();
     if (em) return em;
     return "anonymous";
+  }
+
+  function actorDisplayName() {
+    try {
+      const name = String(
+        globalThis.__PDD_ACTOR_DISPLAY_NAME__ ||
+          globalThis.__PDD_ACTOR_NAME__ ||
+          globalThis.__PDD_SESSION_NAME__ ||
+          (typeof sessionStorage !== "undefined" && sessionStorage.getItem("pdd_local_display_name")) ||
+          "",
+      ).trim();
+      if (name) return name;
+    } catch {
+      /* ignore */
+    }
+    const em = String(globalThis.__PDD_ACTOR_EMAIL__ ?? sessionStorage.getItem("pdd_local_email") ?? "").trim();
+    return em || "Nezināms lietotājs";
+  }
+
+  function salUid() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function formatSalInfoWhen(iso) {
+    const d = new Date(iso || "");
+    if (Number.isNaN(d.getTime())) return "—";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function loadLocalSalInfo() {
+    try {
+      const raw = localStorage.getItem(LS_SAL_INFO_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveLocalSalInfo(rows) {
+    try {
+      localStorage.setItem(LS_SAL_INFO_KEY, JSON.stringify(Array.isArray(rows) ? rows : []));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function normalizeSalInfoRow(row) {
+    if (!row || typeof row !== "object") return null;
+    const id = String(row.id || "").trim();
+    const body = String(row.body || "").trim();
+    if (!id || !body) return null;
+    return {
+      id,
+      title: String(row.title || "").trim(),
+      body,
+      actor_key: String(row.actor_key || row.actorKey || "").trim(),
+      actor_name: String(row.actor_name || row.actorName || "").trim(),
+      created_at: String(row.created_at || row.createdAt || new Date().toISOString()),
+      updated_at: String(row.updated_at || row.updatedAt || row.created_at || new Date().toISOString()),
+    };
+  }
+
+  async function fetchSalInfoRemote(supabase) {
+    if (!supabase) return null;
+    const { data, error } = await supabase
+      .from(REMOTE_SAL_INFO_TABLE)
+      .select("id, title, body, actor_key, actor_name, created_at, updated_at")
+      .order("created_at", { ascending: false })
+      .limit(80);
+    if (error) {
+      console.warn("[Saliedēšana.info]", error.message || error);
+      return null;
+    }
+    return (Array.isArray(data) ? data : []).map(normalizeSalInfoRow).filter(Boolean);
+  }
+
+  async function upsertSalInfoRemote(supabase, row) {
+    if (!supabase || !row) return { ok: false };
+    const payload = {
+      id: row.id,
+      title: row.title || "",
+      body: row.body,
+      actor_key: row.actor_key || "",
+      actor_name: row.actor_name || "",
+      created_at: row.created_at,
+      updated_at: row.updated_at || new Date().toISOString(),
+    };
+    const { error } = await supabase.from(REMOTE_SAL_INFO_TABLE).upsert(payload, { onConflict: "id" });
+    if (error) {
+      console.warn("[Saliedēšana.info.save]", error.message || error);
+      return { ok: false, error };
+    }
+    return { ok: true };
+  }
+
+  async function deleteSalInfoRemote(supabase, id) {
+    if (!supabase || !id) return { ok: false };
+    const { error } = await supabase.from(REMOTE_SAL_INFO_TABLE).delete().eq("id", id);
+    if (error) {
+      console.warn("[Saliedēšana.info.delete]", error.message || error);
+      return { ok: false, error };
+    }
+    return { ok: true };
+  }
+
+  function loadLocalIdejuChat() {
+    try {
+      const raw = localStorage.getItem(LS_IDEJU_CHAT_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveLocalIdejuChat(rows) {
+    try {
+      localStorage.setItem(LS_IDEJU_CHAT_KEY, JSON.stringify(Array.isArray(rows) ? rows : []));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function normalizeIdejuChatRow(row) {
+    if (!row || typeof row !== "object") return null;
+    const id = String(row.id || "").trim();
+    const body = String(row.body || "").trim();
+    if (!id || !body) return null;
+    const source = String(row.source || "other").trim();
+    return {
+      id,
+      body,
+      actor_key: String(row.actor_key || row.actorKey || "").trim(),
+      actor_name: String(row.actor_name || row.actorName || "").trim(),
+      source: ["saliedesana", "aktualitates", "other"].includes(source) ? source : "other",
+      created_at: String(row.created_at || row.createdAt || new Date().toISOString()),
+    };
+  }
+
+  async function fetchIdejuChatRemote(supabase) {
+    if (!supabase) return null;
+    const { data, error } = await supabase
+      .from(REMOTE_IDEJU_CHAT_TABLE)
+      .select("id, body, actor_key, actor_name, source, created_at")
+      .order("created_at", { ascending: true })
+      .limit(200);
+    if (error) {
+      console.warn("[Ideju čats]", error.message || error);
+      return null;
+    }
+    return (Array.isArray(data) ? data : []).map(normalizeIdejuChatRow).filter(Boolean);
+  }
+
+  async function insertIdejuChatRemote(supabase, row) {
+    if (!supabase || !row) return { ok: false };
+    const { error } = await supabase.from(REMOTE_IDEJU_CHAT_TABLE).insert({
+      id: row.id,
+      body: row.body,
+      actor_key: row.actor_key,
+      actor_name: row.actor_name || "",
+      source: row.source || "other",
+      created_at: row.created_at,
+    });
+    if (error) {
+      console.warn("[Ideju čats.insert]", error.message || error);
+      return { ok: false, error };
+    }
+    return { ok: true };
+  }
+
+  function mergeIdejuChatLists(localRows, remoteRows) {
+    const map = new Map();
+    for (const r of [...(localRows || []), ...(remoteRows || [])]) {
+      const n = normalizeIdejuChatRow(r);
+      if (!n) continue;
+      const prev = map.get(n.id);
+      if (!prev || String(n.created_at) >= String(prev.created_at)) map.set(n.id, n);
+    }
+    return [...map.values()].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  }
+
+  function ensureIdejuChatModalStyles() {
+    if (typeof document === "undefined") return;
+    if (document.getElementById("pdd-ideju-chat-style")) return;
+    const s = document.createElement("style");
+    s.id = "pdd-ideju-chat-style";
+    s.textContent = `
+      .pdd-ideju-modal-bg { position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:1rem; }
+      .pdd-ideju-modal { width:min(520px,100%); max-height:86vh; display:flex; flex-direction:column; border-radius:16px; overflow:hidden; box-shadow:0 18px 50px rgba(15,23,42,.28); }
+      .pdd-ideju-modal.theme-sal { border:2px solid #fb923c; background:linear-gradient(180deg,#fff,#fff7ed); }
+      .pdd-ideju-modal.theme-akt { border:2px solid #0ea5e9; background:linear-gradient(180deg,#fff,#e0f2fe); }
+      .pdd-ideju-modal-head { display:flex; align-items:center; justify-content:space-between; gap:.5rem; padding:.75rem .9rem; }
+      .pdd-ideju-modal.theme-sal .pdd-ideju-modal-head { background:#ffedd5; color:#9a3412; border-bottom:1px solid #fdba74; }
+      .pdd-ideju-modal.theme-akt .pdd-ideju-modal-head { background:#bae6fd; color:#075985; border-bottom:1px solid #7dd3fc; }
+      .pdd-ideju-modal-head h3 { margin:0; font-size:1rem; }
+      .pdd-ideju-modal-head p { margin:.15rem 0 0; font-size:.74rem; opacity:.9; }
+      .pdd-ideju-close { border:0; background:transparent; font-size:1.2rem; cursor:pointer; line-height:1; color:inherit; }
+      .pdd-ideju-list { flex:1; overflow:auto; padding:.7rem .8rem; display:flex; flex-direction:column; gap:.45rem; min-height:180px; max-height:48vh; background:rgba(255,255,255,.65); }
+      .pdd-ideju-msg { border-radius:12px; padding:.45rem .55rem; max-width:92%; }
+      .pdd-ideju-modal.theme-sal .pdd-ideju-msg { background:#fff; border:1px solid #fed7aa; }
+      .pdd-ideju-modal.theme-akt .pdd-ideju-msg { background:#fff; border:1px solid #bae6fd; }
+      .pdd-ideju-msg.mine { align-self:flex-end; }
+      .pdd-ideju-modal.theme-sal .pdd-ideju-msg.mine { background:#ffedd5; border-color:#fb923c; }
+      .pdd-ideju-modal.theme-akt .pdd-ideju-msg.mine { background:#e0f2fe; border-color:#0ea5e9; }
+      .pdd-ideju-msg-meta { font-size:.68rem; color:#64748b; margin-bottom:.15rem; }
+      .pdd-ideju-msg-body { font-size:.86rem; white-space:pre-wrap; word-break:break-word; color:#0f172a; }
+      .pdd-ideju-form { display:flex; gap:.4rem; padding:.65rem .75rem; border-top:1px solid rgba(0,0,0,.08); background:rgba(255,255,255,.8); }
+      .pdd-ideju-form textarea { flex:1; min-height:44px; max-height:90px; resize:vertical; border-radius:10px; padding:.4rem .5rem; font:inherit; font-size:.86rem; }
+      .pdd-ideju-modal.theme-sal .pdd-ideju-form textarea { border:1px solid #fdba74; }
+      .pdd-ideju-modal.theme-akt .pdd-ideju-form textarea { border:1px solid #7dd3fc; }
+      .pdd-ideju-form button { align-self:flex-end; }
+      .pdd-ideju-empty { margin:auto; font-size:.82rem; color:#64748b; text-align:center; padding:1rem; }
+      .pdd-ideju-status { font-size:.72rem; padding:0 .8rem .35rem; color:#64748b; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  let idejuChatPollTimer = null;
+  let idejuChatChannel = null;
+
+  function closeIdejuChatModal() {
+    if (idejuChatPollTimer) {
+      clearInterval(idejuChatPollTimer);
+      idejuChatPollTimer = null;
+    }
+    const sb = globalThis.__PDD_SUPABASE__ ?? null;
+    if (sb && idejuChatChannel) {
+      try {
+        sb.removeChannel(idejuChatChannel);
+      } catch {
+        /* ignore */
+      }
+      idejuChatChannel = null;
+    }
+    document.getElementById("pdd-ideju-chat-modal-root")?.remove();
+  }
+
+  async function refreshIdejuChatModalList(listEl, statusEl) {
+    if (!listEl) return;
+    const sb = globalThis.__PDD_SUPABASE__ ?? null;
+    const local = loadLocalIdejuChat();
+    let remote = null;
+    if (sb) remote = await fetchIdejuChatRemote(sb);
+    const rows = remote ? mergeIdejuChatLists(local, remote) : local;
+    saveLocalIdejuChat(rows);
+    const me = actorKey();
+    listEl.innerHTML = "";
+    if (!rows.length) {
+      listEl.innerHTML = `<div class="pdd-ideju-empty">Vēl nav ideju — esi pirmais!</div>`;
+    } else {
+      for (const m of rows) {
+        const mine = m.actor_key && m.actor_key === me;
+        const div = document.createElement("div");
+        div.className = `pdd-ideju-msg${mine ? " mine" : ""}`;
+        const who = m.actor_name || m.actor_key || "Lietotājs";
+        const when = formatSalInfoWhen(m.created_at);
+        const src =
+          m.source === "aktualitates" ? " · no Aktualitātēm" : m.source === "saliedesana" ? " · no Saliedēšanas" : "";
+        div.innerHTML = `<div class="pdd-ideju-msg-meta">${escapeHtmlLite(who)} · ${escapeHtmlLite(when)}${escapeHtmlLite(src)}</div><div class="pdd-ideju-msg-body">${escapeHtmlLite(m.body)}</div>`;
+        listEl.appendChild(div);
+      }
+      listEl.scrollTop = listEl.scrollHeight;
+    }
+    if (statusEl) {
+      statusEl.textContent = remote
+        ? "Sinhronizēts ar Supabase"
+        : sb
+          ? "Lokāli (tabula vēl nav pieejama — palaid PIEMEROT_SALIEDESANA_INFO_UN_IDEJU_CHAT.sql)"
+          : "Tikai lokāli";
+    }
+  }
+
+  function escapeHtmlLite(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function openIdejuChatModal(options = {}) {
+    if (typeof document === "undefined") return;
+    ensureIdejuChatModalStyles();
+    closeIdejuChatModal();
+    const source = options.source === "aktualitates" ? "aktualitates" : "saliedesana";
+    const theme = options.theme === "akt" || source === "aktualitates" ? "akt" : "sal";
+    const root = document.createElement("div");
+    root.id = "pdd-ideju-chat-modal-root";
+    root.className = "pdd-ideju-modal-bg";
+    root.innerHTML = `
+      <div class="pdd-ideju-modal theme-${theme}" role="dialog" aria-modal="true" aria-label="Ideju čats">
+        <div class="pdd-ideju-modal-head">
+          <div>
+            <h3>💡 Ideju čats</h3>
+            <p>Katrs var ierakstīt ideju — kā kopīgs čats visai komandai.</p>
+          </div>
+          <button type="button" class="pdd-ideju-close" aria-label="Aizvērt">×</button>
+        </div>
+        <div class="pdd-ideju-list" data-ideju-list></div>
+        <div class="pdd-ideju-status" data-ideju-status></div>
+        <form class="pdd-ideju-form" data-ideju-form>
+          <textarea data-ideju-input placeholder="Uzraksti ideju…" maxlength="2000" required></textarea>
+          <button type="submit" class="btn btn-primary btn-small">Sūtīt</button>
+        </form>
+      </div>
+    `;
+    document.body.appendChild(root);
+    const listEl = root.querySelector("[data-ideju-list]");
+    const statusEl = root.querySelector("[data-ideju-status]");
+    const form = root.querySelector("[data-ideju-form]");
+    const input = root.querySelector("[data-ideju-input]");
+    root.querySelector(".pdd-ideju-close")?.addEventListener("click", closeIdejuChatModal);
+    root.addEventListener("click", (e) => {
+      if (e.target === root) closeIdejuChatModal();
+    });
+    form?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = String(input?.value || "").trim();
+      if (!body) return;
+      const row = {
+        id: salUid(),
+        body,
+        actor_key: actorKey(),
+        actor_name: actorDisplayName(),
+        source,
+        created_at: new Date().toISOString(),
+      };
+      const local = mergeIdejuChatLists(loadLocalIdejuChat(), [row]);
+      saveLocalIdejuChat(local);
+      if (input) input.value = "";
+      await refreshIdejuChatModalList(listEl, statusEl);
+      const sb = globalThis.__PDD_SUPABASE__ ?? null;
+      if (sb) {
+        const out = await insertIdejuChatRemote(sb, row);
+        if (!out.ok && statusEl) {
+          statusEl.textContent =
+            out.error?.message ||
+            "Neizdevās saglabāt Supabase — palaid PIEMEROT_SALIEDESANA_INFO_UN_IDEJU_CHAT.sql";
+        } else {
+          await refreshIdejuChatModalList(listEl, statusEl);
+        }
+      }
+    });
+    void refreshIdejuChatModalList(listEl, statusEl);
+    idejuChatPollTimer = setInterval(() => {
+      void refreshIdejuChatModalList(listEl, statusEl);
+    }, 6000);
+    const sb = globalThis.__PDD_SUPABASE__ ?? null;
+    if (sb) {
+      try {
+        idejuChatChannel = sb
+          .channel(`pdd-ideju-chat-${Date.now()}`)
+          .on("postgres_changes", { event: "*", schema: "public", table: REMOTE_IDEJU_CHAT_TABLE }, () => {
+            void refreshIdejuChatModalList(listEl, statusEl);
+          })
+          .subscribe();
+      } catch {
+        /* ignore */
+      }
+    }
+    setTimeout(() => input?.focus(), 50);
   }
 
   function emptyPoll() {
@@ -1352,6 +1755,12 @@
       const [celProgramAttachments, setCelProgramAttachments] = useState([]);
       const [celProgAttLabel, setCelProgAttLabel] = useState("");
       const [celProgAttUrl, setCelProgAttUrl] = useState("");
+      const [salInfoRows, setSalInfoRows] = useState(() => loadLocalSalInfo());
+      const [salInfoTitle, setSalInfoTitle] = useState("");
+      const [salInfoBody, setSalInfoBody] = useState("");
+      const [salInfoEditingId, setSalInfoEditingId] = useState("");
+      const [salInfoStatus, setSalInfoStatus] = useState("");
+      const [salInfoBusy, setSalInfoBusy] = useState(false);
 
       const monthGrid = useMemo(() => buildMonthGrid(calendarMonth), [calendarMonth]);
 
@@ -1364,6 +1773,109 @@
           }),
         [events]
       );
+
+      useEffect(() => {
+        let cancelled = false;
+        (async () => {
+          const local = loadLocalSalInfo();
+          if (!cancelled) setSalInfoRows(local);
+          if (!supabase) {
+            if (!cancelled) setSalInfoStatus("Tikai lokāli");
+            return;
+          }
+          const remote = await fetchSalInfoRemote(supabase);
+          if (cancelled) return;
+          if (remote) {
+            saveLocalSalInfo(remote);
+            setSalInfoRows(remote);
+            setSalInfoStatus("Sinhronizēts ar Supabase");
+          } else {
+            setSalInfoStatus(
+              "Info sync: tabula nav pieejama — palaid supabase/PIEMEROT_SALIEDESANA_INFO_UN_IDEJU_CHAT.sql",
+            );
+          }
+        })();
+        return () => {
+          cancelled = true;
+        };
+      }, [supabase]);
+
+      async function saveSalInfoPost(e) {
+        e?.preventDefault?.();
+        const title = String(salInfoTitle || "").trim();
+        const body = String(salInfoBody || "").trim();
+        if (!body) {
+          alert("Ieraksti tekstu.");
+          return;
+        }
+        setSalInfoBusy(true);
+        const now = new Date().toISOString();
+        const editing = salInfoEditingId
+          ? salInfoRows.find((r) => r.id === salInfoEditingId)
+          : null;
+        const row = {
+          id: editing?.id || salUid(),
+          title,
+          body,
+          actor_key: editing?.actor_key || actorKey(),
+          actor_name: editing?.actor_name || actorDisplayName(),
+          created_at: editing?.created_at || now,
+          updated_at: now,
+        };
+        const next = [row, ...salInfoRows.filter((r) => r.id !== row.id)].sort((a, b) =>
+          String(b.created_at).localeCompare(String(a.created_at)),
+        );
+        saveLocalSalInfo(next);
+        setSalInfoRows(next);
+        setSalInfoTitle("");
+        setSalInfoBody("");
+        setSalInfoEditingId("");
+        if (supabase) {
+          const out = await upsertSalInfoRemote(supabase, row);
+          if (!out.ok) {
+            setSalInfoStatus(
+              out.error?.message ||
+                "Neizdevās saglabāt Supabase — palaid PIEMEROT_SALIEDESANA_INFO_UN_IDEJU_CHAT.sql",
+            );
+          } else {
+            setSalInfoStatus("Sinhronizēts ar Supabase");
+            const remote = await fetchSalInfoRemote(supabase);
+            if (remote) {
+              saveLocalSalInfo(remote);
+              setSalInfoRows(remote);
+            }
+          }
+        } else {
+          setSalInfoStatus("Saglabāts lokāli");
+        }
+        setSalInfoBusy(false);
+      }
+
+      async function deleteSalInfoPost(id) {
+        const rid = String(id || "").trim();
+        if (!rid) return;
+        if (typeof confirm === "function" && !confirm("Dzēst šo ierakstu?")) return;
+        const next = salInfoRows.filter((r) => r.id !== rid);
+        saveLocalSalInfo(next);
+        setSalInfoRows(next);
+        if (salInfoEditingId === rid) {
+          setSalInfoEditingId("");
+          setSalInfoTitle("");
+          setSalInfoBody("");
+        }
+        if (supabase) {
+          const out = await deleteSalInfoRemote(supabase, rid);
+          if (!out.ok) {
+            setSalInfoStatus(out.error?.message || "Neizdevās dzēst Supabase");
+          }
+        }
+      }
+
+      function startEditSalInfo(row) {
+        setSalInfoEditingId(row.id);
+        setSalInfoTitle(row.title || "");
+        setSalInfoBody(row.body || "");
+      }
 
       useEffect(() => {
         let cancelled = false;
@@ -2782,9 +3294,86 @@
           <div class="sal-head">
             <h2>Saliedēšanas pasākumi, svētku dienas u.c.</h2>
             <p>Jautri, atraktīvi un pārskatāmi pasākumi vienuviet! ✨</p>
+            <div class="sal-head-actions">
+              <button
+                type="button"
+                class="sal-idea-btn"
+                onClick=${() => openIdejuChatModal({ source: "saliedesana", theme: "sal" })}
+              >
+                💡 Vēlos izteikt ideju
+              </button>
+            </div>
           </div>
 
           ${dbMessage ? html`<div class="sal-banner">${dbMessage}</div>` : null}
+
+          <div class="sal-info-panel">
+            <h3>Aktuālā informācija</h3>
+            <p class="sal-info-intro">
+              Analogais logs kā Aktualitātēs — šeit ieraksti ziņas par aktuāliem pasākumiem, atgādinājumus un citu
+              saliedēšanas informāciju (oranžajā dizainā).
+            </p>
+            ${salInfoStatus ? html`<div class="sal-banner">${salInfoStatus}</div>` : null}
+            <form class="sal-info-form" onSubmit=${(e) => void saveSalInfoPost(e)}>
+              <input
+                type="text"
+                placeholder="Virsraksts (neobligāti)"
+                value=${salInfoTitle}
+                onInput=${(e) => setSalInfoTitle(e.target.value)}
+              />
+              <textarea
+                placeholder="Kas šobrīd aktuāli saliedēšanā…"
+                value=${salInfoBody}
+                onInput=${(e) => setSalInfoBody(e.target.value)}
+                required
+              ></textarea>
+              <div class="sal-info-form-actions">
+                <button type="submit" class="btn btn-primary btn-small" disabled=${salInfoBusy}>
+                  ${salInfoEditingId ? "Saglabāt izmaiņas" : "Publicēt"}
+                </button>
+                ${salInfoEditingId
+                  ? html`<button
+                      type="button"
+                      class="btn btn-ghost btn-small"
+                      onClick=${() => {
+                        setSalInfoEditingId("");
+                        setSalInfoTitle("");
+                        setSalInfoBody("");
+                      }}
+                    >
+                      Atcelt
+                    </button>`
+                  : null}
+              </div>
+            </form>
+            <div class="sal-info-list">
+              ${salInfoRows.length
+                ? salInfoRows.map(
+                    (row) => html`
+                      <article key=${row.id} class="sal-info-item">
+                        ${row.title ? html`<strong>${row.title}</strong>` : null}
+                        <div class="sal-info-body">${row.body}</div>
+                        <div class="sal-info-meta">
+                          ${row.actor_name || row.actor_key || "Lietotājs"} · ${formatSalInfoWhen(row.created_at)}
+                        </div>
+                        <div class="sal-info-actions">
+                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => startEditSalInfo(row)}>
+                            Labot
+                          </button>
+                          <button
+                            type="button"
+                            class="btn btn-danger btn-small"
+                            onClick=${() => void deleteSalInfoPost(row.id)}
+                          >
+                            Dzēst
+                          </button>
+                        </div>
+                      </article>
+                    `,
+                  )
+                : html`<p class="sal-subnote">Vēl nav info ierakstu — pievieno pirmo!</p>`}
+            </div>
+          </div>
 
           <div class="sal-cal-wrap">
             <div class="sal-cal-head">
@@ -3821,5 +4410,10 @@
     /** Prombūtnes kalendāra tiltam: lokālie pasākumi (tostarp pirms paneļa mount). */
     loadLocalEvents,
     LS_EVENTS_KEY,
+  };
+
+  window.PDD_IDEJU_CHAT = {
+    open: openIdejuChatModal,
+    close: closeIdejuChatModal,
   };
 })();
