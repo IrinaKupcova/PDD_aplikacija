@@ -3797,7 +3797,7 @@
           ${dbMessage ? html`<div class="sal-banner">${dbMessage}</div>` : null}
 
           <div class="sal-info-panel">
-            <h3>Aktuālā informācija</h3>
+            <h3>Informācija par saliedēšanas iespējām</h3>
             <form class="sal-info-form" onSubmit=${(e) => void saveSalInfoPost(e)}>
               <input
                 type="text"
@@ -4950,6 +4950,42 @@
 
   installGlobalMainCalendarBadgeSync();
 
+  async function syncSaliedesanaNewsCacheForNav() {
+    const sb = globalThis.__PDD_SUPABASE__ ?? null;
+    if (!sb) return;
+    let touched = false;
+    const remoteInfo = await fetchSalInfoRemote(sb);
+    if (remoteInfo) {
+      try {
+        localStorage.setItem(LS_SAL_INFO_KEY, JSON.stringify(remoteInfo));
+        touched = true;
+      } catch {
+        /* ignore */
+      }
+    }
+    const remoteEvents = await fetchRemoteEvents(sb);
+    if (remoteEvents) {
+      try {
+        localStorage.setItem(LS_EVENTS_KEY, JSON.stringify(remoteEvents));
+        touched = true;
+      } catch {
+        /* ignore */
+      }
+      try {
+        globalThis.__PDD_SALIEDESANA_REPAINT_MAIN_CALENDAR__?.();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (touched) {
+      try {
+        window.dispatchEvent(new CustomEvent("pdd:saliedesana-news-changed"));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   window.SALIEDESANA = {
     createSaliedesanaPanel,
     toYmd,
@@ -4957,6 +4993,7 @@
     /** Prombūtnes kalendāra tiltam: lokālie pasākumi (tostarp pirms paneļa mount). */
     loadLocalEvents,
     LS_EVENTS_KEY,
+    syncNewsCacheForNav: syncSaliedesanaNewsCacheForNav,
   };
 
   window.PDD_IDEJU_CHAT = {

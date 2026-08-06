@@ -583,12 +583,32 @@
     return false;
   }
 
+  function pddNormalizeNewsStamp(v) {
+    const s = String(v || "").trim();
+    if (!s) return "";
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+    if (pddIsIsoLikeStamp(s)) return s;
+    return "";
+  }
+
+  function pddNewsStampMs(v) {
+    const norm = pddNormalizeNewsStamp(v);
+    if (!norm) return 0;
+    const ms = new Date(norm).getTime();
+    return Number.isNaN(ms) ? 0 : ms;
+  }
+
   function pddSaliedesanaLatestNewsStamp() {
-    let max = "";
+    let maxMs = 0;
+    let maxStr = "";
     const bump = (v) => {
-      const s = String(v || "").trim();
-      if (!pddIsIsoLikeStamp(s)) return;
-      if (s > max) max = s;
+      const norm = pddNormalizeNewsStamp(v);
+      if (!norm) return;
+      const ms = new Date(norm).getTime();
+      if (Number.isNaN(ms) || ms < maxMs) return;
+      maxMs = ms;
+      maxStr = norm;
     };
     try {
       const events = pddSafeParseJson(localStorage.getItem("pdd_saliedesana_pasakumi_v2") || "[]", []);
@@ -618,7 +638,30 @@
     } catch {
       /* ignore */
     }
-    return max;
+    return maxStr;
+  }
+
+  function pddEnsureSaliedesanaNewsBaseline() {
+    const actorKey = pddSaliedesanaNewsActorKey();
+    const map = pddReadSaliedesanaNewsSeenMap();
+    const raw = String(map[actorKey] || "").trim();
+    if (raw && !pddNormalizeNewsStamp(raw)) {
+      delete map[actorKey];
+      try {
+        localStorage.setItem(SAL_NEWS_SEEN_KEY, JSON.stringify(map));
+      } catch {
+        /* ignore */
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(map, actorKey)) return;
+    const latest = pddSaliedesanaLatestNewsStamp();
+    if (!latest) return;
+    map[actorKey] = latest;
+    try {
+      localStorage.setItem(SAL_NEWS_SEEN_KEY, JSON.stringify(map));
+    } catch {
+      /* ignore */
+    }
   }
 
   function pddReadSaliedesanaNewsSeenMap() {
@@ -635,18 +678,16 @@
   function pddGetSaliedesanaNewsSeenStamp() {
     const map = pddReadSaliedesanaNewsSeenMap();
     const raw = String(map[pddSaliedesanaNewsActorKey()] || "").trim();
-    // Vecā loģika glabāja arī UUID — tie sabojā salīdzinājumu ar datumiem.
-    if (!pddIsIsoLikeStamp(raw)) return "";
-    return raw;
+    return pddNormalizeNewsStamp(raw);
   }
 
   function pddShouldShowSaliedesanaNewBadge() {
+    pddEnsureSaliedesanaNewsBaseline();
     const latest = pddSaliedesanaLatestNewsStamp();
     if (!latest) return false;
     const seen = pddGetSaliedesanaNewsSeenStamp();
-    // Bez iepriekšējās atzīmes nerādam NEW (novērš “veco” saturu kā jaunumu pirmajā ielādē).
     if (!seen) return false;
-    return latest !== seen && latest > seen;
+    return pddNewsStampMs(latest) > pddNewsStampMs(seen);
   }
 
   function pddMarkSaliedesanaNewsSeen() {
@@ -1149,6 +1190,7 @@
     createAppShellWithNav,
     shouldShowSaliedesanaNewBadge: pddShouldShowSaliedesanaNewBadge,
     markSaliedesanaNewsSeen: pddMarkSaliedesanaNewsSeen,
+    ensureSaliedesanaNewsBaseline: pddEnsureSaliedesanaNewsBaseline,
     latestSaliedesanaNewsStamp: pddSaliedesanaLatestNewsStamp,
     getSaliedesanaNewsSeenStamp: pddGetSaliedesanaNewsSeenStamp,
   };
