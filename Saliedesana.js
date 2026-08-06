@@ -983,7 +983,7 @@
     root.innerHTML = `
       <div class="pdd-ideju-float-panel" data-ideju-float-panel>
         <button type="button" class="pdd-ideju-float-cta" data-ideju-float-cta>
-          💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
+          💡 Čats — vēlos kaut ko uzrakstīt
         </button>
         <div class="pdd-ideju-float-preview-host" data-ideju-float-preview></div>
         <div class="pdd-ideju-float-tools">
@@ -1090,7 +1090,7 @@
     const me = actorKey();
     listEl.innerHTML = "";
     if (!rows.length) {
-      listEl.innerHTML = `<div class="pdd-ideju-empty">Vēl nav ideju — esi pirmais!</div>`;
+      listEl.innerHTML = `<div class="pdd-ideju-empty">Vēl nav ziņu — esi pirmais!</div>`;
     } else {
       for (const m of rows) {
         const mine = m.actor_key && m.actor_key === me;
@@ -1136,8 +1136,8 @@
       <div class="pdd-ideju-modal theme-${theme}" role="dialog" aria-modal="true" aria-label="Ideju čats">
         <div class="pdd-ideju-modal-head">
           <div>
-            <h3>💡 Ideju čats</h3>
-            <p>Katrs var ierakstīt ideju — kā kopīgs čats visai komandai.</p>
+            <h3>💡 Čats</h3>
+            <p>Kopīgs čats visai komandai — var rakstīt jebko.</p>
           </div>
           <button type="button" class="pdd-ideju-close" aria-label="Aizvērt">×</button>
         </div>
@@ -1145,7 +1145,7 @@
         <div class="pdd-ideju-status" data-ideju-status></div>
         <div class="pdd-ideju-form-wrap">
           <form class="pdd-ideju-form" data-ideju-form>
-            <textarea data-ideju-input placeholder="Var ielīmēt arī screenshot (Ctrl+V)." maxlength="2000"></textarea>
+            <textarea data-ideju-input placeholder="Ziņa… (Ctrl+V — ielīmēt screenshot)" maxlength="2000"></textarea>
             <button type="submit" class="btn btn-primary btn-small">Sūtīt</button>
           </form>
           <div class="pdd-ideju-pending" data-ideju-pending></div>
