@@ -1094,13 +1094,13 @@ async function fetchActiveAktualitatesViaRest() {
     } catch {
       /* ignore */
     }
-  }, 10000);
+  }, 45000);
   try {
     const params = new URLSearchParams();
     params.set("select", "*");
     params.set("Sakums", `lte.${today}`);
     params.set("Beigas", `gte.${today}`);
-    params.set("order", "Sakums.desc,Beigas.desc");
+    params.set("order", "Sakums.desc");
     const resp = await fetch(`${base}/rest/v1/AKTUALITATES?${params}`, {
       method: "GET",
       headers: { apikey: key, Authorization: `Bearer ${key}` },
@@ -1111,13 +1111,28 @@ async function fetchActiveAktualitatesViaRest() {
       throw new Error(txt || `HTTP ${resp.status}`);
     }
     const data = await resp.json();
-    return (Array.isArray(data) ? data : []).map((row) => rowFromDb(row, new Map())).filter(Boolean);
+    const list = (Array.isArray(data) ? data : []).map((row) => rowFromDb(row, new Map())).filter(Boolean);
+    try {
+      // Lielus base64 attēlus localStorage bieži nevar ietilpināt — kešojam tikai tad, ja ietilpst.
+      if (list.length) saveAktualitates(mergeAktualitatesPreferRemote(loadAktualitates(), list));
+    } catch {
+      /* ignore */
+    }
+    return list;
   } finally {
     clearTimeout(timer);
   }
 }
 
 async function fetchActiveAktualitatesFromSupabase(sb) {
+  // Vispirms REST — ātri un stabili (arī ar lieliem attēliem). supabase-js paliek kā rezerve.
+  try {
+    const viaRest = await fetchActiveAktualitatesViaRest();
+    if (Array.isArray(viaRest) && viaRest.length > 0) return viaRest;
+  } catch (e) {
+    console.warn("[aktualitates.rest]", e?.message || e);
+  }
+  if (!sb) return [];
   try {
     const t = await resolveAktualitatesTableName(sb);
     const today = ymd(new Date());
@@ -1130,7 +1145,7 @@ async function fetchActiveAktualitatesFromSupabase(sb) {
         .order("Sakums", { ascending: false })
         .order("Beigas", { ascending: false }),
       new Promise((resolve) =>
-        setTimeout(() => resolve({ data: null, error: { message: "Aktualitātes noildza" } }), 8000),
+        setTimeout(() => resolve({ data: null, error: { message: "Aktualitātes noildza" } }), 15000),
       ),
     ]);
     if (!error && Array.isArray(data)) {
@@ -1155,13 +1170,7 @@ async function fetchActiveAktualitatesFromSupabase(sb) {
   } catch (e) {
     console.warn("[aktualitates.sb]", e?.message || e);
   }
-  const viaRest = await fetchActiveAktualitatesViaRest();
-  try {
-    if (viaRest.length) saveAktualitates(mergeAktualitatesPreferRemote(loadAktualitates(), viaRest));
-  } catch {
-    /* ignore */
-  }
-  return viaRest;
+  return [];
 }
 
 function mergeAktualitatesPreferRemote(localRows, remoteRows) {
@@ -1906,6 +1915,8 @@ function htmlHasAttachments(htmlRaw) {
   if (!s) return false;
   if (/data-akt-attachment/i.test(s)) return true;
   if (/pdd-aktualitates-files/i.test(s)) return true;
+  if (/data:image\//i.test(s)) return true;
+  if (/<img\b/i.test(s)) return true;
   return false;
 }
 
@@ -2207,6 +2218,7 @@ window.PDDSodien = {
   saveAktualitates,
   visibleAktualitatesActive,
   fetchActiveAktualitatesFromSupabase,
+  fetchActiveAktualitatesViaRest,
   fetchAllAktualitatesFromSupabase,
   primeAktualitatesTable,
   ensureSodienAktStyleOnce,
