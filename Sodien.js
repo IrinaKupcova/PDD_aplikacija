@@ -277,9 +277,18 @@ async function resolveAktualitatesTableName(sb) {
   if (resolvedAktualitatesTableName) return resolvedAktualitatesTableName;
   if (!sb) throw new Error("Nav Supabase klienta");
   let lastErr = null;
+  const probe = async (t, cols) => {
+    const q = sb.from(t).select(cols).limit(1);
+    return Promise.race([
+      q,
+      new Promise((resolve) =>
+        setTimeout(() => resolve({ data: null, error: { message: "Tabulas pārbaude noildza" } }), 3500),
+      ),
+    ]);
+  };
   // Vispirms tabula, kurā ir kolonna „Autors” (citādi `select *` var atrast vecāku AKTUALITĀTES bez autora).
   for (const t of AKTUALITATES_NAME_CANDIDATES) {
-    const { error } = await sb.from(t).select("id, Autors").limit(1);
+    const { error } = await probe(t, "id, Autors");
     if (!error) {
       resolvedAktualitatesTableName = t;
       if (typeof globalThis !== "undefined") globalThis.__PDD_AKTUALITATES_TABLE__ = t;
@@ -288,7 +297,7 @@ async function resolveAktualitatesTableName(sb) {
     lastErr = error;
   }
   for (const t of AKTUALITATES_NAME_CANDIDATES) {
-    const { error } = await sb.from(t).select("*").limit(1);
+    const { error } = await probe(t, "*");
     if (!error) {
       resolvedAktualitatesTableName = t;
       if (typeof globalThis !== "undefined") globalThis.__PDD_AKTUALITATES_TABLE__ = t;
@@ -1080,8 +1089,36 @@ async function fetchActiveAktualitatesFromSupabase(sb) {
     .order("Sakums", { ascending: false })
     .order("Beigas", { ascending: false });
   if (error) throw error;
-  const nameMap = await fetchAuthorNameMap(sb, data ?? []);
-  return (data ?? []).map((row) => rowFromDb(row, nameMap)).filter(Boolean);
+  // Autoru vārdus mēģinām ātri; neļaujam karāties un bloķēt mājas ekrānu.
+  let nameMap = new Map();
+  try {
+    nameMap = await Promise.race([
+      fetchAuthorNameMap(sb, data ?? []),
+      new Promise((resolve) => setTimeout(() => resolve(new Map()), 2500)),
+    ]);
+  } catch {
+    nameMap = new Map();
+  }
+  const list = (data ?? []).map((row) => rowFromDb(row, nameMap)).filter(Boolean);
+  try {
+    if (list.length) saveAktualitates(mergeAktualitatesPreferRemote(loadAktualitates(), list));
+  } catch {
+    /* ignore */
+  }
+  return list;
+}
+
+function mergeAktualitatesPreferRemote(localRows, remoteRows) {
+  const map = new Map();
+  for (const r of [...(localRows || []), ...(remoteRows || [])]) {
+    if (!r || !r.id) continue;
+    map.set(String(r.id), r);
+  }
+  // Remote pārraksta to pašu id.
+  for (const r of remoteRows || []) {
+    if (r?.id) map.set(String(r.id), r);
+  }
+  return [...map.values()];
 }
 
 /**
@@ -2112,6 +2149,7 @@ window.PDDSodien = {
   renderTodayInfo,
   htmlHasAttachments,
   loadAktualitates,
+  saveAktualitates,
   visibleAktualitatesActive,
   fetchActiveAktualitatesFromSupabase,
   fetchAllAktualitatesFromSupabase,

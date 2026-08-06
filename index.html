@@ -539,19 +539,19 @@
       <script defer src="./Komanda.js?v=202606182"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608088"></script>
+      <script defer src="./Saliedesana.js?v=202608089"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
-      <script defer src="./Sodien.js?v=202608075"></script>
+      <script defer src="./Sodien.js?v=202608076"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202608081"></script>
+      <script defer src="./Navigacija.js?v=202608082"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202608088"></script>
+      <script defer src="./ProcesuVadiba.js?v=202608089"></script>
       <script defer src="./ProcesuVadibaPieslegums.js?v=202606284"></script>
-      <script defer src="./PakalpojumuVadiba.js?v=202608088"></script>
+      <script defer src="./PakalpojumuVadiba.js?v=202608089"></script>
       <script defer src="./PakalpojumuVadibaPieslegums.js?v=202607310"></script>
 
       <script type="module">
@@ -1981,12 +1981,19 @@
 
         async function ensureDbReadableSession() {
           if (isLocalMode() || !supabase) return true;
+          // Tikai getSession — NEgaidām signInAnonymously (tas var nobloķēt visu supabase-js rindu).
           try {
-            const s1 = await supabase.auth.getSession();
-            if (!s1.error && s1.data?.session?.access_token) return true;
+            const s1 = await Promise.race([
+              supabase.auth.getSession(),
+              new Promise((resolve) =>
+                setTimeout(() => resolve({ data: { session: null }, error: null, __softTimeout: true }), 2500),
+              ),
+            ]);
+            if (!s1?.__softTimeout && !s1.error && s1.data?.session?.access_token) return true;
           } catch (e) {
             console.warn("[auth.session]", e?.message || e);
           }
+          // Anon auth fonā — lasīšana var turpināties ar publishable/anon atslēgu.
           if (!ensureAuthPromise) {
             ensureAuthPromise = (async () => {
               try {
@@ -1999,18 +2006,7 @@
               ensureAuthPromise = null;
             });
           }
-          try {
-            await ensureAuthPromise;
-          } catch (e) {
-            console.warn("[auth.anon.wait]", e?.message || e);
-          }
-          try {
-            const s2 = await supabase.auth.getSession();
-            if (!s2.error && s2.data?.session?.access_token) return true;
-          } catch (e) {
-            console.warn("[auth.session2]", e?.message || e);
-          }
-          return false;
+          return true;
         }
         globalThis.__PDD_ENSURE_DB_SESSION__ = ensureDbReadableSession;
         if (supabase && configured() && !isLocalMode() && !TIKAI_VIENKARSI_SKATS) {
@@ -3221,15 +3217,15 @@
               return;
             }
             try {
-              // Soft timeout: nebloķējam mājas ekrānu, ja auth karājas.
+              // Soft timeout: nebloķējam mājas ekrānu, ja auth/DB karājas.
               try {
-                await withTimeout(ensureDbReadableSession(), 8000, "DB sesija");
+                await withTimeout(ensureDbReadableSession(), 3000, "DB sesija");
               } catch (e) {
                 console.warn("[aktualitates.ensure]", e?.message || e);
               }
               const list = await withTimeout(
                 V.fetchActiveAktualitatesFromSupabase(sb),
-                12000,
+                10000,
                 "Aktualitātes",
               );
               const remote = Array.isArray(list) ? list : null;
@@ -3237,13 +3233,26 @@
               // Tukšu remote nepārrakstām, ja lokāli ir saturs (sesijas/RLS kļūda).
               if (remote && (remote.length > 0 || local.length === 0)) {
                 setSodienRows(remote);
+                if (remote.length > 0) {
+                  try {
+                    V.saveAktualitates?.(remote);
+                  } catch {
+                    /* ignore */
+                  }
+                }
               } else {
                 setSodienRows(local);
               }
               setSodienErr(null);
             } catch (e) {
               console.warn("[aktualitates.refresh]", e?.message || e);
-              setSodienErr(e?.message || String(e));
+              // Timeout / tīkla kļūda — nerādām tehnisku «12000 ms» joslu; rādām lokālo kešu.
+              const msg = String(e?.message || e || "");
+              if (/ms\)\s*$/i.test(msg) || /timeout/i.test(msg) || /AbortError/i.test(msg)) {
+                setSodienErr("Nav savienojuma ar datu serveri — rādām lokālos datus. Mēģini Ctrl+F5 vai pārbaudi Supabase projektu.");
+              } else {
+                setSodienErr(msg);
+              }
               setSodienRows(localFallback());
             }
           }, []);

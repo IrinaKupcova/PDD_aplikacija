@@ -299,16 +299,23 @@
   }
 
   async function readRemoteRow(sb, table) {
-    const { data, error } = await sb
-      .from(table)
-      .select("state, updated_at, updated_by")
-      .eq("id", REMOTE_ROW_ID)
-      .maybeSingle();
-    if (error) {
-      console.warn(`[Procesu vadība] DB lasīšana (${table})`, error);
-      return { ok: false, error, data: null };
+    try {
+      const result = await Promise.race([
+        sb.from(table).select("state, updated_at, updated_by").eq("id", REMOTE_ROW_ID).maybeSingle(),
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ data: null, error: { message: `DB lasīšana noildza (${table})` } }), 8000),
+        ),
+      ]);
+      const { data, error } = result || {};
+      if (error) {
+        console.warn(`[Procesu vadība] DB lasīšana (${table})`, error);
+        return { ok: false, error, data: null };
+      }
+      return { ok: true, error: null, data };
+    } catch (e) {
+      console.warn(`[Procesu vadība] DB lasīšana (${table})`, e);
+      return { ok: false, error: e, data: null };
     }
-    return { ok: true, error: null, data };
   }
 
   /**
