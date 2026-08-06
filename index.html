@@ -539,11 +539,11 @@
       <script defer src="./Komanda.js?v=202606182"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608086"></script>
+      <script defer src="./Saliedesana.js?v=202608087"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
-      <script defer src="./Sodien.js?v=202608073"></script>
+      <script defer src="./Sodien.js?v=202608074"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202608079"></script>
+      <script defer src="./Navigacija.js?v=202608080"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
@@ -1982,19 +1982,15 @@
         async function ensureDbReadableSession() {
           if (isLocalMode() || !supabase) return true;
           try {
-            const s1 = await withTimeout(supabase.auth.getSession(), 4000, "Sesija");
+            const s1 = await supabase.auth.getSession();
             if (!s1.error && s1.data?.session?.access_token) return true;
-          } catch {
-            /* continue to anon */
+          } catch (e) {
+            console.warn("[auth.session]", e?.message || e);
           }
           if (!ensureAuthPromise) {
             ensureAuthPromise = (async () => {
               try {
-                const { error: anonErr } = await withTimeout(
-                  supabase.auth.signInAnonymously(),
-                  5000,
-                  "Anon auth",
-                );
+                const { error: anonErr } = await supabase.auth.signInAnonymously();
                 if (anonErr) console.warn("[auth.anon]", anonErr);
               } catch (e) {
                 console.warn("[auth.anon]", e?.message || e);
@@ -2004,15 +2000,15 @@
             });
           }
           try {
-            await withTimeout(ensureAuthPromise, 6000, "Anon auth wait");
+            await ensureAuthPromise;
           } catch (e) {
             console.warn("[auth.anon.wait]", e?.message || e);
           }
           try {
-            const s2 = await withTimeout(supabase.auth.getSession(), 4000, "Sesija 2");
+            const s2 = await supabase.auth.getSession();
             if (!s2.error && s2.data?.session?.access_token) return true;
-          } catch {
-            /* ignore */
+          } catch (e) {
+            console.warn("[auth.session2]", e?.message || e);
           }
           return false;
         }
@@ -3200,33 +3196,48 @@
 
         function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenSaliedesana, onOpenProcesuVadiba, onOpenPakalpojumuVadiba, onOpenTodayTask, absencesToday }) {
           const [sodienRows, setSodienRows] = useState(() => {
+            // Uzreiz lokālā keša — nekad nekarājamies uz «Ielādē…», kamēr Supabase atbild.
             try {
-              if (TIKAI_VIENKARSI_SKATS || isLocalMode() || !configured() || !globalThis.__PDD_SUPABASE__) {
-                return globalThis.PDDSodien?.visibleAktualitatesActive?.() ?? [];
-              }
+              return globalThis.PDDSodien?.visibleAktualitatesActive?.() ?? [];
             } catch {
-              /* ignore */
+              return [];
             }
-            return undefined;
           });
           const [sodienErr, setSodienErr] = useState(null);
           const [todayTaskItems, setTodayTaskItems] = useState([]);
           const refreshSodienAktualitates = useCallback(async () => {
             const V = globalThis.PDDSodien;
             const sb = globalThis.__PDD_SUPABASE__;
+            const localFallback = () => {
+              try {
+                return V?.visibleAktualitatesActive?.() ?? [];
+              } catch {
+                return [];
+              }
+            };
             if (!V?.fetchActiveAktualitatesFromSupabase || !sb || TIKAI_VIENKARSI_SKATS || isLocalMode()) {
-              setSodienRows(V?.visibleAktualitatesActive?.() ?? []);
+              setSodienRows(localFallback());
               setSodienErr(null);
               return;
             }
             try {
-              await ensureDbReadableSession();
-              const list = await V.fetchActiveAktualitatesFromSupabase(sb);
-              setSodienRows(list);
+              // Soft timeout: nebloķējam mājas ekrānu, ja auth karājas.
+              try {
+                await withTimeout(ensureDbReadableSession(), 8000, "DB sesija");
+              } catch (e) {
+                console.warn("[aktualitates.ensure]", e?.message || e);
+              }
+              const list = await withTimeout(
+                V.fetchActiveAktualitatesFromSupabase(sb),
+                12000,
+                "Aktualitātes",
+              );
+              setSodienRows(Array.isArray(list) ? list : localFallback());
               setSodienErr(null);
             } catch (e) {
+              console.warn("[aktualitates.refresh]", e?.message || e);
               setSodienErr(e?.message || String(e));
-              setSodienRows(V?.visibleAktualitatesActive?.() ?? []);
+              setSodienRows(localFallback());
             }
           }, []);
           useEffect(() => {
@@ -8401,7 +8412,13 @@
             [pinnedSections]
           );
           const [pendingCitsNav, setPendingCitsNav] = useState(false);
-          const [homeAbsencesSnapshot, setHomeAbsencesSnapshot] = useState([]);
+          const [homeAbsencesSnapshot, setHomeAbsencesSnapshot] = useState(() => {
+            try {
+              return getLocalAbsences();
+            } catch {
+              return [];
+            }
+          });
           const refreshAppChangesBadge = useCallback(async () => {
             try {
               if (!appChangesBadgeMayEvaluate()) {
@@ -8448,58 +8465,81 @@
             let cancelled = false;
             deferNonCritical(async () => {
               if (!session?.user || !supabase) return;
-              if (homeAbsencesSnapshot.length > 0) return;
-              await ensureDbReadableSession();
-              const { data: rows } = await supabase.from("prombutnes_dati").select("*");
-              const { data: profs } = await supabase.from("users").select("*");
-              const { data: typesRows } = await supabase.from("prombutnes_veidi").select("*");
-              if (cancelled) return;
-              const pmap = new Map((profs ?? []).map((p) => [String(p.id), normalizeTeamUserRecord(p)]));
-              const tmap = new Map(
-                (typesRows ?? []).map((t) => {
-                  const nt = normalizeAbsenceTypeRecord(t);
-                  return [String(nt.id), nt];
-                })
-              );
-              const enrichFn = globalThis.PDDPrombutnesVesture?.enrichAbsenceRow;
-              const enrichCtx = {
-                userId: session?.user?.id ?? "",
-                sessionEmail: String(session?.user?.email ?? "").trim(),
-                actorDisplayName: String(globalThis.__PDD_ACTOR_DISPLAY_NAME__ ?? "").trim(),
-              };
-              const list = (rows ?? [])
-                .map((r) => {
-                  detectAbsenceColumnsFromRow(r);
-                  return normalizeAbsenceRecord(r);
-                })
-                .map((r) => {
-                  if (typeof enrichFn === "function") {
-                    const enriched = enrichFn(r, pmap, enrichCtx);
-                    return {
-                      ...enriched,
-                      type: tmap.get(String(enriched.type_id ?? "")) ?? null,
-                    };
+              try {
+                try {
+                  await withTimeout(ensureDbReadableSession(), 8000, "DB sesija");
+                } catch (e) {
+                  console.warn("[home.absences.ensure]", e?.message || e);
+                }
+                let rows = null;
+                const r1 = await supabase.from("prombutnes_dati").select("*");
+                if (r1.error) {
+                  const rr = await fetchTableDirectFromRest("prombutnes_dati");
+                  if (rr.error) {
+                    console.warn("[home.absences]", rr.error?.message || rr.error || r1.error);
+                    return;
                   }
-                  const employee = pmap.get(String(r.user_id)) ?? null;
-                  const dn = userDisplayName(employee);
-                  const employeeName =
-                    dn ||
-                    String(r["Vārds uzvārds"] ?? r["Vards uzvards"] ?? "").trim() ||
-                    String(r.user_id ?? "").trim();
-                  return {
-                    ...r,
-                    employee: employee
-                      ? { ...employee, [COL_USER_NAME]: employeeName }
-                      : { id: r.user_id, [COL_USER_NAME]: employeeName },
-                    type: tmap.get(String(r.type_id ?? "")) ?? null,
-                  };
-                });
-              setHomeAbsencesSnapshot(list);
+                  rows = rr.data;
+                } else {
+                  rows = r1.data;
+                }
+                const { data: profs } = await supabase.from("users").select("*");
+                const { data: typesRows } = await supabase.from("prombutnes_veidi").select("*");
+                if (cancelled) return;
+                const pmap = new Map((profs ?? []).map((p) => [String(p.id), normalizeTeamUserRecord(p)]));
+                const tmap = new Map(
+                  (typesRows ?? []).map((t) => {
+                    const nt = normalizeAbsenceTypeRecord(t);
+                    return [String(nt.id), nt];
+                  })
+                );
+                const enrichFn = globalThis.PDDPrombutnesVesture?.enrichAbsenceRow;
+                const enrichCtx = {
+                  userId: session?.user?.id ?? "",
+                  sessionEmail: String(session?.user?.email ?? "").trim(),
+                  actorDisplayName: String(globalThis.__PDD_ACTOR_DISPLAY_NAME__ ?? "").trim(),
+                };
+                const list = (rows ?? [])
+                  .map((r) => {
+                    detectAbsenceColumnsFromRow(r);
+                    return normalizeAbsenceRecord(r);
+                  })
+                  .map((r) => {
+                    if (typeof enrichFn === "function") {
+                      const enriched = enrichFn(r, pmap, enrichCtx);
+                      return {
+                        ...enriched,
+                        type: tmap.get(String(enriched.type_id ?? "")) ?? null,
+                      };
+                    }
+                    const employee = pmap.get(String(r.user_id)) ?? null;
+                    const dn = userDisplayName(employee);
+                    const employeeName =
+                      dn ||
+                      String(r["Vārds uzvārds"] ?? r["Vards uzvards"] ?? "").trim() ||
+                      String(r.user_id ?? "").trim();
+                    return {
+                      ...r,
+                      employee: employee
+                        ? { ...employee, [COL_USER_NAME]: employeeName }
+                        : { id: r.user_id, [COL_USER_NAME]: employeeName },
+                      type: tmap.get(String(r.type_id ?? "")) ?? null,
+                    };
+                  });
+                setHomeAbsencesSnapshot(list);
+                try {
+                  setLocalAbsences(list.map((r) => normalizeAbsenceRecord(r)));
+                } catch {
+                  /* ignore */
+                }
+              } catch (e) {
+                console.warn("[home.absences]", e?.message || e);
+              }
             });
             return () => {
               cancelled = true;
             };
-          }, [session?.user, homeAbsencesSnapshot.length]);
+          }, [session?.user]);
           useEffect(() => {
             viewRef.current = view;
           }, [view]);
