@@ -1968,21 +1968,52 @@
           return false;
         }
 
+        function withTimeout(promise, ms, label = "Timeout") {
+          const wait = Math.max(1000, Number(ms) || 12000);
+          let timer = null;
+          const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${label} (${wait} ms)`)), wait);
+          });
+          return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+            if (timer) clearTimeout(timer);
+          });
+        }
+
         async function ensureDbReadableSession() {
           if (isLocalMode() || !supabase) return true;
-          const s1 = await supabase.auth.getSession();
-          if (!s1.error && s1.data?.session?.access_token) return true;
+          try {
+            const s1 = await withTimeout(supabase.auth.getSession(), 4000, "Sesija");
+            if (!s1.error && s1.data?.session?.access_token) return true;
+          } catch {
+            /* continue to anon */
+          }
           if (!ensureAuthPromise) {
             ensureAuthPromise = (async () => {
-              const { error: anonErr } = await supabase.auth.signInAnonymously();
-              if (anonErr) console.warn("[auth.anon]", anonErr);
+              try {
+                const { error: anonErr } = await withTimeout(
+                  supabase.auth.signInAnonymously(),
+                  5000,
+                  "Anon auth",
+                );
+                if (anonErr) console.warn("[auth.anon]", anonErr);
+              } catch (e) {
+                console.warn("[auth.anon]", e?.message || e);
+              }
             })().finally(() => {
               ensureAuthPromise = null;
             });
           }
-          await ensureAuthPromise;
-          const s2 = await supabase.auth.getSession();
-          if (!s2.error && s2.data?.session?.access_token) return true;
+          try {
+            await withTimeout(ensureAuthPromise, 6000, "Anon auth wait");
+          } catch (e) {
+            console.warn("[auth.anon.wait]", e?.message || e);
+          }
+          try {
+            const s2 = await withTimeout(supabase.auth.getSession(), 4000, "Sesija 2");
+            if (!s2.error && s2.data?.session?.access_token) return true;
+          } catch {
+            /* ignore */
+          }
           return false;
         }
         globalThis.__PDD_ENSURE_DB_SESSION__ = ensureDbReadableSession;
@@ -2007,20 +2038,40 @@
           return headers;
         }
 
-        async function fetchUsersDirectFromRest() {
+        async function fetchUsersDirectFromRest({ timeoutMs = 10000, skipEnsure = false } = {}) {
           const cfg = loadConfig();
           const baseUrl = normalizeProjectUrl(cfg.url);
           const apiKey = String(cfg.key || "").trim();
           if (!baseUrl || !apiKey) return { data: null, error: new Error("Missing Supabase config") };
-          if (!isLocalMode() && supabase) await ensureDbReadableSession();
+          if (!skipEnsure && !isLocalMode() && supabase) {
+            try {
+              await withTimeout(ensureDbReadableSession(), Math.min(6000, timeoutMs), "DB sesija");
+            } catch (e) {
+              console.warn("[auth.ensure]", e?.message || e);
+            }
+          }
+          const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+          const timer = setTimeout(() => {
+            try {
+              ctrl?.abort?.();
+            } catch {
+              /* ignore */
+            }
+          }, Math.max(2000, Number(timeoutMs) || 10000));
           try {
-            const headers = await restAuthHeaders();
+            let headers = { apikey: apiKey, Authorization: `Bearer ${apiKey}` };
+            try {
+              headers = await restAuthHeaders();
+            } catch {
+              /* use anon key */
+            }
             const resp = await fetch(
               `${baseUrl}/rest/v1/users?select=*&order=${encodeURIComponent(COL_USER_NAME)}.asc`,
               {
                 method: "GET",
                 headers,
-              }
+                signal: ctrl?.signal,
+              },
             );
             if (!resp.ok) {
               const txt = await resp.text();
@@ -2030,6 +2081,52 @@
             return { data: Array.isArray(rows) ? rows : [], error: null };
           } catch (e) {
             return { data: null, error: e };
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+
+        async function lookupUserIdByEmailRest(email) {
+          const entered = String(email || "").trim().toLowerCase();
+          const cfg = loadConfig();
+          const baseUrl = normalizeProjectUrl(cfg.url);
+          const apiKey = String(cfg.key || "").trim();
+          if (!baseUrl || !apiKey || !entered) return { uid: "", error: new Error("Missing config") };
+          const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+          const timer = setTimeout(() => {
+            try {
+              ctrl?.abort?.();
+            } catch {
+              /* ignore */
+            }
+          }, 8000);
+          try {
+            const headers = {
+              apikey: apiKey,
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            };
+            const resp = await fetch(`${baseUrl}/rest/v1/rpc/pdd_lookup_user_by_email`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ p_email: entered }),
+              signal: ctrl?.signal,
+            });
+            if (!resp.ok) {
+              const txt = await resp.text();
+              return { uid: "", error: new Error(txt || `HTTP ${resp.status}`) };
+            }
+            const rows = await resp.json();
+            if (Array.isArray(rows) && rows.length > 0) {
+              const r0 = rows[0];
+              const uid = String(r0?.user_id ?? r0?.pdd_lookup_user_by_email ?? "").trim();
+              return { uid, error: null };
+            }
+            return { uid: "", error: null };
+          } catch (e) {
+            return { uid: "", error: e };
+          } finally {
+            clearTimeout(timer);
           }
         }
 
@@ -2828,17 +2925,6 @@
           return "Neizdevās. Mēģini vēlreiz.";
         }
 
-        function withTimeout(promise, ms, label = "Timeout") {
-          const wait = Math.max(1000, Number(ms) || 12000);
-          let timer = null;
-          const timeout = new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`${label} (${wait} ms)`)), wait);
-          });
-          return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
-            if (timer) clearTimeout(timer);
-          });
-        }
-
         function AuthScreen() {
           const [email, setEmail] = useState("");
           const [busy, setBusy] = useState(false);
@@ -2846,91 +2932,80 @@
           async function onSubmit(e) {
             e.preventDefault();
             setMessage(null);
-            if (!supabase) {
-              setMessage("Pieteikšanās šobrīd nav pieejama.");
+            const entered = String(email || "").trim().toLowerCase();
+            if (!entered || !entered.includes("@")) {
+              setMessage("Ievadi korektu darba e-pastu.");
               return;
             }
             setBusy(true);
             try {
-              const entered = String(email || "").trim().toLowerCase();
-              if (!entered || !entered.includes("@")) {
-                setMessage("Ievadi korektu darba e-pastu.");
-                return;
-              }
+              // 1) Uzreiz — lokālā komandas keša (bez tīkla).
               let uid = "";
-              let rpcErr = null;
-              try {
-                const rpcRes = await withTimeout(
-                  supabase.rpc("pdd_lookup_user_by_email", { p_email: entered }),
-                  12000,
-                  "Lietotāja meklēšana",
-                );
-                rpcErr = rpcRes?.error || null;
-                const rpcRows = rpcRes?.data;
-                if (!rpcErr && Array.isArray(rpcRows) && rpcRows.length > 0) {
-                  const r0 = rpcRows[0];
-                  uid = String(r0?.user_id ?? r0?.pdd_lookup_user_by_email ?? "").trim();
-                }
-              } catch (err) {
-                console.warn("[auth.rpc]", err?.message || err);
-                rpcErr = err;
+              let fromLocal = findTeamUserByEmail(entered);
+              if (fromLocal && !isGuestRole(fromLocal)) {
+                uid = String(fromLocal.id || "").trim();
               }
-              if (!uid) {
-                let data = null;
-                let error = null;
-                try {
-                  const sel = await withTimeout(
-                    supabase.from("users").select("*"),
-                    15000,
-                    "Lietotāju saraksts",
-                  );
-                  data = sel?.data;
-                  error = sel?.error || null;
-                } catch (err) {
-                  console.warn("[auth.users]", err?.message || err);
-                  error = err;
-                }
-                if (error) {
-                  setMessage(authUserMessage(error.message || error));
-                  return;
-                }
-                const list = Array.isArray(data) ? data : [];
-                const user = findUserByEmailInList(list, entered) ?? findTeamUserByEmail(entered);
-                if (!user) {
-                  if (rpcErr) {
-                    setMessage(
-                      authUserMessage(rpcErr.message || rpcErr) +
-                        "\n\nJa esi administrators: palaid Supabase SQL skriptu `pdd_lookup_user_by_email` (migration)."
-                    );
-                  } else {
-                    setMessage("Neatpazīts darba e-pasts.");
-                  }
-                  return;
-                }
-                uid = String(user.id);
-              }
-              const picked = findTeamUserByEmail(entered);
-              if (picked && isGuestRole(picked)) {
+              if (fromLocal && isGuestRole(fromLocal)) {
                 setMessage("Lietotājiem ar lomu „viesis” pieeja nav atļauta.");
                 return;
               }
-              if (uid && supabase) {
-                try {
-                  const { data: urow } = await withTimeout(
-                    supabase.from("users").select("*").eq("id", uid).maybeSingle(),
-                    10000,
-                    "Profila pārbaude",
-                  );
-                  if (urow && isGuestRole(urow)) {
+
+              // 2) REST RPC (neiet caur supabase-js auth rindu — mazāka karāšanās iespēja).
+              if (!uid) {
+                const rpc = await lookupUserIdByEmailRest(entered);
+                if (rpc.uid) uid = rpc.uid;
+              }
+
+              // 3) REST users saraksts.
+              if (!uid) {
+                const rest = await fetchUsersDirectFromRest({ timeoutMs: 10000, skipEnsure: true });
+                if (!rest.error && Array.isArray(rest.data)) {
+                  try {
+                    globalThis.KOMANDA?.mergeTeamUsersCache?.(rest.data);
+                  } catch {
+                    /* ignore */
+                  }
+                  const user = findUserByEmailInList(rest.data, entered) ?? findTeamUserByEmail(entered);
+                  if (user && isGuestRole(user)) {
                     setMessage("Lietotājiem ar lomu „viesis” pieeja nav atļauta.");
                     return;
                   }
-                } catch (err) {
-                  console.warn("[auth.profile]", err?.message || err);
-                  // Nebloķējam ieeju, ja profila pārbaude timeout — RPC/saraksts jau atrada lietotāju.
+                  if (user) uid = String(user.id || "").trim();
+                } else if (rest.error) {
+                  console.warn("[auth.rest.users]", rest.error?.message || rest.error);
                 }
               }
-              setEmailAuthSession({ userId: uid, email: entered });
+
+              // 4) supabase-js kā pēdējā iespēja (ar īsu timeout).
+              if (!uid && supabase) {
+                try {
+                  const rpcRes = await withTimeout(
+                    supabase.rpc("pdd_lookup_user_by_email", { p_email: entered }),
+                    8000,
+                    "Lietotāja meklēšana",
+                  );
+                  const rpcRows = rpcRes?.data;
+                  if (!rpcRes?.error && Array.isArray(rpcRows) && rpcRows.length > 0) {
+                    uid = String(rpcRows[0]?.user_id ?? rpcRows[0]?.pdd_lookup_user_by_email ?? "").trim();
+                  }
+                } catch (err) {
+                  console.warn("[auth.rpc]", err?.message || err);
+                }
+              }
+
+              if (!uid) {
+                setMessage(
+                  "Neizdevās atrast šo e-pastu vai savienojums ar serveri ir pārāk lēns.\n" +
+                    "Pārbaudi tīklu un mēģini vēlreiz (Ctrl+F5). Ja problēma atkārtojas — F12 → Console un ziņo administratoram.",
+                );
+                return;
+              }
+
+              setEmailAuthSession({
+                userId: uid,
+                email: entered,
+                displayName: fromLocal?.["Vārds uzvārds"] || fromLocal?.full_name || "",
+              });
               location.reload();
             } catch (err) {
               setMessage(authUserMessage(err?.message || err));
