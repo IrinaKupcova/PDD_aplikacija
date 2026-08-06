@@ -311,6 +311,7 @@ async function primeAktualitatesTable(sb) {
 /** Pēdējās renderTodayInfo opcijas (add/delete izmanto attālināti). */
 let sodienEngageHydrateTimer = null;
 let sodienEngageCache = null;
+let engageRealtimeChannel = null;
 
 function emptyEngageBucket() {
   return { reactions: [], comments: [] };
@@ -405,28 +406,32 @@ async function syncEngageFromSupabase(aktualitateId) {
       sb.from(TABLE_REACTIONS).select("*").eq("aktualitate_id", id),
       sb.from(TABLE_COMMENTS).select("*").eq("aktualitate_id", id).order("created_at", { ascending: true }),
     ]);
-    if (rx.error && cx.error) return getEngageBucket(id);
-    const reactions = Array.isArray(rx.data)
-      ? rx.data.map((r) => ({
-          actorKey: String(r.actor_key ?? "").trim(),
-          actorName: String(r.actor_name ?? "").trim(),
-          reaction: r.reaction === "dislike" ? "dislike" : "like",
-          updatedAt: String(r.updated_at ?? r.created_at ?? ""),
-        }))
-      : getEngageBucket(id).reactions;
-    const comments = Array.isArray(cx.data)
-      ? cx.data.map((c) => ({
-          id: String(c.id ?? "").trim(),
-          actorKey: String(c.actor_key ?? "").trim(),
-          actorName: String(c.actor_name ?? "").trim(),
-          body: String(c.body ?? "").trim(),
-          createdAt: String(c.created_at ?? ""),
-        }))
-      : getEngageBucket(id).comments;
+    if (rx.error) console.warn("[aktualitates.reactions.sync]", rx.error.message || rx.error);
+    if (cx.error) console.warn("[aktualitates.comments.sync]", cx.error.message || cx.error);
+    const reactions =
+      !rx.error && Array.isArray(rx.data)
+        ? rx.data.map((r) => ({
+            actorKey: String(r.actor_key ?? "").trim(),
+            actorName: String(r.actor_name ?? "").trim(),
+            reaction: r.reaction === "dislike" ? "dislike" : "like",
+            updatedAt: String(r.updated_at ?? r.created_at ?? ""),
+          }))
+        : getEngageBucket(id).reactions;
+    const comments =
+      !cx.error && Array.isArray(cx.data)
+        ? cx.data.map((c) => ({
+            id: String(c.id ?? "").trim(),
+            actorKey: String(c.actor_key ?? "").trim(),
+            actorName: String(c.actor_name ?? "").trim(),
+            body: String(c.body ?? "").trim(),
+            createdAt: String(c.created_at ?? ""),
+          }))
+        : getEngageBucket(id).comments;
     const next = { reactions, comments };
     setEngageBucket(id, next);
     return next;
-  } catch {
+  } catch (e) {
+    console.warn("[aktualitates.engage.sync]", e?.message || e);
     return getEngageBucket(id);
   }
 }
@@ -454,7 +459,7 @@ async function setAktualitateReaction(aktualitateId, reaction) {
     try {
       await sb.from(TABLE_REACTIONS).delete().eq("aktualitate_id", id).eq("actor_key", actor.key);
       if (want) {
-        await sb.from(TABLE_REACTIONS).upsert(
+        const { error } = await sb.from(TABLE_REACTIONS).upsert(
           {
             aktualitate_id: id,
             actor_key: actor.key,
@@ -462,14 +467,15 @@ async function setAktualitateReaction(aktualitateId, reaction) {
             reaction: want,
             updated_at: new Date().toISOString(),
           },
-          { onConflict: "aktualitate_id,actor_key" }
+          { onConflict: "aktualitate_id,actor_key" },
         );
+        if (error) throw error;
       }
     } catch (e) {
       console.warn("[aktualitates.reactions]", e?.message || e);
     }
   }
-  remountEngagePanel(id);
+  await refreshEngagePanel(id);
 }
 
 async function addAktualitateComment(aktualitateId, bodyRaw) {
@@ -523,7 +529,7 @@ async function addAktualitateComment(aktualitateId, bodyRaw) {
       console.warn("[aktualitates.comments]", e?.message || e);
     }
   }
-  remountEngagePanel(id);
+  await refreshEngagePanel(id);
 }
 
 async function deleteAktualitateComment(aktualitateId, commentId) {
@@ -552,7 +558,7 @@ async function deleteAktualitateComment(aktualitateId, commentId) {
       console.warn("[aktualitates.comments.delete]", e?.message || e);
     }
   }
-  remountEngagePanel(id);
+  await refreshEngagePanel(id);
 }
 
 function renderEngagePanelHtml(aktualitateId) {
@@ -651,7 +657,7 @@ function bindEngagePanel(el, aktualitateId) {
   }
 }
 
-function remountEngagePanel(aktualitateId) {
+function paintEngagePanel(aktualitateId) {
   const id = String(aktualitateId ?? "").trim();
   if (!id) return;
   document.querySelectorAll(".sodien-akt-engage[data-akt-id]").forEach((host) => {
@@ -662,19 +668,53 @@ function remountEngagePanel(aktualitateId) {
   });
 }
 
+async function refreshEngagePanel(aktualitateId) {
+  const id = String(aktualitateId ?? "").trim();
+  if (!id) return;
+  if (sodienUiOpts.useSupabase) await syncEngageFromSupabase(id);
+  paintEngagePanel(id);
+}
+
+function remountEngagePanel(aktualitateId) {
+  void refreshEngagePanel(aktualitateId);
+}
+
+function engagePanelIdFromChangePayload(payload) {
+  const row = payload?.new && typeof payload.new === "object" ? payload.new : payload?.old;
+  return String(row?.aktualitate_id ?? "").trim();
+}
+
+function ensureEngageRealtimeSubscription() {
+  const sb = globalThis.__PDD_SUPABASE__;
+  if (!sb || !sodienUiOpts.useSupabase || engageRealtimeChannel) return;
+  try {
+    engageRealtimeChannel = sb
+      .channel("pdd-aktualitates-engage")
+      .on("postgres_changes", { event: "*", schema: "public", table: TABLE_REACTIONS }, (payload) => {
+        const id = engagePanelIdFromChangePayload(payload);
+        if (id) void refreshEngagePanel(id);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: TABLE_COMMENTS }, (payload) => {
+        const id = engagePanelIdFromChangePayload(payload);
+        if (id) void refreshEngagePanel(id);
+      })
+      .subscribe((status, err) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.warn("[aktualitates.engage.realtime]", status, err?.message ?? err);
+        }
+      });
+  } catch (e) {
+    console.warn("[aktualitates.engage.realtime]", e?.message || e);
+  }
+}
+
 function hydrateEngagePanels() {
+  ensureEngageRealtimeSubscription();
   const hosts = document.querySelectorAll(".sodien-akt-engage[data-akt-id]");
   hosts.forEach((host) => {
     const id = String(host.getAttribute("data-akt-id") || "").trim();
     if (!id) return;
-    host.innerHTML = renderEngagePanelHtml(id);
-    bindEngagePanel(host, id);
-    host.dataset.hydrated = "1";
-    void syncEngageFromSupabase(id).then(() => {
-      if (!document.body.contains(host)) return;
-      host.innerHTML = renderEngagePanelHtml(id);
-      bindEngagePanel(host, id);
-    });
+    void refreshEngagePanel(id);
   });
 }
 
