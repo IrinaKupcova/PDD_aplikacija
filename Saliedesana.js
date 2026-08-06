@@ -621,18 +621,26 @@
     };
   }
 
-  async function fetchIdejuChatRemote(supabase) {
+  const IDEJU_CHAT_PAGE_SIZE = 40;
+
+  async function fetchIdejuChatRemote(supabase, options = {}) {
     if (!supabase) return null;
-    const { data, error } = await supabase
+    const limit = Math.min(200, Math.max(1, Number(options.limit) || IDEJU_CHAT_PAGE_SIZE));
+    let q = supabase
       .from(REMOTE_IDEJU_CHAT_TABLE)
       .select("id, body, actor_key, actor_name, source, created_at")
-      .order("created_at", { ascending: true })
-      .limit(200);
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    const before = String(options.before || "").trim();
+    if (before) q = q.lt("created_at", before);
+    const { data, error } = await q;
     if (error) {
       console.warn("[Ideju čats]", error.message || error);
       return null;
     }
-    return (Array.isArray(data) ? data : []).map(normalizeIdejuChatRow).filter(Boolean);
+    const rows = (Array.isArray(data) ? data : []).map(normalizeIdejuChatRow).filter(Boolean);
+    // Atgriežam hronoloģiski (vecākais → jaunākais) attēlošanai.
+    return rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   }
 
   async function insertIdejuChatRemote(supabase, row) {
@@ -665,7 +673,8 @@
 
   function ensureIdejuChatModalStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-ideju-chat-style-v7")) return;
+    if (document.getElementById("pdd-ideju-chat-style-v8")) return;
+    document.getElementById("pdd-ideju-chat-style-v7")?.remove();
     document.getElementById("pdd-ideju-chat-style-v6")?.remove();
     document.getElementById("pdd-ideju-chat-style-v5")?.remove();
     document.getElementById("pdd-ideju-chat-style-v4")?.remove();
@@ -673,10 +682,10 @@
     document.getElementById("pdd-ideju-chat-style-v2")?.remove();
     document.getElementById("pdd-ideju-chat-style")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-ideju-chat-style-v7";
+    s.id = "pdd-ideju-chat-style-v8";
     s.textContent = `
       .pdd-ideju-modal-bg { position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:1rem; }
-      .pdd-ideju-modal { width:min(520px,100%); max-height:86vh; display:flex; flex-direction:column; border-radius:16px; overflow:hidden; box-shadow:0 18px 50px rgba(15,23,42,.28); }
+      .pdd-ideju-modal { width:min(560px,100%); max-height:90vh; display:flex; flex-direction:column; border-radius:16px; overflow:hidden; box-shadow:0 18px 50px rgba(15,23,42,.28); }
       .pdd-ideju-modal.theme-sal { border:2px solid #fb923c; background:linear-gradient(180deg,#fff,#fff7ed); }
       .pdd-ideju-modal.theme-akt { border:2px solid #0ea5e9; background:linear-gradient(180deg,#fff,#e0f2fe); }
       .pdd-ideju-modal-head { display:flex; align-items:center; justify-content:space-between; gap:.5rem; padding:.75rem .9rem; }
@@ -685,7 +694,21 @@
       .pdd-ideju-modal-head h3 { margin:0; font-size:1rem; }
       .pdd-ideju-modal-head p { margin:.15rem 0 0; font-size:.74rem; opacity:.9; }
       .pdd-ideju-close { border:0; background:transparent; font-size:1.2rem; cursor:pointer; line-height:1; color:inherit; }
-      .pdd-ideju-list { flex:1; overflow:auto; padding:.7rem .8rem; display:flex; flex-direction:column; gap:.45rem; min-height:180px; max-height:48vh; background:rgba(255,255,255,.65); }
+      .pdd-ideju-list {
+        flex:1; overflow:auto; padding:.7rem .8rem; display:flex; flex-direction:column; gap:.45rem;
+        min-height:240px; max-height:min(62vh,560px); background:rgba(255,255,255,.65);
+        overscroll-behavior:contain;
+      }
+      .pdd-ideju-history-btn {
+        align-self:center; border:1px dashed rgba(100,116,139,.45); background:rgba(255,255,255,.9);
+        color:#334155; border-radius:999px; padding:.35rem .75rem; font:inherit; font-size:.74rem;
+        font-weight:700; cursor:pointer; margin:.15rem 0 .35rem;
+      }
+      .pdd-ideju-history-btn:hover { border-color:#0ea5e9; color:#0369a1; }
+      .pdd-ideju-history-btn:disabled { opacity:.55; cursor:wait; }
+      .pdd-ideju-history-end {
+        align-self:center; margin:.1rem 0 .35rem; font-size:.7rem; color:#94a3b8;
+      }
       .pdd-ideju-msg { border-radius:12px; padding:.45rem .55rem; max-width:92%; }
       .pdd-ideju-modal.theme-sal .pdd-ideju-msg { background:#fff; border:1px solid #fed7aa; }
       .pdd-ideju-modal.theme-akt .pdd-ideju-msg { background:#fff; border:1px solid #bae6fd; }
@@ -1079,32 +1102,81 @@
     document.getElementById("pdd-ideju-chat-modal-root")?.remove();
   }
 
-  async function refreshIdejuChatModalList(listEl, statusEl) {
+  function idejuChatNearBottom(listEl, thresholdPx = 90) {
+    if (!listEl) return true;
+    return listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight < thresholdPx;
+  }
+
+  function paintIdejuChatMessages(listEl, rows, options = {}) {
     if (!listEl) return;
+    const me = actorKey();
+    const stickBottom = Boolean(options.stickBottom);
+    const preserveScroll = Boolean(options.preserveScroll);
+    const hasMoreOlder = Boolean(options.hasMoreOlder);
+    const loadingOlder = Boolean(options.loadingOlder);
+    const showHistoryEnd = Boolean(options.showHistoryEnd);
+    const prevHeight = listEl.scrollHeight;
+    const prevTop = listEl.scrollTop;
+    const list = Array.isArray(rows) ? rows : [];
+
+    listEl.innerHTML = "";
+    if (!list.length) {
+      listEl.innerHTML = `<div class="pdd-ideju-empty">Vēl nav ziņu — esi pirmais!</div>`;
+      return;
+    }
+
+    if (hasMoreOlder || loadingOlder) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "pdd-ideju-history-btn";
+      btn.setAttribute("data-ideju-load-older", "1");
+      btn.disabled = loadingOlder;
+      btn.textContent = loadingOlder ? "Ielādē…" : "Rādīt vecākas ziņas";
+      listEl.appendChild(btn);
+    } else if (showHistoryEnd && list.length > IDEJU_CHAT_PAGE_SIZE) {
+      const end = document.createElement("div");
+      end.className = "pdd-ideju-history-end";
+      end.textContent = "Sākums — visa ielādētā vēsture";
+      listEl.appendChild(end);
+    }
+
+    for (const m of list) {
+      const mine = m.actor_key && m.actor_key === me;
+      const div = document.createElement("div");
+      div.className = `pdd-ideju-msg${mine ? " mine" : ""}`;
+      const who = m.actor_name || m.actor_key || "Lietotājs";
+      const when = formatSalInfoWhen(m.created_at);
+      const src =
+        m.source === "aktualitates" ? " · no Aktualitātēm" : m.source === "saliedesana" ? " · no Saliedēšanas" : "";
+      div.innerHTML = `<div class="pdd-ideju-msg-meta">${escapeHtmlLite(who)} · ${escapeHtmlLite(when)}${escapeHtmlLite(src)}</div><div class="pdd-ideju-msg-body">${String(m.body || "")}</div>`;
+      listEl.appendChild(div);
+    }
+
+    if (stickBottom) {
+      listEl.scrollTop = listEl.scrollHeight;
+    } else if (preserveScroll) {
+      listEl.scrollTop = listEl.scrollHeight - prevHeight + prevTop;
+    }
+  }
+
+  async function refreshIdejuChatModalList(listEl, statusEl, options = {}) {
+    if (!listEl) return [];
     const sb = globalThis.__PDD_SUPABASE__ ?? null;
     const local = loadLocalIdejuChat();
     let remote = null;
-    if (sb) remote = await fetchIdejuChatRemote(sb);
+    if (sb) remote = await fetchIdejuChatRemote(sb, { limit: IDEJU_CHAT_PAGE_SIZE });
     const rows = remote ? mergeIdejuChatLists(local, remote) : local;
-    saveLocalIdejuChat(rows);
-    const me = actorKey();
-    listEl.innerHTML = "";
-    if (!rows.length) {
-      listEl.innerHTML = `<div class="pdd-ideju-empty">Vēl nav ziņu — esi pirmais!</div>`;
-    } else {
-      for (const m of rows) {
-        const mine = m.actor_key && m.actor_key === me;
-        const div = document.createElement("div");
-        div.className = `pdd-ideju-msg${mine ? " mine" : ""}`;
-        const who = m.actor_name || m.actor_key || "Lietotājs";
-        const when = formatSalInfoWhen(m.created_at);
-        const src =
-          m.source === "aktualitates" ? " · no Aktualitātēm" : m.source === "saliedesana" ? " · no Saliedēšanas" : "";
-        div.innerHTML = `<div class="pdd-ideju-msg-meta">${escapeHtmlLite(who)} · ${escapeHtmlLite(when)}${escapeHtmlLite(src)}</div><div class="pdd-ideju-msg-body">${String(m.body || "")}</div>`;
-        listEl.appendChild(div);
-      }
-      listEl.scrollTop = listEl.scrollHeight;
-    }
+    saveLocalIdejuChat(rows, { silent: true });
+    const stickBottom = options.stickBottom != null ? Boolean(options.stickBottom) : idejuChatNearBottom(listEl);
+    const hasMoreOlder =
+      options.hasMoreOlder != null
+        ? Boolean(options.hasMoreOlder)
+        : Boolean(remote && remote.length >= IDEJU_CHAT_PAGE_SIZE);
+    paintIdejuChatMessages(listEl, rows, {
+      stickBottom,
+      hasMoreOlder,
+      showHistoryEnd: !hasMoreOlder,
+    });
     if (statusEl) {
       statusEl.textContent = remote
         ? "Sinhronizēts ar Supabase"
@@ -1112,6 +1184,7 @@
           ? "Lokāli (tabula vēl nav pieejama — palaid PIEMEROT_SALIEDESANA_INFO_UN_IDEJU_CHAT.sql)"
           : "Tikai lokāli";
     }
+    return rows;
   }
 
   function escapeHtmlLite(s) {
@@ -1171,6 +1244,95 @@
     const imgInput = root.querySelector("[data-ideju-img]");
     const attInput = root.querySelector("[data-ideju-att]");
     let pendingHtml = "";
+    let chatRows = [];
+    let hasMoreOlder = false;
+    let loadingOlder = false;
+    let historyFullyLoaded = false;
+
+    function repaintChat(opts = {}) {
+      paintIdejuChatMessages(listEl, chatRows, {
+        stickBottom: opts.stickBottom,
+        preserveScroll: opts.preserveScroll,
+        hasMoreOlder: !historyFullyLoaded && hasMoreOlder,
+        loadingOlder,
+        showHistoryEnd: historyFullyLoaded || (!hasMoreOlder && chatRows.length > 0),
+      });
+      const olderBtn = listEl?.querySelector("[data-ideju-load-older]");
+      if (olderBtn) olderBtn.onclick = () => void loadOlderIdejuChat();
+    }
+
+    async function loadOlderIdejuChat() {
+      if (loadingOlder || historyFullyLoaded) return;
+      const sb = globalThis.__PDD_SUPABASE__ ?? null;
+      const oldest = chatRows[0]?.created_at;
+      loadingOlder = true;
+      repaintChat({ preserveScroll: true });
+
+      if (sb && oldest) {
+        const older = await fetchIdejuChatRemote(sb, { before: oldest, limit: IDEJU_CHAT_PAGE_SIZE });
+        if (!older || !older.length) {
+          hasMoreOlder = false;
+          historyFullyLoaded = true;
+        } else {
+          if (older.length < IDEJU_CHAT_PAGE_SIZE) {
+            hasMoreOlder = false;
+            historyFullyLoaded = true;
+          } else {
+            hasMoreOlder = true;
+          }
+          chatRows = mergeIdejuChatLists(older, chatRows);
+          saveLocalIdejuChat(chatRows, { silent: true });
+        }
+      } else {
+        // Bez remote filtra — rādām visu lokālo vēsturi (vai visu, kas jau kešā).
+        const allLocal = loadLocalIdejuChat();
+        chatRows = mergeIdejuChatLists(allLocal, chatRows);
+        hasMoreOlder = false;
+        historyFullyLoaded = true;
+      }
+
+      loadingOlder = false;
+      repaintChat({ preserveScroll: true });
+    }
+
+    async function syncChatList(opts = {}) {
+      const sb = globalThis.__PDD_SUPABASE__ ?? null;
+      const local = loadLocalIdejuChat();
+      let remote = null;
+      if (sb) remote = await fetchIdejuChatRemote(sb, { limit: IDEJU_CHAT_PAGE_SIZE });
+      const nearBottom = opts.forceBottom || idejuChatNearBottom(listEl);
+      if (remote) {
+        chatRows = mergeIdejuChatLists(chatRows.length ? chatRows : local, remote);
+        if (opts.initial && !historyFullyLoaded) {
+          hasMoreOlder = remote.length >= IDEJU_CHAT_PAGE_SIZE;
+        }
+        saveLocalIdejuChat(chatRows, { silent: true });
+      } else {
+        const allLocal = local.slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+        if (opts.initial) {
+          if (allLocal.length > IDEJU_CHAT_PAGE_SIZE) {
+            chatRows = allLocal.slice(-IDEJU_CHAT_PAGE_SIZE);
+            hasMoreOlder = true;
+            historyFullyLoaded = false;
+          } else {
+            chatRows = allLocal;
+            hasMoreOlder = false;
+            historyFullyLoaded = true;
+          }
+        } else {
+          chatRows = mergeIdejuChatLists(chatRows, allLocal);
+        }
+      }
+      if (statusEl) {
+        statusEl.textContent = remote
+          ? "Sinhronizēts ar Supabase"
+          : sb
+            ? "Lokāli (tabula vēl nav pieejama — palaid PIEMEROT_SALIEDESANA_INFO_UN_IDEJU_CHAT.sql)"
+            : "Tikai lokāli";
+      }
+      repaintChat({ stickBottom: nearBottom });
+      return chatRows;
+    }
 
     function paintIdejuPending() {
       if (!pendingEl) return;
@@ -1333,10 +1495,11 @@
       };
       const local = mergeIdejuChatLists(loadLocalIdejuChat(), [row]);
       saveLocalIdejuChat(local);
+      chatRows = mergeIdejuChatLists(chatRows, [row]);
       if (input) input.value = "";
       pendingHtml = "";
       paintIdejuPending();
-      await refreshIdejuChatModalList(listEl, statusEl);
+      repaintChat({ stickBottom: true });
       const sb = globalThis.__PDD_SUPABASE__ ?? null;
       if (sb) {
         const out = await insertIdejuChatRemote(sb, row);
@@ -1345,16 +1508,20 @@
             out.error?.message ||
             "Neizdevās saglabāt Supabase — palaid PIEMEROT_SALIEDESANA_INFO_UN_IDEJU_CHAT.sql";
         } else {
-          await refreshIdejuChatModalList(listEl, statusEl);
+          await syncChatList({ forceBottom: true });
         }
       }
     });
-    void refreshIdejuChatModalList(listEl, statusEl).then(() => {
-      markIdejuChatSeen(loadLocalIdejuChat());
+    listEl?.addEventListener("scroll", () => {
+      if (!hasMoreOlder || loadingOlder || historyFullyLoaded) return;
+      if (listEl.scrollTop <= 8) void loadOlderIdejuChat();
+    });
+    void syncChatList({ initial: true, forceBottom: true }).then(() => {
+      markIdejuChatSeen(chatRows.length ? chatRows : loadLocalIdejuChat());
     });
     idejuChatPollTimer = setInterval(() => {
-      void refreshIdejuChatModalList(listEl, statusEl).then(() => {
-        markIdejuChatSeen(loadLocalIdejuChat());
+      void syncChatList().then(() => {
+        markIdejuChatSeen(chatRows.length ? chatRows : loadLocalIdejuChat());
       });
     }, 6000);
     const sb = globalThis.__PDD_SUPABASE__ ?? null;
@@ -1363,7 +1530,7 @@
         idejuChatChannel = sb
           .channel(`pdd-ideju-chat-${Date.now()}`)
           .on("postgres_changes", { event: "*", schema: "public", table: REMOTE_IDEJU_CHAT_TABLE }, () => {
-            void refreshIdejuChatModalList(listEl, statusEl);
+            void syncChatList();
           })
           .subscribe();
       } catch {
