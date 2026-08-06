@@ -665,14 +665,15 @@
 
   function ensureIdejuChatModalStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-ideju-chat-style-v6")) return;
+    if (document.getElementById("pdd-ideju-chat-style-v7")) return;
+    document.getElementById("pdd-ideju-chat-style-v6")?.remove();
     document.getElementById("pdd-ideju-chat-style-v5")?.remove();
     document.getElementById("pdd-ideju-chat-style-v4")?.remove();
     document.getElementById("pdd-ideju-chat-style-v3")?.remove();
     document.getElementById("pdd-ideju-chat-style-v2")?.remove();
     document.getElementById("pdd-ideju-chat-style")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-ideju-chat-style-v6";
+    s.id = "pdd-ideju-chat-style-v7";
     s.textContent = `
       .pdd-ideju-modal-bg { position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:1rem; }
       .pdd-ideju-modal { width:min(520px,100%); max-height:86vh; display:flex; flex-direction:column; border-radius:16px; overflow:hidden; box-shadow:0 18px 50px rgba(15,23,42,.28); }
@@ -776,36 +777,47 @@
       }
       .pdd-ideju-float > * { pointer-events:auto; }
       .pdd-ideju-float-panel {
-        width:min(320px,calc(100vw - 2rem)); max-height:min(360px,50vh);
+        width:min(340px,calc(100vw - 2rem)); max-height:min(420px,58vh);
         display:none; flex-direction:column; border-radius:16px; overflow:hidden;
         box-shadow:0 14px 44px rgba(15,23,42,.24), 0 0 0 1px rgba(14,116,144,.18);
         border:1px solid rgba(14,116,144,.42);
-        background:linear-gradient(180deg,#fff,#e0f2fe);
+        background:linear-gradient(180deg, rgba(56,189,248,0.18), rgba(14,116,144,0.1));
         animation:pddIdejuFloatIn .18s ease;
+        padding:.5rem;
+        box-sizing:border-box;
       }
       @keyframes pddIdejuFloatIn {
         from { opacity:0; transform:translateY(8px) scale(.98); }
         to { opacity:1; transform:translateY(0) scale(1); }
       }
       .pdd-ideju-float.is-open .pdd-ideju-float-panel { display:flex; }
+      .pdd-ideju-float-cta {
+        width:100%; box-sizing:border-box; border:0; cursor:pointer;
+        font-weight:800; font-size:.78rem; line-height:1.25; text-align:center;
+        padding:.55rem .6rem; border-radius:999px; color:#fff;
+        background:linear-gradient(135deg,#0284c7,#0ea5e9 55%,#38bdf8);
+        box-shadow:0 6px 16px rgba(14,165,233,.32), 0 0 0 2px rgba(56,189,248,.28);
+        margin:0 0 .45rem;
+      }
       .pdd-ideju-float-head {
-        display:flex; align-items:center; justify-content:space-between; gap:.45rem;
-        padding:.5rem .6rem; background:#bae6fd; color:#075985;
-        font-size:.78rem; font-weight:700; border-bottom:1px solid #7dd3fc;
+        display:none;
       }
-      .pdd-ideju-float-head-actions { display:flex; align-items:center; gap:.25rem; }
-      .pdd-ideju-float-head-btn {
-        border:0; background:transparent; cursor:pointer; font:inherit;
-        color:inherit; font-size:1rem; line-height:1; padding:.15rem .25rem; border-radius:6px;
-      }
-      .pdd-ideju-float-head-btn:hover { background:rgba(255,255,255,.45); }
       .pdd-ideju-float-preview-host {
-        flex:1; overflow:auto; min-height:0;
+        flex:1; overflow:auto; min-height:0; border-radius:12px;
+        background:rgba(255,255,255,.88); border:1px solid rgba(14,116,144,.35);
       }
       .pdd-ideju-float-preview-host .pdd-ideju-preview {
         margin:0; border:0; border-radius:0; max-height:none;
         background:transparent; padding:.45rem .55rem .55rem;
       }
+      .pdd-ideju-float-tools {
+        display:flex; justify-content:flex-end; gap:.25rem; margin-top:.35rem;
+      }
+      .pdd-ideju-float-head-btn {
+        border:0; background:rgba(255,255,255,.75); cursor:pointer; font:inherit;
+        color:#075985; font-size:.85rem; line-height:1; padding:.2rem .4rem; border-radius:8px;
+      }
+      .pdd-ideju-float-head-btn:hover { background:#fff; }
       .pdd-ideju-float-fab {
         width:52px; height:52px; border-radius:999px; border:0; cursor:pointer;
         font-size:1.35rem; line-height:1;
@@ -823,7 +835,7 @@
       .pdd-ideju-float-badge[hidden] { display:none; }
       @media (max-width:720px) {
         .pdd-ideju-float { right:.65rem; bottom:.65rem; }
-        .pdd-ideju-float-panel { width:min(300px,calc(100vw - 1.3rem)); max-height:min(300px,44vh); }
+        .pdd-ideju-float-panel { width:min(320px,calc(100vw - 1.3rem)); max-height:min(360px,52vh); }
         .pdd-ideju-float-fab { width:48px; height:48px; font-size:1.2rem; }
       }
     `;
@@ -970,14 +982,13 @@
     root.setAttribute("aria-label", "Ideju čats");
     root.innerHTML = `
       <div class="pdd-ideju-float-panel" data-ideju-float-panel>
-        <div class="pdd-ideju-float-head">
-          <span>💡 Ideju čats</span>
-          <div class="pdd-ideju-float-head-actions">
-            <button type="button" class="pdd-ideju-float-head-btn" data-ideju-float-open-full title="Atvērt pilnu čatu" aria-label="Atvērt pilnu čatu">↗</button>
-            <button type="button" class="pdd-ideju-float-head-btn" data-ideju-float-collapse title="Sakļaut" aria-label="Sakļaut">−</button>
-          </div>
-        </div>
+        <button type="button" class="pdd-ideju-float-cta" data-ideju-float-cta>
+          💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
+        </button>
         <div class="pdd-ideju-float-preview-host" data-ideju-float-preview></div>
+        <div class="pdd-ideju-float-tools">
+          <button type="button" class="pdd-ideju-float-head-btn" data-ideju-float-collapse title="Sakļaut" aria-label="Sakļaut">Sakļaut −</button>
+        </div>
       </div>
       <button type="button" class="pdd-ideju-float-fab" data-ideju-float-fab aria-label="Ideju čats" aria-expanded="false" title="Ideju čats">
         💡
@@ -1000,13 +1011,15 @@
     idejuFloatPreviewUnmount = mountIdejuChatPreview(previewHost, {
       theme: "akt",
       source: "aktualitates",
-      take: 3,
-      showHead: false,
+      take: 5,
+      showHead: true,
       onRows: (rows) => {
         updateIdejuFloatBadge(root, rows, root.classList.contains("is-open"));
       },
     });
 
+    const openFull = () => openIdejuChatModal({ source: "aktualitates", theme: "akt" });
+    root.querySelector("[data-ideju-float-cta]")?.addEventListener("click", openFull);
     root.querySelector("[data-ideju-float-fab]")?.addEventListener("click", () => {
       const open = !root.classList.contains("is-open");
       setIdejuFloatOpen(root, open);
@@ -1017,9 +1030,6 @@
     root.querySelector("[data-ideju-float-collapse]")?.addEventListener("click", () => {
       setIdejuFloatOpen(root, false);
       void loadIdejuChatRowsForPreview().then((rows) => updateIdejuFloatBadge(root, rows, false));
-    });
-    root.querySelector("[data-ideju-float-open-full]")?.addEventListener("click", () => {
-      openIdejuChatModal({ source: "aktualitates", theme: "akt" });
     });
 
     return function unmountFloat() {
@@ -5435,5 +5445,6 @@
     close: closeIdejuChatModal,
     mountPreview: mountIdejuChatPreview,
     mountFloat: mountIdejuChatFloatWidget,
+    ensureFloat: ensureIdejuChatFloatWidget,
   };
 })();

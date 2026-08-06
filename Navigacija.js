@@ -1148,6 +1148,11 @@
           </div>
         </div>
       `;
+      try {
+        globalThis.PDD_IDEJU_CHAT?.ensureFloat?.();
+      } catch {
+        /* ignore */
+      }
       return shell;
     };
   }
