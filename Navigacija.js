@@ -6,9 +6,10 @@
 (function () {
   function ensureNavigacijaExtraStyles() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-navigacija-extra-style-v4")) return;
+    if (document.getElementById("pdd-navigacija-extra-style-v5")) return;
+    document.getElementById("pdd-navigacija-extra-style-v4")?.remove();
     const s = document.createElement("style");
-    s.id = "pdd-navigacija-extra-style-v4";
+    s.id = "pdd-navigacija-extra-style-v5";
     s.textContent = `
       .app-nav-top-row {
         display: flex;
@@ -19,6 +20,43 @@
       }
       .app-nav-top-row .app-nav-title {
         margin: 0;
+      }
+      .pdd-nav-ideju-chat {
+        display: grid;
+        grid-template-columns: minmax(200px, 340px) minmax(0, 1fr);
+        gap: 0.65rem;
+        align-items: start;
+        margin: 0 0 1rem;
+        padding: 0.65rem 0.75rem;
+        border-radius: 14px;
+        border: 1px solid rgba(14,116,144,0.45);
+        background: linear-gradient(180deg, rgba(56,189,248,0.16), rgba(14,116,144,0.08));
+        box-sizing: border-box;
+      }
+      .pdd-nav-ideju-chat-btn {
+        width: 100%;
+        box-sizing: border-box;
+        border: 0;
+        cursor: pointer;
+        font-weight: 800;
+        font-size: 0.86rem;
+        line-height: 1.25;
+        white-space: normal;
+        text-align: center;
+        padding: 0.55rem 0.85rem;
+        border-radius: 999px;
+        color: #fff;
+        background: linear-gradient(135deg,#0284c7,#0ea5e9 55%,#38bdf8);
+        box-shadow: 0 8px 22px rgba(14,165,233,.38), 0 0 0 3px rgba(56,189,248,.35);
+      }
+      .pdd-nav-ideju-chat .pdd-ideju-preview {
+        margin-top: 0;
+        max-height: 220px;
+      }
+      @media (max-width: 820px) {
+        .pdd-nav-ideju-chat {
+          grid-template-columns: 1fr;
+        }
       }
       .app-nav .pdd-nav-pin-btn {
         border: 1px solid var(--border);
@@ -668,6 +706,31 @@
     return { count: found.length, first: found[0], preview: found.slice(0, 2) };
   }
 
+  let navIdejuPreviewUnmount = null;
+  let navIdejuPreviewTimer = null;
+
+  function hydrateNavIdejuChatPreview() {
+    const host = document.getElementById("pdd-nav-ideju-chat-preview");
+    if (typeof navIdejuPreviewUnmount === "function") {
+      try {
+        navIdejuPreviewUnmount();
+      } catch {
+        /* ignore */
+      }
+      navIdejuPreviewUnmount = null;
+    }
+    if (!host) return;
+    const mount = globalThis.PDD_IDEJU_CHAT?.mountPreview;
+    if (typeof mount === "function") {
+      navIdejuPreviewUnmount = mount(host, { theme: "akt", source: "aktualitates" });
+    }
+  }
+
+  function scheduleHydrateNavIdejuChatPreview() {
+    clearTimeout(navIdejuPreviewTimer);
+    navIdejuPreviewTimer = setTimeout(() => hydrateNavIdejuChatPreview(), 40);
+  }
+
   function createAppShellWithNav(html) {
     function backArrowSvg() {
       return html`
@@ -737,7 +800,7 @@
         (view === "prombutnes" && promSub === "changes");
       const showBack = Boolean(canGoBack && typeof onGoBack === "function");
 
-      return html`
+      const shell = html`
         <div class="app-layout">
           <aside class="app-nav" aria-label="Galvenā navigācija">
             <div class="app-nav-inner">
@@ -1001,6 +1064,20 @@
           </aside>
           <div class="app-main">
             ${header}
+            <div class="pdd-nav-ideju-chat" aria-label="Ideju čats">
+              <button
+                type="button"
+                class="pdd-nav-ideju-chat-btn"
+                onClick=${() => {
+                  const open = globalThis.PDD_IDEJU_CHAT?.open;
+                  if (typeof open === "function") open({ source: "aktualitates", theme: "akt" });
+                  else alert("Ideju čats vēl nav ielādējies. Pārlādē lapu (Ctrl+F5).");
+                }}
+              >
+                💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
+              </button>
+              <div id="pdd-nav-ideju-chat-preview"></div>
+            </div>
             ${children}
             ${Array.isArray(pinnedSections) && pinnedSections.length
               ? html`
@@ -1038,6 +1115,8 @@
           </div>
         </div>
       `;
+      scheduleHydrateNavIdejuChatPreview();
+      return shell;
     };
   }
 
