@@ -667,10 +667,6 @@
       }
       .pdd-ideju-preview.theme-akt .pdd-ideju-preview-head { color:#075985; }
       .pdd-ideju-preview.theme-sal .pdd-ideju-preview-head { color:#9a3412; }
-      .pdd-ideju-preview-new {
-        display:inline-flex; align-items:center; padding:.05rem .32rem; border-radius:999px;
-        background:#dc2626; color:#fff; font-size:.62rem; font-weight:800; letter-spacing:.02em;
-      }
       .pdd-ideju-preview-item {
         border-radius:8px; padding:.3rem .4rem; font-size:.76rem; line-height:1.3;
       }
@@ -709,12 +705,7 @@
   function renderIdejuChatPreviewHtml(rows, theme) {
     const list = Array.isArray(rows) ? rows : [];
     const last = list.slice(-3).reverse();
-    const unread = hasUnreadIdejuChat(list);
-    const head =
-      `<div class="pdd-ideju-preview-head">` +
-      `<span>Pēdējās čata ziņas</span>` +
-      (unread ? `<span class="pdd-ideju-preview-new">NEW</span>` : ``) +
-      `</div>`;
+    const head = `<div class="pdd-ideju-preview-head"><span>Pēdējās čata ziņas</span></div>`;
     if (!last.length) {
       return `${head}<p class="pdd-ideju-preview-empty">Vēl nav ziņu — nospied pogu, lai rakstītu.</p>`;
     }
