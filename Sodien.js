@@ -1839,11 +1839,8 @@ function renderTodayInfo({
             else alert("Ideju čats vēl nav ielādējies. Pārlādē lapu (Ctrl+F5).");
           }}
         >
-          💡 Vēlos izteikt ideju
+          💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
         </button>
-        <div style=${{ marginTop: "0.35rem", fontSize: "0.78rem", color: "#0369a1" }}>
-          Kopīgs ideju čats — redzams arī Saliedēšanā.
-        </div>
       </div>
 
       ${syncError

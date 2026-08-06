@@ -516,6 +516,94 @@
     return d.toLocaleDateString("lv-LV", { day: "2-digit", month: "2-digit", year: "numeric" });
   }
 
+  const SAL_NEWS_SEEN_KEY = "pdd_saliedesana_news_seen_v1";
+
+  function pddSaliedesanaNewsActorKey() {
+    const id = String(globalThis.__PDD_ACTOR_USER_ID__ ?? sessionStorage.getItem("pdd_local_user_id") ?? "").trim();
+    if (id) return id;
+    const em = String(globalThis.__PDD_ACTOR_EMAIL__ ?? sessionStorage.getItem("pdd_local_email") ?? "")
+      .trim()
+      .toLowerCase();
+    return em || "anonymous";
+  }
+
+  function pddSaliedesanaLatestNewsStamp() {
+    let max = "";
+    const bump = (v) => {
+      const s = String(v || "").trim();
+      if (s && s > max) max = s;
+    };
+    try {
+      const events = pddSafeParseJson(localStorage.getItem("pdd_saliedesana_pasakumi_v2") || "[]", []);
+      if (Array.isArray(events)) {
+        for (const ev of events) {
+          bump(ev?.updatedAt || ev?.updated_at || ev?.createdAt || ev?.created_at);
+          const d = String(ev?.date || "").trim();
+          const t = String(ev?.time || "00:00").trim() || "00:00";
+          if (/^\d{4}-\d{2}-\d{2}$/.test(d)) bump(`${d}T${t.length === 5 ? `${t}:00` : t}`);
+          bump(ev?.id);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const info = pddSafeParseJson(localStorage.getItem("pdd_saliedesana_info_v1") || "[]", []);
+      if (Array.isArray(info)) {
+        for (const row of info) {
+          bump(row?.updated_at || row?.updatedAt || row?.created_at || row?.createdAt);
+          bump(row?.id);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return max;
+  }
+
+  function pddReadSaliedesanaNewsSeenMap() {
+    try {
+      const raw = localStorage.getItem(SAL_NEWS_SEEN_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function pddGetSaliedesanaNewsSeenStamp() {
+    const map = pddReadSaliedesanaNewsSeenMap();
+    return String(map[pddSaliedesanaNewsActorKey()] || "").trim();
+  }
+
+  function pddShouldShowSaliedesanaNewBadge() {
+    const latest = pddSaliedesanaLatestNewsStamp();
+    if (!latest) return false;
+    const seen = pddGetSaliedesanaNewsSeenStamp();
+    // Bez iepriekšējās atzīmes nerādam NEW (novērš “veco” saturu kā jaunumu pirmajā ielādē).
+    if (!seen) return false;
+    return latest !== seen && latest > seen;
+  }
+
+  function pddMarkSaliedesanaNewsSeen() {
+    const latest = pddSaliedesanaLatestNewsStamp();
+    if (!latest) return "";
+    try {
+      const map = pddReadSaliedesanaNewsSeenMap();
+      map[pddSaliedesanaNewsActorKey()] = latest;
+      localStorage.setItem(SAL_NEWS_SEEN_KEY, JSON.stringify(map));
+    } catch {
+      /* ignore */
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("pdd:saliedesana-news-seen"));
+    } catch {
+      /* ignore */
+    }
+    return latest;
+  }
+
   function pddFindPendingSaliedesanaPoll() {
     const list = pddSafeParseJson(localStorage.getItem("pdd_saliedesana_pasakumi_v2") || "[]", []);
     if (!Array.isArray(list) || !list.length) return null;
@@ -607,6 +695,7 @@
       showPromDeputyTab,
       showPendingCitsBadge,
       showPddAppChangesBadge: _showPddAppChangesBadgeProp,
+      showSaliedesanaNewBadge: _showSaliedesanaNewBadgeProp,
       canGoBack,
       onGoBack,
       onPinCurrentSection,
@@ -626,6 +715,7 @@
       }
 
       const showPddAppChangesBadge = Boolean(_showPddAppChangesBadgeProp);
+      const showSaliedesanaNewBadge = Boolean(_showSaliedesanaNewBadgeProp);
 
       function openPddAppChangesNav() {
         onChangeView("pddAppChanges");
@@ -790,9 +880,17 @@
               <button
                 type="button"
                 class=${`app-nav-link ${view === "saliedesana" ? "active" : ""}`}
-                onClick=${() => onChangeView("saliedesana")}
+                onClick=${() => {
+                  try {
+                    pddMarkSaliedesanaNewsSeen();
+                  } catch {
+                    /* ignore */
+                  }
+                  onChangeView("saliedesana");
+                }}
               >
                 Saliedēšanas pasākumi, svētku dienas u.c.
+                ${showSaliedesanaNewBadge ? html`<span class="app-nav-badge-new">NEW</span>` : null}
               </button>
               <details class="app-nav-vesture-details" open=${vestureAccordionOpen}>
                 <summary class="app-nav-link app-nav-vesture-summary">Vēsture</summary>
@@ -943,5 +1041,11 @@
     };
   }
 
-  globalThis.PDD_NAV = { createAppShellWithNav };
+  globalThis.PDD_NAV = {
+    createAppShellWithNav,
+    shouldShowSaliedesanaNewBadge: pddShouldShowSaliedesanaNewBadge,
+    markSaliedesanaNewsSeen: pddMarkSaliedesanaNewsSeen,
+    latestSaliedesanaNewsStamp: pddSaliedesanaLatestNewsStamp,
+    getSaliedesanaNewsSeenStamp: pddGetSaliedesanaNewsSeenStamp,
+  };
 })();

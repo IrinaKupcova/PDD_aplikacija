@@ -539,11 +539,11 @@
       <script defer src="./Komanda.js?v=202606182"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608061"></script>
+      <script defer src="./Saliedesana.js?v=202608062"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
-      <script defer src="./Sodien.js?v=202608061"></script>
+      <script defer src="./Sodien.js?v=202608062"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202607313"></script>
+      <script defer src="./Navigacija.js?v=202608062"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
@@ -7994,6 +7994,9 @@
             return true;
           }
           const [showPddAppChangesBadge, setShowPddAppChangesBadge] = useState(false);
+          const [showSaliedesanaNewBadge, setShowSaliedesanaNewBadge] = useState(() =>
+            Boolean(globalThis.PDD_NAV?.shouldShowSaliedesanaNewBadge?.()),
+          );
           const [appChangesLatestId, setAppChangesLatestId] = useState("");
           const appChangesLatestIdRef = useRef("");
           const [appChangesHighlightId, setAppChangesHighlightId] = useState("");
@@ -8098,6 +8101,14 @@
                   void syncAppChangesSeen(supabase, session, seenKey, latestId);
                 }
               })();
+            }
+            if (v === "saliedesana") {
+              try {
+                globalThis.PDD_NAV?.markSaliedesanaNewsSeen?.();
+              } catch {
+                /* ignore */
+              }
+              setShowSaliedesanaNewBadge(false);
             }
             setView(v);
             if (v === "prombutnes") setPromSub("calendar");
@@ -8373,6 +8384,47 @@
             deferNonCritical(() => refreshAppChangesBadge());
           }, [refreshAppChangesBadge]);
           useEffect(() => {
+            function refreshSalNew() {
+              try {
+                const nav = globalThis.PDD_NAV;
+                if (!nav?.shouldShowSaliedesanaNewBadge) {
+                  setShowSaliedesanaNewBadge(false);
+                  return;
+                }
+                const latest = String(nav.latestSaliedesanaNewsStamp?.() || "").trim();
+                const seen = String(nav.getSaliedesanaNewsSeenStamp?.() || "").trim();
+                if (latest && !seen) {
+                  nav.markSaliedesanaNewsSeen?.();
+                  setShowSaliedesanaNewBadge(false);
+                  return;
+                }
+                setShowSaliedesanaNewBadge(Boolean(nav.shouldShowSaliedesanaNewBadge()));
+              } catch {
+                setShowSaliedesanaNewBadge(false);
+              }
+            }
+            refreshSalNew();
+            window.addEventListener("pdd:saliedesana-news-changed", refreshSalNew);
+            window.addEventListener("pdd:saliedesana-news-seen", refreshSalNew);
+            window.addEventListener("storage", refreshSalNew);
+            const t = setInterval(refreshSalNew, 10000);
+            return () => {
+              window.removeEventListener("pdd:saliedesana-news-changed", refreshSalNew);
+              window.removeEventListener("pdd:saliedesana-news-seen", refreshSalNew);
+              window.removeEventListener("storage", refreshSalNew);
+              clearInterval(t);
+            };
+          }, [session?.user?.id, session?.user?.email]);
+          useEffect(() => {
+            if (view !== "saliedesana") return;
+            try {
+              globalThis.PDD_NAV?.markSaliedesanaNewsSeen?.();
+            } catch {
+              /* ignore */
+            }
+            setShowSaliedesanaNewBadge(false);
+          }, [view]);
+          useEffect(() => {
             if (!session?.user) return;
             hydrateAppChangesSeenFromMeta(session);
             void (async () => {
@@ -8630,6 +8682,7 @@
               showPromDeputyTab=${showPromDeputyTab}
               showPendingCitsBadge=${pendingCitsNav}
               showPddAppChangesBadge=${showPddAppChangesBadge}
+              showSaliedesanaNewBadge=${showSaliedesanaNewBadge}
               canGoBack=${navPast.length > 0}
               onGoBack=${handleGoBack}
               onPinCurrentSection=${handlePinCurrentSection}

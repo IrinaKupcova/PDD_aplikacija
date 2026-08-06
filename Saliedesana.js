@@ -408,6 +408,11 @@
     } catch {
       /* ignore */
     }
+    try {
+      window.dispatchEvent(new CustomEvent("pdd:saliedesana-news-changed"));
+    } catch {
+      /* ignore */
+    }
   }
 
   function normalizeSalInfoRow(row) {
@@ -1217,6 +1222,11 @@
       globalThis.__PDD_SALIEDESANA_REPAINT_MAIN_CALENDAR__?.();
     } catch {
       // ignore
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("pdd:saliedesana-news-changed"));
+    } catch {
+      /* ignore */
     }
   }
 
@@ -3300,7 +3310,7 @@
                 class="sal-idea-btn"
                 onClick=${() => openIdejuChatModal({ source: "saliedesana", theme: "sal" })}
               >
-                💡 Vēlos izteikt ideju
+                💡 Čats — vēlos izteikt ideju vai uzrakstīt kaut ko
               </button>
             </div>
           </div>
@@ -3309,11 +3319,6 @@
 
           <div class="sal-info-panel">
             <h3>Aktuālā informācija</h3>
-            <p class="sal-info-intro">
-              Analogais logs kā Aktualitātēs — šeit ieraksti ziņas par aktuāliem pasākumiem, atgādinājumus un citu
-              saliedēšanas informāciju (oranžajā dizainā).
-            </p>
-            ${salInfoStatus ? html`<div class="sal-banner">${salInfoStatus}</div>` : null}
             <form class="sal-info-form" onSubmit=${(e) => void saveSalInfoPost(e)}>
               <input
                 type="text"
