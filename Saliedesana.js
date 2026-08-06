@@ -635,7 +635,7 @@
     if (before) q = q.lt("created_at", before);
     const { data, error } = await q;
     if (error) {
-      console.warn("[Ideju čats]", error.message || error);
+      console.warn("[Čats]", error.message || error);
       return null;
     }
     const rows = (Array.isArray(data) ? data : []).map(normalizeIdejuChatRow).filter(Boolean);
@@ -654,7 +654,7 @@
       created_at: row.created_at,
     });
     if (error) {
-      console.warn("[Ideju čats.insert]", error.message || error);
+      console.warn("[Čats.insert]", error.message || error);
       return { ok: false, error };
     }
     return { ok: true };
@@ -1002,7 +1002,7 @@
     const root = document.createElement("div");
     root.id = "pdd-ideju-float-root";
     root.className = "pdd-ideju-float";
-    root.setAttribute("aria-label", "Ideju čats");
+    root.setAttribute("aria-label", "Čats");
     root.innerHTML = `
       <div class="pdd-ideju-float-panel" data-ideju-float-panel>
         <button type="button" class="pdd-ideju-float-cta" data-ideju-float-cta>
@@ -1013,7 +1013,7 @@
           <button type="button" class="pdd-ideju-float-head-btn" data-ideju-float-collapse title="Sakļaut" aria-label="Sakļaut">Sakļaut −</button>
         </div>
       </div>
-      <button type="button" class="pdd-ideju-float-fab" data-ideju-float-fab aria-label="Ideju čats" aria-expanded="false" title="Ideju čats">
+      <button type="button" class="pdd-ideju-float-fab" data-ideju-float-fab aria-label="Čats" aria-expanded="false" title="Čats">
         💡
         <span class="pdd-ideju-float-badge" data-ideju-float-badge hidden aria-hidden="true">!</span>
       </button>
@@ -1206,11 +1206,11 @@
     root.id = "pdd-ideju-chat-modal-root";
     root.className = "pdd-ideju-modal-bg";
     root.innerHTML = `
-      <div class="pdd-ideju-modal theme-${theme}" role="dialog" aria-modal="true" aria-label="Ideju čats">
+      <div class="pdd-ideju-modal theme-${theme}" role="dialog" aria-modal="true" aria-label="Čats">
         <div class="pdd-ideju-modal-head">
           <div>
             <h3>💡 Čats</h3>
-            <p>Kopīgs čats visai komandai — var rakstīt jebko.</p>
+            <p>Kopīgs čats visai komandai — var rakstīt jebko, arī idejas.</p>
           </div>
           <button type="button" class="pdd-ideju-close" aria-label="Aizvērt">×</button>
         </div>
