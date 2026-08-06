@@ -790,10 +790,17 @@
   }
 
   const IDEJU_CHAT_PAGE_SIZE = 40;
+  const IDEJU_CHAT_SYNC_LIMIT = 200;
+
+  function persistIdejuChatMerge(extraRows, options = {}) {
+    const merged = mergeIdejuChatLists(loadLocalIdejuChat(), extraRows);
+    saveLocalIdejuChat(merged, { silent: options.silent !== false });
+    return merged;
+  }
 
   async function fetchIdejuChatRemote(supabase, options = {}) {
     if (!supabase) return null;
-    const limit = Math.min(200, Math.max(1, Number(options.limit) || IDEJU_CHAT_PAGE_SIZE));
+    const limit = Math.min(500, Math.max(1, Number(options.limit) || IDEJU_CHAT_PAGE_SIZE));
     let q = supabase
       .from(REMOTE_IDEJU_CHAT_TABLE)
       .select("id, body, actor_key, actor_name, source, created_at")
@@ -1056,11 +1063,15 @@
     const local = loadLocalIdejuChat();
     const sb = globalThis.__PDD_SUPABASE__ ?? null;
     if (!sb) return local;
-    const remote = await fetchIdejuChatRemote(sb);
-    if (!remote) return local;
-    const merged = mergeIdejuChatLists(local, remote);
-    saveLocalIdejuChat(merged, { silent: true });
-    return merged;
+    try {
+      const remote = await fetchIdejuChatRemote(sb, { limit: IDEJU_CHAT_SYNC_LIMIT });
+      if (!remote) return local;
+      // Nekad nepārrakstām lokālo vēsturi ar «tukšu» vai īsu lapu — tikai merge.
+      return persistIdejuChatMerge(remote, { silent: true });
+    } catch (e) {
+      console.warn("[Čats.preview]", e?.message || e);
+      return local;
+    }
   }
 
   function renderIdejuChatPreviewHtml(rows, theme, previewOpts = {}) {
@@ -1255,15 +1266,26 @@
 
   function ensureIdejuChatFloatWidget() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("pdd-ideju-float-root")) return;
-    mountIdejuChatFloatWidget();
+    try {
+      if (document.getElementById("pdd-ideju-float-root")) return;
+      mountIdejuChatFloatWidget();
+    } catch (e) {
+      console.warn("[Čats.float]", e?.message || e);
+    }
   }
 
   if (typeof document !== "undefined") {
+    const bootFloat = () => {
+      try {
+        ensureIdejuChatFloatWidget();
+      } catch (e) {
+        console.warn("[Čats.float.boot]", e?.message || e);
+      }
+    };
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", ensureIdejuChatFloatWidget, { once: true });
+      document.addEventListener("DOMContentLoaded", bootFloat, { once: true });
     } else {
-      ensureIdejuChatFloatWidget();
+      setTimeout(bootFloat, 0);
     }
   }
 
@@ -1343,10 +1365,16 @@
       const when = formatSalInfoWhen(m.created_at);
       const src =
         m.source === "aktualitates" ? " · no Aktualitātēm" : m.source === "saliedesana" ? " · no Saliedēšanas" : "";
+      let reactsHtml = "";
+      try {
+        reactsHtml = renderIdejuChatReactionsHtml(m.id, reactions);
+      } catch {
+        reactsHtml = "";
+      }
       div.innerHTML =
         `<div class="pdd-ideju-msg-meta">${escapeHtmlLite(who)} · ${escapeHtmlLite(when)}${escapeHtmlLite(src)}</div>` +
         `<div class="pdd-ideju-msg-body">${String(m.body || "")}</div>` +
-        renderIdejuChatReactionsHtml(m.id, reactions);
+        reactsHtml;
       listEl.appendChild(div);
     }
 
@@ -1501,7 +1529,7 @@
             hasMoreOlder = true;
           }
           chatRows = mergeIdejuChatLists(older, chatRows);
-          saveLocalIdejuChat(chatRows, { silent: true });
+          persistIdejuChatMerge(chatRows, { silent: true });
           await syncChatReactions(chatRows.map((m) => m.id));
         }
       } else {
@@ -1521,28 +1549,39 @@
       const sb = globalThis.__PDD_SUPABASE__ ?? null;
       const local = loadLocalIdejuChat();
       let remote = null;
-      if (sb) remote = await fetchIdejuChatRemote(sb, { limit: IDEJU_CHAT_PAGE_SIZE });
+      try {
+        if (sb) remote = await fetchIdejuChatRemote(sb, { limit: IDEJU_CHAT_SYNC_LIMIT });
+      } catch (e) {
+        console.warn("[Čats.sync]", e?.message || e);
+        remote = null;
+      }
       const nearBottom = opts.forceBottom || idejuChatNearBottom(listEl);
-      if (remote) {
-        chatRows = mergeIdejuChatLists(chatRows.length ? chatRows : local, remote);
-        if (opts.initial && !historyFullyLoaded) {
-          hasMoreOlder = remote.length >= IDEJU_CHAT_PAGE_SIZE;
-        }
-        saveLocalIdejuChat(chatRows, { silent: true });
-      } else {
-        const allLocal = local.slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-        if (opts.initial) {
-          if (allLocal.length > IDEJU_CHAT_PAGE_SIZE) {
-            chatRows = allLocal.slice(-IDEJU_CHAT_PAGE_SIZE);
-            hasMoreOlder = true;
-            historyFullyLoaded = false;
-          } else {
-            chatRows = allLocal;
-            hasMoreOlder = false;
-            historyFullyLoaded = true;
-          }
+      const all = remote ? mergeIdejuChatLists(local, remote) : local.slice();
+      // Saglabājam pilnu merge — nepārrakstām vēsturi ar vienu lapu.
+      persistIdejuChatMerge(all, { silent: true });
+
+      if (opts.initial) {
+        if (all.length > IDEJU_CHAT_PAGE_SIZE) {
+          chatRows = all.slice(-IDEJU_CHAT_PAGE_SIZE);
+          hasMoreOlder = true;
+          historyFullyLoaded = false;
         } else {
-          chatRows = mergeIdejuChatLists(chatRows, allLocal);
+          chatRows = all;
+          hasMoreOlder = false;
+          historyFullyLoaded = true;
+        }
+      } else if (historyFullyLoaded) {
+        chatRows = all;
+      } else {
+        const oldestKept = chatRows[0]?.created_at;
+        if (oldestKept) {
+          chatRows = mergeIdejuChatLists(
+            chatRows,
+            all.filter((m) => String(m.created_at) >= String(oldestKept)),
+          );
+        } else {
+          chatRows = all.slice(-IDEJU_CHAT_PAGE_SIZE);
+          hasMoreOlder = all.length > IDEJU_CHAT_PAGE_SIZE;
         }
       }
       await syncChatReactions(chatRows.map((m) => m.id));
