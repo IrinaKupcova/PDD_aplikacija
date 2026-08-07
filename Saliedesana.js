@@ -321,6 +321,42 @@
     return `${y}-${m}-${day}`;
   }
 
+  /** Kalendāra / pasākumu vēsture: 2 mēneši no šodienas. */
+  const HISTORY_RETENTION_MONTHS = 2;
+  let salEventsRemotePurgeStarted = false;
+
+  function historyRetentionCutoffDate() {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setMonth(d.getMonth() - HISTORY_RETENTION_MONTHS);
+    return d;
+  }
+
+  function historyRetentionCutoffYmd() {
+    return toYmd(historyRetentionCutoffDate());
+  }
+
+  function calendarMinMonthDate() {
+    const c = historyRetentionCutoffDate();
+    return new Date(c.getFullYear(), c.getMonth(), 1);
+  }
+
+  function clampCalendarMonth(monthDate) {
+    const minM = calendarMinMonthDate();
+    const d = monthDate instanceof Date ? monthDate : new Date(monthDate);
+    if (Number.isNaN(d.getTime())) return minM;
+    const cur = new Date(d.getFullYear(), d.getMonth(), 1);
+    return cur < minM ? minM : cur;
+  }
+
+  function filterEventsByRetention(events) {
+    const cutoff = historyRetentionCutoffYmd();
+    return (Array.isArray(events) ? events : []).filter((x) => {
+      const date = String(x?.date || "").slice(0, 10);
+      return date && date >= cutoff;
+    });
+  }
+
   function monthLabelLv(date) {
     return new Intl.DateTimeFormat("lv-LV", { month: "long", year: "numeric" }).format(date);
   }
@@ -2449,15 +2485,16 @@
     try {
       const parsed = JSON.parse(localStorage.getItem(LS_EVENTS_KEY) || "[]");
       if (!Array.isArray(parsed)) return [];
-      return parsed.map(normalizeEvent).filter((x) => x.id && x.date && x.title);
+      return filterEventsByRetention(parsed.map(normalizeEvent).filter((x) => x.id && x.date && x.title));
     } catch {
       return [];
     }
   }
 
   function saveLocalEvents(events) {
+    const kept = filterEventsByRetention(Array.isArray(events) ? events : []);
     try {
-      localStorage.setItem(LS_EVENTS_KEY, JSON.stringify(Array.isArray(events) ? events : []));
+      localStorage.setItem(LS_EVENTS_KEY, JSON.stringify(kept));
     } catch {
       // ignore
     }
@@ -2596,6 +2633,7 @@
         });
       })
       .filter((x) => x.id && x.date && x.title)
+      .filter((x) => String(x.date || "").slice(0, 10) >= historyRetentionCutoffYmd())
       .sort((a, b) => `${String(b.date)} ${String(b.time || "")}`.localeCompare(`${String(a.date)} ${String(a.time || "")}`));
   }
 
@@ -2610,6 +2648,36 @@
     if (!idNum) return;
     const r = await supabase.from(REMOTE_TABLE).delete().eq("id", idNum);
     if (r.error) throw r.error;
+  }
+
+  /** Dzēš Saliedēšanas pasākumus vecākus par 2 mēnešiem (lokāli + remote). */
+  async function purgeOldSaliedesanaEventsOnce(supabase) {
+    if (salEventsRemotePurgeStarted) return;
+    salEventsRemotePurgeStarted = true;
+    try {
+      const local = loadLocalEvents();
+      saveLocalEvents(local);
+    } catch {
+      /* ignore */
+    }
+    if (!supabase) return;
+    const cutoff = historyRetentionCutoffYmd();
+    try {
+      await Promise.race([
+        (async () => {
+          try {
+            let r = await supabase.from(REMOTE_TABLE).delete().lt("Datums", cutoff);
+            if (r.error) r = await supabase.from(REMOTE_TABLE).delete().lt("datums", cutoff);
+            if (r.error) console.warn("[saliedesana.purge]", r.error.message || r.error);
+          } catch (e) {
+            console.warn("[saliedesana.purge]", e?.message || e);
+          }
+        })(),
+        new Promise((resolve) => setTimeout(resolve, 8000)),
+      ]);
+    } catch (e) {
+      console.warn("[saliedesana.purge]", e?.message || e);
+    }
   }
 
   function paintMainCalendarBadgesFromLocal() {
@@ -3019,6 +3087,11 @@
       const [salInfoBusy, setSalInfoBusy] = useState(false);
 
       const monthGrid = useMemo(() => buildMonthGrid(calendarMonth), [calendarMonth]);
+      const canGoPrevCalendarMonth = useMemo(() => {
+        const minM = calendarMinMonthDate();
+        const cur = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+        return cur.getTime() > minM.getTime();
+      }, [calendarMonth]);
 
       const sortedEvents = useMemo(
         () =>
@@ -3446,13 +3519,14 @@
               });
               // Saglabājam arī lokālos ierakstus, kas vēl nav nonākuši DB.
               const unsyncedLocal = local.filter((x) => !Number(x?.remoteId || 0));
-              const merged = [...mergedRemote, ...unsyncedLocal].sort((a, b) => {
+              const merged = filterEventsByRetention([...mergedRemote, ...unsyncedLocal]).sort((a, b) => {
                 const ak = `${String(a.date || "")} ${String(a.time || "")}`.trim();
                 const bk = `${String(b.date || "")} ${String(b.time || "")}`.trim();
                 return bk.localeCompare(ak);
               });
               setEvents(merged);
               saveLocalEvents(merged);
+              void purgeOldSaliedesanaEventsOnce(supabase);
               setDbMessage("");
             }
           } catch (e) {
@@ -3478,10 +3552,15 @@
       }, [events]);
 
       function moveMonth(delta) {
-        setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + delta, 1));
+        setCalendarMonth((m) => clampCalendarMonth(new Date(m.getFullYear(), m.getMonth() + delta, 1)));
       }
 
       function openCardCreate(dateKey) {
+        const cutoff = historyRetentionCutoffYmd();
+        if (String(dateKey || "").slice(0, 10) < cutoff) {
+          setDbMessage("Vecāki par 2 mēnešiem kalendāra dati nav pieejami.");
+          return;
+        }
         setEditingId("");
         setCardDate(dateKey);
         setCardCategory("team");
@@ -3722,12 +3801,12 @@
         }
         if (!ev && dateHint) {
           const monthDate = new Date(dateHint);
-          if (!Number.isNaN(monthDate.getTime())) setCalendarMonth(monthDate);
+          if (!Number.isNaN(monthDate.getTime())) setCalendarMonth(clampCalendarMonth(monthDate));
           return false;
         }
         if (!ev) return false;
         const monthDate = new Date(String(ev.date || ""));
-        if (!Number.isNaN(monthDate.getTime())) setCalendarMonth(monthDate);
+        if (!Number.isNaN(monthDate.getTime())) setCalendarMonth(clampCalendarMonth(monthDate));
         openCardEdit(ev);
         const organizerKeyRef = String(ev?.details?.organizerKey || "").trim();
         const actorKRef = String(actorKey() || "").trim();
@@ -4910,7 +4989,13 @@
 
           <div class="sal-cal-wrap">
             <div class="sal-cal-head">
-              <button type="button" class="btn btn-ghost btn-small" onClick=${() => moveMonth(-1)}>←</button>
+              <button
+                type="button"
+                class="btn btn-ghost btn-small"
+                disabled=${!canGoPrevCalendarMonth}
+                title=${canGoPrevCalendarMonth ? "Iepriekšējais mēnesis" : "Vecāki par 2 mēnešiem nav pieejami"}
+                onClick=${() => moveMonth(-1)}
+              >←</button>
               <strong style=${{ textTransform: "capitalize" }}>${monthLabelLv(calendarMonth)}</strong>
               <button type="button" class="btn btn-ghost btn-small" onClick=${() => moveMonth(1)}>→</button>
             </div>
@@ -5942,6 +6027,8 @@
     loadLocalEvents,
     LS_EVENTS_KEY,
     syncNewsCacheForNav: syncSaliedesanaNewsCacheForNav,
+    purgeOldSaliedesanaEventsOnce,
+    historyRetentionCutoffYmd,
   };
 
   window.PDD_IDEJU_CHAT = {

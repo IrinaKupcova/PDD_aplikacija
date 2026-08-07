@@ -1,4 +1,4 @@
-# Ikdienas vēstures tīrīšana: dzēš datus vecākus par ~1,5 mēnešiem (45 dienām).
+# Ikdienas vēstures tīrīšana: dzēš datus vecākus par 2 mēnešiem.
 # Secrets: SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_REF (labākais)
 #          un/vai SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY / VITE_SUPABASE_ANON_KEY
 name: Daily history retention purge
@@ -18,7 +18,7 @@ jobs:
       SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
     steps:
-      - name: Management API SQL (45 dienas)
+      - name: Management API SQL (2 mēneši)
         if: ${{ env.SUPABASE_ACCESS_TOKEN != '' && env.SUPABASE_PROJECT_REF != '' }}
         continue-on-error: true
         run: |
@@ -37,9 +37,10 @@ jobs:
             head -c 400 "/tmp/${name}.json" || true
             echo
           }
-          post_sql del_akt 'DELETE FROM public."AKTUALITATES" WHERE "Beigas" < (CURRENT_DATE - interval '"'"'45 days'"'"');'
-          post_sql del_prom 'DELETE FROM public.prombutnes_dati WHERE "Beigu_datums" < (CURRENT_DATE - interval '"'"'45 days'"'"');'
-          post_sql del_audit 'DELETE FROM public."Auditacijas_vesture" WHERE ts < ((CURRENT_DATE - interval '"'"'45 days'"'"')::timestamptz);'
+          post_sql del_akt 'DELETE FROM public."AKTUALITATES" WHERE "Beigas" < (CURRENT_DATE - interval '"'"'2 months'"'"');'
+          post_sql del_prom 'DELETE FROM public.prombutnes_dati WHERE "Beigu_datums" < (CURRENT_DATE - interval '"'"'2 months'"'"');'
+          post_sql del_sal 'DELETE FROM public."Saliedesana" WHERE "Datums" < (CURRENT_DATE - interval '"'"'2 months'"'"');'
+          post_sql del_audit 'DELETE FROM public."Auditacijas_vesture" WHERE ts < ((CURRENT_DATE - interval '"'"'2 months'"'"')::timestamptz);'
           post_sql trunc_rx 'TRUNCATE TABLE public.aktualitates_reactions;'
           post_sql trunc_chat 'TRUNCATE TABLE public.pdd_ideju_chat;'
           post_sql trunc_chatrx 'TRUNCATE TABLE public.pdd_ideju_chat_reactions;'
@@ -52,13 +53,21 @@ jobs:
           BASE="${SUPABASE_URL%/}/rest/v1"
           H=(-H "apikey: ${SUPABASE_KEY}" -H "Authorization: Bearer ${SUPABASE_KEY}" -H "Prefer: return=minimal")
           CUTOFF=$(python3 - <<'PY'
-          from datetime import date, timedelta
-          print((date.today() - timedelta(days=45)).isoformat())
+          from datetime import date
+          import calendar
+          d = date.today()
+          y, m = d.year, d.month - 2
+          while m <= 0:
+              m += 12
+              y -= 1
+          last = calendar.monthrange(y, m)[1]
+          print(date(y, m, min(d.day, last)).isoformat())
           PY
           )
           echo "cutoff=$CUTOFF"
           curl -sS -m 60 -G -X DELETE "${BASE}/AKTUALITATES" --data-urlencode "Beigas=lt.${CUTOFF}" "${H[@]}" || true
           curl -sS -m 60 -G -X DELETE "${BASE}/prombutnes_dati" --data-urlencode "Beigu_datums=lt.${CUTOFF}" "${H[@]}" || true
+          curl -sS -m 60 -G -X DELETE "${BASE}/Saliedesana" --data-urlencode "Datums=lt.${CUTOFF}" "${H[@]}" || true
           curl -sS -m 60 -G -X DELETE "${BASE}/Auditacijas_vesture" --data-urlencode "ts=lt.${CUTOFF}T00:00:00Z" "${H[@]}" || true
           curl -sS -m 40 -X DELETE "${BASE}/aktualitates_reactions?created_at=gte.1970-01-01" "${H[@]}" || true
           echo done

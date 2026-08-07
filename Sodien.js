@@ -2457,13 +2457,13 @@ function renderTodayInfo({
 function retentionCutoffYmd() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - 45); // ~1,5 mēneši
+  d.setMonth(d.getMonth() - 2);
   return ymd(d);
 }
 
 let aktualitatesHistoryPurgeStarted = false;
 
-/** Dienas tīrīšana: aktualitātes ar Beigas vecākas par 1,5 mēnešiem. */
+/** Dienas tīrīšana: aktualitātes ar Beigas vecākas par 2 mēnešiem. */
 async function purgeAktualitatesHistoryOnce(sb) {
   if (aktualitatesHistoryPurgeStarted) return;
   aktualitatesHistoryPurgeStarted = true;
