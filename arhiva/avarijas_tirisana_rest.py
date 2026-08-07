@@ -1,22 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Avārijas tīrīšana caur REST, kad Supabase Dashboard timeouto.
-Dzēš TIKAI: pdd_ideju_chat(+reactions) un veco Auditacijas_vesture.
-NEAIZTIEK Pakalpojumu/Procesu/prombūtņu/aktualitāšu datus.
-
-Lietošana:
-  set SUPABASE_SERVICE_ROLE_KEY=...   (ieteicams — Dashboard → Settings → API → service_role)
-  py arhiva/avarijas_tirisana_rest.py
-
-Bez service_role mēģina publishable atslēgu (var neizdoties, ja RLS/limiti).
-"""
+"""Avārijas tīrīšana — īsi timeouti, mazas partijas. Ctrl+C pārtrauc."""
 from __future__ import annotations
 
 import json
 import os
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,7 +19,7 @@ KEY = (
     or os.environ.get("SUPABASE_ANON_KEY")
     or "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo"
 )
-TIMEOUT = 90
+TIMEOUT = int(os.environ.get("PDD_HTTP_TIMEOUT", "20"))
 
 
 def cutoff_iso() -> str:
@@ -38,23 +29,25 @@ def cutoff_iso() -> str:
     return f"{y:04d}-{m:02d}-01T00:00:00.000Z"
 
 
-def call(method: str, table: str, params: dict) -> tuple[int, str]:
+def call(method: str, table: str, params: dict, timeout: int = TIMEOUT) -> tuple[int, str]:
     q = urllib.parse.urlencode(params, doseq=True)
     url = f"{BASE}/rest/v1/{urllib.parse.quote(table)}?{q}"
     headers = {
         "apikey": KEY,
         "Authorization": f"Bearer {KEY}",
         "Prefer": "return=minimal",
+        "Accept": "application/json",
         "Content-Type": "application/json",
     }
-    req = urllib.request.Request(url, data=b"", headers=headers, method=method)
+    req = urllib.request.Request(url, data=b"" if method == "DELETE" else None, headers=headers, method=method)
+    if method == "GET":
+        req = urllib.request.Request(url, headers=headers, method="GET")
     ctx = ssl.create_default_context()
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        return e.code, body
+        return e.code, e.read().decode("utf-8", errors="replace")
     except Exception as e:
         return 0, str(e)
 
@@ -64,37 +57,33 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-
-    using_service = bool(os.environ.get("SUPABASE_SERVICE_ROLE_KEY"))
-    print(f"BASE={BASE}")
-    print(f"key=service_role" if using_service else "key=publishable/anon (var neizdoties)")
-    print(f"audit cutoff < {cutoff_iso()}")
-
-    ok = True
-    for table in ("pdd_ideju_chat_reactions", "pdd_ideju_chat"):
-        print(f"DELETE {table} ...")
-        code, body = call("DELETE", table, {"created_at": "gte.1970-01-01"})
-        print(f"  -> {code} {body[:200]}")
-        if code not in (200, 204) and code != 0:
-            ok = False
-        if code == 0:
-            ok = False
-
-    cut = cutoff_iso()
-    for table in ("Auditacijas_vesture", "Auditacijas_vēsture"):
-        for col in ("ts", "created_at", "Laiks"):
-            print(f"DELETE {table} where {col} < cutoff ...")
-            code, body = call("DELETE", table, {col: f"lt.{cut}"})
-            print(f"  -> {code} {body[:200]}")
-
-    if not ok:
-        print("\nREST neizdevās (DB joprojām pārslogota).")
-        print("1) GitHub → Actions → «Emergency DB purge» → Run workflow")
-        print("   (vajag secrets: SUPABASE_SERVICE_ROLE_KEY + URL)")
-        print("2) Vai īslaicīgi Upgrade uz Pro, tad SQL Editor → PIEMEROT_TIKAI_CHAT_TRUNCATE.sql")
+    print(f"BASE={BASE} timeout={TIMEOUT}s")
+    print("1) ping select id limit 1 ...")
+    code, body = call("GET", "pdd_ideju_chat", {"select": "id", "limit": "1"}, timeout=12)
+    print(f"   -> {code} {body[:160]}")
+    if code == 0:
+        print("DB neatbild. Turpini GitHub Actions Emergency DB purge (automātiski pēc push).")
         return 2
 
-    print("\nGatavs (vai daļēji). Pagaidi 1–2 min, tad Restart project + Ctrl+F5.")
+    for round_i in range(1, 31):
+        print(f"2) DELETE chat round {round_i}")
+        c1, b1 = call("DELETE", "pdd_ideju_chat_reactions", {"created_at": "gte.1970-01-01"})
+        c2, b2 = call("DELETE", "pdd_ideju_chat", {"created_at": "gte.1970-01-01"})
+        print(f"   reactions={c1} chat={c2}")
+        code, body = call("GET", "pdd_ideju_chat", {"select": "id", "limit": "1"}, timeout=12)
+        if body.strip() in ("[]", ""):
+            print("   chat tukšs")
+            break
+        time.sleep(1)
+
+    cut = cutoff_iso()
+    print(f"3) audit < {cut}")
+    for table in ("Auditacijas_vesture", "Auditacijas_vēsture"):
+        for col in ("ts", "created_at", "Laiks"):
+            c, b = call("DELETE", table, {col: f"lt.{cut}"})
+            print(f"   {table}.{col} -> {c} {b[:100]}")
+
+    print("Gatavs / daļēji. Restart project + Ctrl+F5.")
     return 0
 
 
