@@ -1,8 +1,6 @@
-# Avārijas DB tīrīšana — palaidās arī pēc push (nav vajadzīga "Run workflow" poga).
-# Secrets:
-#   SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_REF  (labākais — Management API SQL)
-#   VAI SUPABASE_SERVICE_ROLE_KEY / VITE_SUPABASE_ANON_KEY + URL (REST)
-#   VAI SUPABASE_DB_PASSWORD + PROJECT_REF (psql)
+# Avārijas DB tīrīšana — palaidās arī pēc push.
+# Secrets: SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_REF (Management SQL)
+#          + VITE_SUPABASE_URL / SUPABASE_URL + KEY (REST fallback)
 name: Emergency DB purge (chat + old audit)
 
 on:
@@ -28,26 +26,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Management API — TRUNCATE čats + vecā auditācija
+      - name: Management API — SQL pa vienai komandai
         if: ${{ env.SUPABASE_ACCESS_TOKEN != '' && env.SUPABASE_PROJECT_REF != '' }}
+        continue-on-error: true
         run: |
-          set -e
           REF="$SUPABASE_PROJECT_REF"
           TOKEN="$SUPABASE_ACCESS_TOKEN"
-          echo "Management API SQL → project $REF"
-          BODY1=$(python3 - <<'PY'
-          import json
-          q = """
-          TRUNCATE TABLE IF EXISTS public.pdd_ideju_chat_reactions;
-          TRUNCATE TABLE IF EXISTS public.pdd_ideju_chat;
-          """
-          print(json.dumps({"query": q}))
-          PY
-          )
+          echo "Management API → $REF"
           post_sql() {
             local name="$1"
-            local body="$2"
-            local max="$3"
+            local query="$2"
+            local max="${3:-120}"
+            body=$(python3 -c 'import json,sys; print(json.dumps({"query": sys.argv[1]}))' "$query")
             echo "=== $name ==="
             code=$(curl -sS -m "$max" -o "/tmp/${name}.json" -w "%{http_code}" -X POST \
               "https://api.supabase.com/v1/projects/${REF}/database/query" \
@@ -55,93 +45,62 @@ jobs:
               -H "Content-Type: application/json" \
               -d "$body" || echo "000")
             echo "HTTP $code"
-            head -c 1500 "/tmp/${name}.json" || true
+            head -c 2000 "/tmp/${name}.json" || true
             echo
-            if [ "$code" != "201" ] && [ "$code" != "200" ]; then
-              echo "::error::$name failed with HTTP $code"
-              exit 1
-            fi
+            case "$code" in
+              200|201) echo OK ;;
+              *) echo "FAIL $name"; return 1 ;;
+            esac
           }
 
-          echo "SQL1 truncate chat..."
-          post_sql sql1 "$BODY1" 120
-          BODY2=$(python3 - <<'PY'
-          import json
-          q = """
-          DO $$
-          DECLARE
-            cutoff timestamptz := (date_trunc('month', CURRENT_DATE) - interval '1 month');
-          BEGIN
-            BEGIN
-              DELETE FROM public."Auditacijas_vesture" WHERE ts < cutoff;
-            EXCEPTION WHEN undefined_table OR undefined_column THEN
-              BEGIN
-                DELETE FROM public."Auditacijas_vesture" WHERE created_at < cutoff;
-              EXCEPTION WHEN OTHERS THEN
-                RAISE NOTICE 'audit ascii skip %', SQLERRM;
-              END;
-            END;
-            BEGIN
-              DELETE FROM public."Auditacijas_vēsture" WHERE ts < cutoff;
-            EXCEPTION WHEN undefined_table OR undefined_column THEN
-              BEGIN
-                DELETE FROM public."Auditacijas_vēsture" WHERE created_at < cutoff;
-              EXCEPTION WHEN OTHERS THEN
-                RAISE NOTICE 'audit unicode skip %', SQLERRM;
-              END;
-            END;
-          END $$;
-          """
-          print(json.dumps({"query": q}))
-          PY
-          )
-          echo "SQL2 purge audit..."
-          post_sql sql2 "$BODY2" 180
-          BODY3=$(python3 - <<'PY'
-          import json
-          q = r"""
-          UPDATE public."AKTUALITATES"
-          SET "Kas_sodien_vel_aktuals" = regexp_replace(
-            "Kas_sodien_vel_aktuals",
-            '<img[^>]*>',
-            '<p><em>[Attēls noņemts]</em></p>',
-            'gi'
-          )
-          WHERE "Kas_sodien_vel_aktuals" ~* '<img';
-          """
-          print(json.dumps({"query": q}))
-          PY
-          )
-          echo "SQL3 strip images..."
-          post_sql sql3 "$BODY3" 240
-          echo "Management API steps done"
+          # Viena komanda = viens pieprasījums (Management API bieži neņem multi-statement)
+          post_sql trunc_reactions 'TRUNCATE TABLE public.pdd_ideju_chat_reactions;' || \
+            post_sql del_reactions 'DELETE FROM public.pdd_ideju_chat_reactions;' || true
 
-      - name: Brīdinājums ja nav access token
-        if: ${{ env.SUPABASE_ACCESS_TOKEN == '' || env.SUPABASE_PROJECT_REF == '' }}
-        run: |
-          echo "::warning::Nav SUPABASE_ACCESS_TOKEN vai SUPABASE_PROJECT_REF — Management SQL izlaists."
+          post_sql trunc_chat 'TRUNCATE TABLE public.pdd_ideju_chat;' || \
+            post_sql del_chat 'DELETE FROM public.pdd_ideju_chat;' || true
 
-      - name: REST fallback — čats
+          post_sql audit_ascii 'DELETE FROM public."Auditacijas_vesture" WHERE ts < (date_trunc(''month'', CURRENT_DATE) - interval ''1 month'');' || \
+            post_sql audit_ascii2 'DELETE FROM public."Auditacijas_vesture" WHERE created_at < (date_trunc(''month'', CURRENT_DATE) - interval ''1 month'');' || true
+
+          post_sql audit_uni 'DELETE FROM public."Auditacijas_vēsture" WHERE ts < (date_trunc(''month'', CURRENT_DATE) - interval ''1 month'');' || \
+            post_sql audit_uni2 'DELETE FROM public."Auditacijas_vēsture" WHERE created_at < (date_trunc(''month'', CURRENT_DATE) - interval ''1 month'');' || true
+
+          post_sql strip_img 'UPDATE public."AKTUALITATES" SET "Kas_sodien_vel_aktuals" = regexp_replace("Kas_sodien_vel_aktuals", ''<img[^>]*>'', ''<p><em>[Attēls noņemts]</em></p>'', ''gi'') WHERE "Kas_sodien_vel_aktuals" ~* ''<img'';' 240 || true
+
+          echo "Management API batch finished"
+
+      - name: REST — čats (vienmēr mēģina)
         if: ${{ env.SUPABASE_URL != '' && env.SUPABASE_KEY != '' }}
+        continue-on-error: true
         run: |
           set +e
           BASE="${SUPABASE_URL%/}/rest/v1"
-          AUTH=(-H "apikey: ${SUPABASE_KEY}" -H "Authorization: Bearer ${SUPABASE_KEY}" -H "Prefer: return=minimal")
-          echo "REST delete chat..."
-          curl -sS -m 40 -X DELETE "${AUTH[@]}" "${BASE}/pdd_ideju_chat_reactions?created_at=gte.1970-01-01" || true
-          curl -sS -m 40 -X DELETE "${AUTH[@]}" "${BASE}/pdd_ideju_chat?created_at=gte.1970-01-01" || true
-          echo "REST chat done"
+          H=(-H "apikey: ${SUPABASE_KEY}" -H "Authorization: Bearer ${SUPABASE_KEY}" -H "Prefer: return=minimal")
+          for i in 1 2 3 4 5; do
+            echo "REST round $i"
+            code1=$(curl -sS -m 35 -o /tmp/r1.txt -w "%{http_code}" -X DELETE "${H[@]}" "${BASE}/pdd_ideju_chat_reactions?created_at=gte.1970-01-01" || echo 000)
+            code2=$(curl -sS -m 35 -o /tmp/r2.txt -w "%{http_code}" -X DELETE "${H[@]}" "${BASE}/pdd_ideju_chat?created_at=gte.1970-01-01" || echo 000)
+            echo "reactions=$code1 chat=$code2"
+            sleep 2
+          done
 
       - name: psql (ja ir DB parole)
         if: ${{ env.SUPABASE_DB_PASSWORD != '' && env.SUPABASE_PROJECT_REF != '' }}
+        continue-on-error: true
         run: |
           set +e
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
           export PGPASSWORD="$SUPABASE_DB_PASSWORD"
           HOST="db.${SUPABASE_PROJECT_REF}.supabase.co"
-          psql "host=$HOST port=5432 dbname=postgres user=postgres sslmode=require connect_timeout=20" \
+          psql "host=$HOST port=5432 dbname=postgres user=postgres sslmode=require connect_timeout=25" \
             -v ON_ERROR_STOP=0 \
-            -c "SET statement_timeout='90s';" \
-            -c "TRUNCATE TABLE IF EXISTS public.pdd_ideju_chat_reactions;" \
-            -c "TRUNCATE TABLE IF EXISTS public.pdd_ideju_chat;"
+            -c "SET statement_timeout='120s';" \
+            -c "TRUNCATE TABLE public.pdd_ideju_chat_reactions;" \
+            -c "TRUNCATE TABLE public.pdd_ideju_chat;"
           echo "psql done"
+
+      - name: Kopsavilkums
+        run: |
+          echo "Atver Actions logu un pārbaudi HTTP kodus."
+          echo "Ja viss FAIL — īslaicīgi Upgrade uz Pro, tad SQL Editor → PIEMEROT_TIKAI_CHAT_TRUNCATE.sql"
