@@ -1257,9 +1257,24 @@ function applyCmd(cmd, value) {
   }
 }
 
+const AKT_IMG_SPACE_WARN =
+  "Uzmanību: datubāzē trūkst vietas (Supabase FREE limits).\n\n" +
+  "Bildes ļoti ātri aizņem vietu un var no jauna bloķēt aplikāciju.\n" +
+  "Labāk raksti tekstu, nevis liec screenshotus.\n\n" +
+  "Vai tomēr pievienot bildi?";
+
+function confirmAktualitateImageInsert() {
+  if (typeof confirm !== "function") return true;
+  return confirm(AKT_IMG_SPACE_WARN);
+}
+
 function onPickImage(ev) {
   const f = ev?.target?.files?.[0];
   if (!f) return;
+  if (!confirmAktualitateImageInsert()) {
+    ev.target.value = "";
+    return;
+  }
   const fr = new FileReader();
   fr.onload = () => {
     void (async () => {
@@ -1370,6 +1385,10 @@ function onEditorPasteImages(ev) {
     }
   }
   if (!images.length) return;
+  if (!confirmAktualitateImageInsert()) {
+    ev.preventDefault();
+    return;
+  }
   ev.preventDefault();
   void (async () => {
     for (const f of images) {
