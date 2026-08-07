@@ -449,6 +449,7 @@ async function syncEngageFromSupabase(aktualitateId) {
 }
 
 async function setAktualitateReaction(aktualitateId, reaction) {
+  if (AKTUALITATES_ENGAGE_DISABLED) return;
   const id = String(aktualitateId ?? "").trim();
   if (!id) return;
   const want = reaction === "dislike" ? "dislike" : reaction === "like" ? "like" : "";
@@ -491,6 +492,7 @@ async function setAktualitateReaction(aktualitateId, reaction) {
 }
 
 async function addAktualitateComment(aktualitateId, bodyRaw) {
+  if (AKTUALITATES_ENGAGE_DISABLED) return;
   const id = String(aktualitateId ?? "").trim();
   const body = String(bodyRaw ?? "").trim().slice(0, 2000);
   if (!id || !body) return;
