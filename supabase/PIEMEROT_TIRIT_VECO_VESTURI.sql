@@ -1,25 +1,19 @@
--- PALAID SUPABASE → SQL Editor (pēc Restart project, kad Table Editor atkal ielādējas).
--- Mērķis: atbrīvot FREE limitu. NEAIZTIEK Pakalpojumu/Procesu tabulas.
---
--- 0) Izdzēš čatu pilnībā
--- 1) Izveido METADATU arhīvu (bez smagajām bildēm)
--- 2) Dzēš veco vēsturi (pirms iepriekšējā mēneša + neaktuālās aktualitātes)
--- 3) Noņem VISAS bildes no atlikušajām aktualitātēm
--- 4) Dzēš veco auditācijas vēsturi (pirms iepriekšējā mēneša)
---
--- Lokāli JSON arhīvu vari papildus iegūt: py arhiva/iztirit_veco_vesturi.py
--- (kad DB atbild). Metadatu tabulas vari eksportēt: Table Editor → Export.
+-- PALAID Supabase → SQL Editor (pēc Restart, ja DB lēna).
+-- NEAIZTIEK Pakalpojumu/Procesu tabulas.
+-- Griezums: šodiena − 1,5 mēneši (~45 dienas).
 
 BEGIN;
 
--- Čats ārā
 DO $$
 BEGIN
   IF to_regclass('public.pdd_ideju_chat_reactions') IS NOT NULL THEN
-    TRUNCATE TABLE public.pdd_ideju_chat_reactions;
+    EXECUTE 'TRUNCATE TABLE public.pdd_ideju_chat_reactions';
   END IF;
   IF to_regclass('public.pdd_ideju_chat') IS NOT NULL THEN
-    TRUNCATE TABLE public.pdd_ideju_chat;
+    EXECUTE 'TRUNCATE TABLE public.pdd_ideju_chat';
+  END IF;
+  IF to_regclass('public.aktualitates_reactions') IS NOT NULL THEN
+    EXECUTE 'TRUNCATE TABLE public.aktualitates_reactions';
   END IF;
 END $$;
 
@@ -39,25 +33,16 @@ CREATE TABLE IF NOT EXISTS public.pdd_arhiva_prombutnes_meta (
   archived_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Griezuma datums: iepriekšējā mēneša 1. diena
--- (tekošais + iepriekšējais mēnesis paliek)
 DO $$
 DECLARE
-  cutoff date := (date_trunc('month', CURRENT_DATE) - interval '1 month')::date;
+  cutoff date := (CURRENT_DATE - interval '45 days')::date;
 BEGIN
   INSERT INTO public.pdd_arhiva_aktualitates_meta (id, "Sakums", "Beigas", "Autors", created_at, html_len)
-  SELECT
-    a.id,
-    a."Sakums",
-    a."Beigas",
-    a."Autors",
-    a.created_at,
-    length(coalesce(a."Kas_sodien_vel_aktuals", ''))
+  SELECT a.id, a."Sakums", a."Beigas", a."Autors", a.created_at,
+         length(coalesce(a."Kas_sodien_vel_aktuals", ''))
   FROM public."AKTUALITATES" a
   WHERE a."Beigas" < cutoff
-     OR a."Beigas" < CURRENT_DATE
-  ON CONFLICT (id) DO UPDATE
-  SET
+  ON CONFLICT (id) DO UPDATE SET
     "Sakums" = EXCLUDED."Sakums",
     "Beigas" = EXCLUDED."Beigas",
     "Autors" = EXCLUDED."Autors",
@@ -72,72 +57,41 @@ BEGIN
   ON CONFLICT (id) DO UPDATE
   SET payload = EXCLUDED.payload, archived_at = now();
 
-  DELETE FROM public."AKTUALITATES"
-  WHERE "Beigas" < cutoff
-     OR "Beigas" < CURRENT_DATE;
-
-  DELETE FROM public.prombutnes_dati
-  WHERE "Beigu_datums" < cutoff;
-END $$;
-
-DO $$
-BEGIN
-  IF to_regclass('public.aktualitates_reactions') IS NOT NULL THEN
-    DELETE FROM public.aktualitates_reactions r
-    WHERE NOT EXISTS (SELECT 1 FROM public."AKTUALITATES" a WHERE a.id::text = r.aktualitate_id);
-  END IF;
-  IF to_regclass('public.aktualitates_comments') IS NOT NULL THEN
-    DELETE FROM public.aktualitates_comments c
-    WHERE NOT EXISTS (SELECT 1 FROM public."AKTUALITATES" a WHERE a.id::text = c.aktualitate_id);
-  END IF;
+  DELETE FROM public."AKTUALITATES" WHERE "Beigas" < cutoff;
+  DELETE FROM public.prombutnes_dati WHERE "Beigu_datums" < cutoff;
 END $$;
 
 UPDATE public."AKTUALITATES"
 SET "Kas_sodien_vel_aktuals" = regexp_replace(
   "Kas_sodien_vel_aktuals",
   '<img[^>]*>',
-  '<p><em>[Attēls noņemts — vietas taupīšanai. Labāk raksti tekstu.]</em></p>',
+  '<p><em>[Attēls noņemts — vietas taupīšanai]</em></p>',
   'gi'
 )
 WHERE "Kas_sodien_vel_aktuals" ~* '<img';
 
 DO $$
 DECLARE
-  cutoff timestamptz := (date_trunc('month', CURRENT_DATE) - interval '1 month');
+  cutoff timestamptz := ((CURRENT_DATE - interval '45 days')::timestamp AT TIME ZONE 'Europe/Riga');
 BEGIN
-  IF to_regclass('public."Auditacijas_vesture"') IS NOT NULL THEN
+  BEGIN
+    DELETE FROM public."Auditacijas_vesture" WHERE ts < cutoff;
+  EXCEPTION WHEN undefined_table OR undefined_column THEN
     BEGIN
-      DELETE FROM public."Auditacijas_vesture" WHERE ts < cutoff;
-    EXCEPTION WHEN undefined_column THEN
-      BEGIN
-        DELETE FROM public."Auditacijas_vesture" WHERE created_at < cutoff;
-      EXCEPTION WHEN undefined_column THEN
-        BEGIN
-          DELETE FROM public."Auditacijas_vesture" WHERE "Laiks" < cutoff;
-        EXCEPTION WHEN OTHERS THEN
-          RAISE NOTICE 'Auditacijas_vesture: %', SQLERRM;
-        END;
-      END;
+      DELETE FROM public."Auditacijas_vesture" WHERE created_at < cutoff;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'audit ascii: %', SQLERRM;
     END;
-  END IF;
-  IF to_regclass('public."Auditacijas_vēsture"') IS NOT NULL THEN
+  END;
+  BEGIN
+    DELETE FROM public."Auditacijas_vēsture" WHERE ts < cutoff;
+  EXCEPTION WHEN undefined_table OR undefined_column THEN
     BEGIN
-      DELETE FROM public."Auditacijas_vēsture" WHERE ts < cutoff;
-    EXCEPTION WHEN undefined_column THEN
-      BEGIN
-        DELETE FROM public."Auditacijas_vēsture" WHERE created_at < cutoff;
-      EXCEPTION WHEN undefined_column THEN
-        BEGIN
-          DELETE FROM public."Auditacijas_vēsture" WHERE "Laiks" < cutoff;
-        EXCEPTION WHEN OTHERS THEN
-          RAISE NOTICE 'Auditacijas_vēsture: %', SQLERRM;
-        END;
-      END;
+      DELETE FROM public."Auditacijas_vēsture" WHERE created_at < cutoff;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'audit unicode: %', SQLERRM;
     END;
-  END IF;
+  END;
 END $$;
 
 COMMIT;
-
--- Pēc tam (pēc dažām minūtēm) Dashboard → Database → var palīdzēt arī Restart,
--- lai atbrīvotā vieta reāli atspoguļojas FREE limitā.

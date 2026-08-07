@@ -1121,13 +1121,14 @@ async function fetchActiveAktualitatesViaRest() {
     } catch {
       /* ignore */
     }
-  }, 20000);
+  }, 7000);
   try {
     const params = new URLSearchParams();
     params.set("select", "*");
     params.set("Sakums", `lte.${today}`);
     params.set("Beigas", `gte.${today}`);
     params.set("order", "Sakums.desc");
+    params.set("limit", "30");
     const resp = await fetch(`${base}/rest/v1/AKTUALITATES?${params}`, {
       method: "GET",
       headers: { apikey: key, Authorization: `Bearer ${key}` },
@@ -1139,32 +1140,8 @@ async function fetchActiveAktualitatesViaRest() {
     }
     const data = await resp.json();
     let list = (Array.isArray(data) ? data : []).map((row) => rowFromDb(row, new Map())).filter(Boolean);
-    if (!list.length) {
-      // Rezerves: bez datuma filtra (ja kolonnas/RLS dēļ aktīvais SELECT ir tukšs).
-      const params2 = new URLSearchParams();
-      params2.set("select", "*");
-      params2.set("order", "created_at.desc");
-      params2.set("limit", "80");
-      const resp2 = await fetch(`${base}/rest/v1/AKTUALITATES?${params2}`, {
-        method: "GET",
-        headers: { apikey: key, Authorization: `Bearer ${key}` },
-        signal: ctrl?.signal,
-      });
-      if (resp2.ok) {
-        const data2 = await resp2.json();
-        const all = (Array.isArray(data2) ? data2 : []).map((row) => rowFromDb(row, new Map())).filter(Boolean);
-        const active = all.filter((x) => {
-          const s = pick(x.start || "");
-          const e = pick(x.end || "");
-          if (s && s > today) return false;
-          if (e && e < today) return false;
-          return true;
-        });
-        list = active.length ? active : all.slice(0, 40);
-      }
-    }
+    // Smago «bez filtra» fallback vairs nedarām automātiski — tas bremzē Nano.
     try {
-      // Lielus base64 attēlus localStorage bieži nevar ietilpināt — kešojam tikai tad, ja ietilpst.
       if (list.length) saveAktualitates(mergeAktualitatesPreferRemote(loadAktualitates(), list));
     } catch {
       /* ignore */
@@ -2122,7 +2099,7 @@ function htmlHasAttachments(htmlRaw) {
 
 /** Lieli base64 attēli — sarakstā tikai mazs pogas vietturis; pilnais atveras uz klikšķa. */
 const heavyAktImgStore = new Map();
-const HEAVY_AKT_IMG_CHARS = 12000; // ~9KB — tipiski screenshoti/base64
+const HEAVY_AKT_IMG_CHARS = 4000; // agrāk sakļauj — ātrāks paint Nano planā
 
 function formatAktImageSizeLabel(dataUrl) {
   const n = String(dataUrl || "").length;
@@ -2220,8 +2197,8 @@ function renderTodayInfo({
     loadingAktualitates && aktualitates === undefined
       ? null
       : Array.isArray(aktualitates)
-        ? aktualitates
-        : visibleAktualitatesActive();
+        ? aktualitates.slice(0, 25)
+        : visibleAktualitatesActive().slice(0, 25);
   const tasksToday = Array.isArray(todayTaskItems) ? todayTaskItems : [];
   const today = sodienDraft.start || ymd(new Date());
   const out = html`
@@ -2480,16 +2457,14 @@ function renderTodayInfo({
 function retentionCutoffYmd() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
-  d.setDate(1);
-  d.setMonth(d.getMonth() - 1);
+  d.setDate(d.getDate() - 45); // ~1,5 mēneši
   return ymd(d);
 }
 
 let aktualitatesHistoryPurgeStarted = false;
 
-/** Automātiskā tīrīšana: NEIZDZĒŠ aktualitāšu saturu (lai lapa nepaliktu tukša).
- *  Tikai notīra reakciju/komentāru lokālo kešu. */
-async function purgeAktualitatesHistoryOnce(_sb) {
+/** Dienas tīrīšana: aktualitātes ar Beigas vecākas par 1,5 mēnešiem. */
+async function purgeAktualitatesHistoryOnce(sb) {
   if (aktualitatesHistoryPurgeStarted) return;
   aktualitatesHistoryPurgeStarted = true;
   try {
@@ -2498,7 +2473,35 @@ async function purgeAktualitatesHistoryOnce(_sb) {
   } catch {
     /* ignore */
   }
-  // Veco/beigušos datus vairs nedzēšam no klienta — to dara tikai manuāls SQL, kad DB atbild.
+  const cutoff = retentionCutoffYmd();
+  try {
+    const local = loadAktualitates();
+    const kept = local
+      .filter((x) => {
+        const end = String(x?.end || "");
+        return !end || end >= cutoff;
+      })
+      .map((x) => ({ ...x, html: stripAktualitateImagesFromHtml(x?.html || "") }));
+    saveAktualitates(kept);
+  } catch {
+    /* ignore */
+  }
+  if (!sb) return;
+  try {
+    await Promise.race([
+      (async () => {
+        try {
+          const t = await resolveAktualitatesTableName(sb);
+          await sb.from(t).delete().lt("Beigas", cutoff);
+        } catch (e) {
+          console.warn("[aktualitates.purge]", e?.message || e);
+        }
+      })(),
+      new Promise((r) => setTimeout(r, 8000)),
+    ]);
+  } catch (e) {
+    console.warn("[aktualitates.purge]", e?.message || e);
+  }
 }
 
 window.PDDSodien = {

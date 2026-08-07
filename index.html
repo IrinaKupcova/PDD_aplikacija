@@ -541,7 +541,7 @@
       <script defer src="./IAD.js?v=202606196"></script>
       <script defer src="./Saliedesana.js?v=202608096"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
-      <script defer src="./Sodien.js?v=202608097"></script>
+      <script defer src="./Sodien.js?v=202608098"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
       <script defer src="./Navigacija.js?v=202608095"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
@@ -1382,9 +1382,9 @@
             }
           };
           if (typeof requestIdleCallback === "function") {
-            requestIdleCallback(run, { timeout: 1500 });
+            requestIdleCallback(run, { timeout: 2500 });
           } else {
-            setTimeout(run, 1);
+            setTimeout(run, 50);
           }
         }
         let cachedIadPanel = null;
@@ -2325,13 +2325,23 @@
           return { id: uid, name: nm, email: em };
         }
 
-        /** Auditācija: paturam tikai tekošo + iepriekšējo kalendāro mēnesi. */
-        function auditRetentionCutoffIso() {
+        /** Vēsture: paturam ~1,5 mēnešus (45 dienas) no šodienas. */
+        const HISTORY_RETENTION_DAYS = 45;
+        const LS_HISTORY_PURGE_YMD = "pdd_history_purge_ymd_v1";
+
+        function historyRetentionCutoffDate() {
           const d = new Date();
           d.setHours(0, 0, 0, 0);
-          d.setDate(1);
-          d.setMonth(d.getMonth() - 1);
-          return d.toISOString();
+          d.setDate(d.getDate() - HISTORY_RETENTION_DAYS);
+          return d;
+        }
+
+        function auditRetentionCutoffIso() {
+          return historyRetentionCutoffDate().toISOString();
+        }
+
+        function historyRetentionCutoffYmd() {
+          return historyRetentionCutoffDate().toISOString().slice(0, 10);
         }
 
         function getChangeLog() {
@@ -2361,7 +2371,8 @@
         let auditRemotePurgeStarted = false;
         let absencesRemotePurgeStarted = false;
         async function purgeOldAuditLogsRemoteOnce() {
-          if (auditRemotePurgeStarted || isLocalMode() || !supabase || TIKAI_VIENKARSI_SKATS) return;
+          if (isLocalMode() || !supabase || TIKAI_VIENKARSI_SKATS) return;
+          if (auditRemotePurgeStarted) return;
           auditRemotePurgeStarted = true;
           const cutoff = auditRetentionCutoffIso();
           const tables = ["Auditacijas_vēsture", "Auditacijas_vesture"];
@@ -2380,7 +2391,7 @@
                   }
                 }
               })(),
-              new Promise((resolve) => setTimeout(resolve, 10000)),
+              new Promise((resolve) => setTimeout(resolve, 8000)),
             ]);
           } catch (e) {
             console.warn("[audit.purge]", e?.message || e);
@@ -2388,13 +2399,10 @@
         }
 
         async function purgeOldAbsencesRemoteOnce() {
-          if (absencesRemotePurgeStarted || isLocalMode() || !supabase || TIKAI_VIENKARSI_SKATS) return;
+          if (isLocalMode() || !supabase || TIKAI_VIENKARSI_SKATS) return;
+          if (absencesRemotePurgeStarted) return;
           absencesRemotePurgeStarted = true;
-          const d = new Date();
-          d.setHours(0, 0, 0, 0);
-          d.setDate(1);
-          d.setMonth(d.getMonth() - 1);
-          const cutoffYmd = d.toISOString().slice(0, 10);
+          const cutoffYmd = historyRetentionCutoffYmd();
           try {
             await ensureDbReadableSession();
             await Promise.race([
@@ -2406,14 +2414,25 @@
                   console.warn("[absences.purge]", e?.message || e);
                 }
               })(),
-              new Promise((resolve) => setTimeout(resolve, 10000)),
+              new Promise((resolve) => setTimeout(resolve, 8000)),
             ]);
           } catch (e) {
             console.warn("[absences.purge]", e?.message || e);
           }
         }
 
-        function runHistoryRetentionCleanup() {
+        function runHistoryRetentionCleanup(force = false) {
+          try {
+            const today = new Date().toISOString().slice(0, 10);
+            const last = String(localStorage.getItem(LS_HISTORY_PURGE_YMD) || "");
+            if (!force && last === today) return;
+            localStorage.setItem(LS_HISTORY_PURGE_YMD, today);
+          } catch {
+            /* ignore */
+          }
+          // Atiestatām dienas flagu, lai dienas beigās var atkārtot, bet ne konkurē ar UI.
+          auditRemotePurgeStarted = false;
+          absencesRemotePurgeStarted = false;
           void purgeOldAuditLogsRemoteOnce();
           void purgeOldAbsencesRemoteOnce();
           try {
@@ -2424,8 +2443,8 @@
           }
         }
         if (supabase && configured() && !isLocalMode() && !TIKAI_VIENKARSI_SKATS) {
-          setTimeout(() => void runHistoryRetentionCleanup(), 3500);
-          setTimeout(() => void runHistoryRetentionCleanup(), 20000);
+          // Pēc mājas ielādes — nekonkurē ar pirmo paint.
+          setTimeout(() => void runHistoryRetentionCleanup(false), 60000);
         }
 
         function normalizeAuditLogRecord(r) {
@@ -3167,18 +3186,18 @@
             try {
               // Soft timeout: nebloķējam mājas ekrānu, ja auth/DB karājas.
               try {
-                await withTimeout(ensureDbReadableSession(), 3000, "DB sesija");
+                await withTimeout(ensureDbReadableSession(), 2000, "DB sesija");
               } catch (e) {
                 console.warn("[aktualitates.ensure]", e?.message || e);
               }
-              // Viena ielāde (bez dubultā REST) — 20s pietiek, nebloķējam pārējo UI.
+              // Ātrāks soft-timeout: lokālais saturs jau redzams.
               let list = null;
               try {
                 list = await withTimeout(
                   typeof V.fetchActiveAktualitatesViaRest === "function"
                     ? V.fetchActiveAktualitatesViaRest()
                     : V.fetchActiveAktualitatesFromSupabase(sb),
-                  20000,
+                  8000,
                   "Aktualitātes",
                 );
               } catch (e) {
@@ -3282,27 +3301,31 @@
             if (!sb || isLocalMode() || TIKAI_VIENKARSI_SKATS) return undefined;
             let ch = null;
             let cancelled = false;
-            (async () => {
-              try {
-                const V = globalThis.PDDSodien;
-                if (V?.primeAktualitatesTable) await V.primeAktualitatesTable(sb);
-                if (cancelled) return;
-                const tbl = globalThis.__PDD_AKTUALITATES_TABLE__;
-                if (!tbl) return;
-                ch = sb
-                  .channel("pdd-aktualitates-dashboard")
-                  .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshSodienAktualitates())
-                  .subscribe((status, er) => {
-                    if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-                      console.warn("[PDD Aktualitātes Realtime]", status, er?.message ?? er);
-                    }
-                  });
-              } catch (e) {
-                console.warn("[PDD Aktualitātes Realtime]", e);
-              }
-            })();
+            // Realtime tikai pēc pirmā paint — citādi Nano CPU aizķeras.
+            const timer = setTimeout(() => {
+              void (async () => {
+                try {
+                  const V = globalThis.PDDSodien;
+                  if (V?.primeAktualitatesTable) await V.primeAktualitatesTable(sb);
+                  if (cancelled) return;
+                  const tbl = globalThis.__PDD_AKTUALITATES_TABLE__;
+                  if (!tbl) return;
+                  ch = sb
+                    .channel("pdd-aktualitates-dashboard")
+                    .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshSodienAktualitates())
+                    .subscribe((status, er) => {
+                      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+                        console.warn("[PDD Aktualitātes Realtime]", status, er?.message ?? er);
+                      }
+                    });
+                } catch (e) {
+                  console.warn("[PDD Aktualitātes Realtime]", e);
+                }
+              })();
+            }, 12000);
             return () => {
               cancelled = true;
+              clearTimeout(timer);
               if (ch) void sb.removeChannel(ch);
             };
           }, [refreshSodienAktualitates]);
@@ -8446,15 +8469,15 @@
               if (!session?.user || !supabase) return;
               try {
                 try {
-                  await withTimeout(ensureDbReadableSession(), 8000, "DB sesija");
+                  await withTimeout(ensureDbReadableSession(), 4000, "DB sesija");
                 } catch (e) {
                   console.warn("[home.absences.ensure]", e?.message || e);
                 }
                 let rows = null;
                 try {
-                  const r1 = await withTimeout(supabase.from("prombutnes_dati").select("*"), 12000, "Prombūtnes");
+                  const r1 = await withTimeout(supabase.from("prombutnes_dati").select("*"), 7000, "Prombūtnes");
                   if (r1.error) {
-                    const rr = await withTimeout(fetchTableDirectFromRest("prombutnes_dati"), 12000, "Prombūtnes REST");
+                    const rr = await withTimeout(fetchTableDirectFromRest("prombutnes_dati"), 7000, "Prombūtnes REST");
                     if (rr.error) {
                       console.warn("[home.absences]", rr.error?.message || rr.error || r1.error);
                       return;
