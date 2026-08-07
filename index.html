@@ -539,11 +539,11 @@
       <script defer src="./Komanda.js?v=202606182"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608090"></script>
+      <script defer src="./Saliedesana.js?v=202608095"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=202608094"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202608090"></script>
+      <script defer src="./Navigacija.js?v=202608095"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
@@ -2325,15 +2325,68 @@
           return { id: uid, name: nm, email: em };
         }
 
+        /** Auditācija: paturam tikai tekošo + iepriekšējo kalendāro mēnesi. */
+        function auditRetentionCutoffIso() {
+          const d = new Date();
+          d.setHours(0, 0, 0, 0);
+          d.setDate(1);
+          d.setMonth(d.getMonth() - 1);
+          return d.toISOString();
+        }
+
         function getChangeLog() {
           const raw = localStorage.getItem(LS_CHANGE_LOG);
           if (!raw) return [];
           try {
             const arr = JSON.parse(raw);
-            return Array.isArray(arr) ? arr : [];
+            if (!Array.isArray(arr)) return [];
+            const cutoff = auditRetentionCutoffIso();
+            const kept = arr.filter((r) => {
+              const ts = String(r?.ts || r?.created_at || r?.Laiks || "");
+              return !ts || ts >= cutoff;
+            });
+            if (kept.length !== arr.length) {
+              try {
+                localStorage.setItem(LS_CHANGE_LOG, JSON.stringify(kept.slice(0, 1500)));
+              } catch {
+                /* ignore */
+              }
+            }
+            return kept;
           } catch {
             return [];
           }
+        }
+
+        let auditRemotePurgeStarted = false;
+        async function purgeOldAuditLogsRemoteOnce() {
+          if (auditRemotePurgeStarted || isLocalMode() || !supabase || TIKAI_VIENKARSI_SKATS) return;
+          auditRemotePurgeStarted = true;
+          const cutoff = auditRetentionCutoffIso();
+          const tables = ["Auditacijas_vēsture", "Auditacijas_vesture"];
+          try {
+            await ensureDbReadableSession();
+            await Promise.race([
+              (async () => {
+                for (const t of tables) {
+                  try {
+                    let r = await supabase.from(t).delete().lt("ts", cutoff);
+                    if (r.error) r = await supabase.from(t).delete().lt("created_at", cutoff);
+                    if (r.error) r = await supabase.from(t).delete().lt("Laiks", cutoff);
+                    if (r.error) console.warn("[audit.purge]", t, r.error.message || r.error);
+                  } catch (e) {
+                    console.warn("[audit.purge]", t, e?.message || e);
+                  }
+                }
+              })(),
+              new Promise((resolve) => setTimeout(resolve, 10000)),
+            ]);
+          } catch (e) {
+            console.warn("[audit.purge]", e?.message || e);
+          }
+        }
+        if (supabase && configured() && !isLocalMode() && !TIKAI_VIENKARSI_SKATS) {
+          setTimeout(() => void purgeOldAuditLogsRemoteOnce(), 3500);
         }
 
         function normalizeAuditLogRecord(r) {
@@ -2407,7 +2460,10 @@
             return local;
           }
           const dbLogs = (rows ?? []).map(normalizeAuditLogRecord).filter(Boolean);
-          return dbLogs.length ? dbLogs : local;
+          const cutoff = auditRetentionCutoffIso();
+          const kept = dbLogs.filter((r) => !r.ts || String(r.ts) >= cutoff);
+          void purgeOldAuditLogsRemoteOnce();
+          return kept.length ? kept : local;
         }
 
         async function insertAuditLog(row) {
@@ -3032,153 +3088,6 @@
                 ? html`<p style=${{ marginTop: "1rem", color: "var(--muted)", whiteSpace: "pre-wrap" }}>${message}</p>`
                 : null}
             </div>
-          `;
-        }
-
-        function AktualitatesVestureView() {
-          const [rows, setRows] = useState(undefined);
-          const [err, setErr] = useState(null);
-          useEffect(() => {
-            globalThis.PDDSodien?.ensureSodienAktStyleOnce?.();
-          }, []);
-          const refresh = useCallback(async () => {
-            const V = globalThis.PDDSodien;
-            const sb = globalThis.__PDD_SUPABASE__;
-            if (!V?.fetchAllAktualitatesFromSupabase || !sb || TIKAI_VIENKARSI_SKATS || isLocalMode()) {
-              const raw = Array.isArray(V?.loadAktualitates?.()) ? V.loadAktualitates() : [];
-              const sorted = [...raw].sort((a, b) =>
-                String(b?.created_at ?? "").localeCompare(String(a?.created_at ?? ""))
-              );
-              setRows(sorted);
-              setErr(null);
-              return;
-            }
-            try {
-              await ensureDbReadableSession();
-              const list = await V.fetchAllAktualitatesFromSupabase(sb);
-              setRows(list);
-              setErr(null);
-            } catch (e) {
-              setErr(e?.message || String(e));
-              setRows([]);
-            }
-          }, []);
-          useEffect(() => {
-            void refresh();
-          }, [refresh]);
-          useEffect(() => {
-            const sb = globalThis.__PDD_SUPABASE__;
-            if (!sb || isLocalMode() || TIKAI_VIENKARSI_SKATS) return undefined;
-            let ch = null;
-            let cancelled = false;
-            (async () => {
-              try {
-                const V = globalThis.PDDSodien;
-                if (V?.primeAktualitatesTable) await V.primeAktualitatesTable(sb);
-                if (cancelled) return;
-                const tbl = globalThis.__PDD_AKTUALITATES_TABLE__;
-                if (!tbl) return;
-                ch = sb
-                  .channel("pdd-aktualitates-history")
-                  .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refresh())
-                  .subscribe((status, er) => {
-                    if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-                      console.warn("[PDD Aktualitātes Realtime]", status, er?.message ?? er);
-                    }
-                  });
-              } catch (e) {
-                console.warn("[PDD Aktualitātes Realtime]", e);
-              }
-            })();
-            return () => {
-              cancelled = true;
-              if (ch) void sb.removeChannel(ch);
-            };
-          }, [refresh]);
-          const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
-          function formatLvDate(iso) {
-            const s = String(iso || "").trim();
-            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-            if (!m) return s;
-            return `${m[3]}.${m[2]}.${m[1]}`;
-          }
-          return html`
-            <section class="stack" style=${{ gap: "1rem", minWidth: 0, maxWidth: "100%", width: "100%", boxSizing: "border-box" }}>
-              <div style=${{ minWidth: 0, maxWidth: "100%" }}>
-                <h2 style=${{ margin: 0, fontSize: "1.15rem" }}>Aktualitāšu vēsture</h2>
-                <p class="app-sub" style=${{ margin: "0.25rem 0 0" }}>
-                  Visi saglabātie ieraksti (tabula ${globalThis.__PDD_AKTUALITATES_TABLE__ || globalThis.PDDSodien?.TABLE_AKTUALITATES || "AKTUALITATES"}), ieskaitot beigušos periodus.
-                </p>
-              </div>
-              ${err ? html`<div class="banner-warn" role="alert">Kļūda: ${err}</div>` : null}
-              ${rows === undefined
-                ? html`<p style=${{ color: "var(--muted)" }}>Ielādē…</p>`
-                : rows.length === 0
-                  ? html`<p style=${{ color: "var(--muted)" }}>Vēl nav ierakstu.</p>`
-                  : html`
-                      <div class="stack" style=${{ gap: "0.65rem", minWidth: 0, maxWidth: "100%", width: "100%", boxSizing: "border-box" }}>
-                        ${rows.map((x) => {
-                          const active = !x.end || x.end >= todayIso;
-                          return html`
-                            <article
-                              key=${x.id}
-                              style=${{
-                                border: "1px solid var(--border)",
-                                borderRadius: "10px",
-                                padding: "0.75rem",
-                                background: active ? "rgba(255,255,255,0.85)" : "rgba(248,250,252,0.92)",
-                                opacity: active ? 1 : 0.92,
-                                boxSizing: "border-box",
-                                minWidth: 0,
-                                maxWidth: "100%",
-                                width: "100%",
-                                overflowX: "hidden",
-                              }}
-                            >
-                              <div
-                                class="row"
-                                style=${{
-                                  justifyContent: "space-between",
-                                  flexWrap: "wrap",
-                                  gap: "0.35rem",
-                                  marginBottom: "0.4rem",
-                                }}
-                              >
-                                <span style=${{ fontSize: "0.82rem", color: "var(--muted)" }}>
-                                  ${formatLvDate(x.start)} — ${formatLvDate(x.end)}
-                                </span>
-                                <span class="row" style=${{ gap: "0.35rem", alignItems: "center" }}>
-                                  ${globalThis.PDDSodien?.htmlHasAttachments?.(x.html)
-                                    ? html`<span class="pdd-attach-clip" title="Ir pievienots pielikums" aria-label="Ir pievienots pielikums">📎</span>`
-                                    : null}
-                                  ${active
-                                    ? html`<span style=${{ fontSize: "0.75rem", fontWeight: 600, color: "#047857" }}>Aktīvs</span>`
-                                    : html`<span style=${{ fontSize: "0.75rem", color: "var(--muted)" }}>Periods beidzies</span>`}
-                                </span>
-                              </div>
-                              <div style=${{ fontSize: "0.82rem", color: "var(--muted)", marginBottom: "0.35rem" }}>
-                                Autors: ${String(x.authorLabel || "—").trim()}
-                              </div>
-                              <div
-                                class="akt-vesture-html"
-                                style=${{
-                                  fontSize: "0.92rem",
-                                  boxSizing: "border-box",
-                                  minWidth: 0,
-                                  maxWidth: "100%",
-                                  width: "100%",
-                                  overflowWrap: "anywhere",
-                                  wordBreak: "break-word",
-                                  overflowX: "auto",
-                                }}
-                                dangerouslySetInnerHTML=${{ __html: String(x.html || "") }}
-                              ></div>
-                            </article>
-                          `;
-                        })}
-                      </div>
-                    `}
-            </section>
           `;
         }
 
@@ -8161,7 +8070,6 @@
             if (sectionView === "darbaUzdevumiIad") return "IAD ieteikumi";
             if (sectionView === "procesuVadiba") return "Procesu vadība";
             if (sectionView === "pakalpojumuVadiba") return "Pakalpojumu vadība";
-            if (sectionView === "aktualitatesHistory") return "Aktualitāšu vēsture";
             if (sectionView === "pddAppChanges") return "Izmaiņas PDD aplikācijā";
             if (sectionView !== "prombutnes") return "Sadaļa";
             if (sectionPromSub === "request") return "Prombūtnes pieteikums";
@@ -8174,6 +8082,7 @@
           }
           function normalizeSection(sectionView, sectionPromSub, sectionAnchor) {
             const safeView = String(sectionView ?? "").trim();
+            if (safeView === "aktualitatesHistory") return null;
             const safePromSub = String(sectionPromSub ?? "").trim();
             const safeAnchor = String(sectionAnchor ?? "").trim();
             if (!safeView) return null;
@@ -8218,6 +8127,7 @@
             [currentSection, pinnedSections]
           );
           const handleChangeView = useCallback((v) => {
+            if (v === "aktualitatesHistory") v = "home";
             if (v === view) {
               if (v === "prombutnes") {
                 setNavPast((p) => [...p, { view, promSub }]);
@@ -8377,10 +8287,19 @@
           const handleGoBack = useCallback(() => {
             setNavPast((p) => {
               if (p.length === 0) return p;
-              const prev = p[p.length - 1];
-              const next = p.slice(0, -1);
+              let cut = p.length - 1;
+              while (cut >= 0 && p[cut]?.view === "aktualitatesHistory") cut -= 1;
+              if (cut < 0) {
+                queueMicrotask(() => {
+                  setView("home");
+                  setPromSub("calendar");
+                });
+                return [];
+              }
+              const prev = p[cut];
+              const next = p.slice(0, cut);
               queueMicrotask(() => {
-                setView(prev.view);
+                setView(prev.view === "aktualitatesHistory" ? "home" : prev.view);
                 setPromSub(prev.promSub);
               });
               return next;
@@ -8983,9 +8902,7 @@
                     }}
                     absencesToday=${homeAbsencesSnapshot}
                   />`
-                : view === "aktualitatesHistory"
-                  ? html`<${AktualitatesVestureView} />`
-                  : view === "pddAppChanges"
+                : view === "pddAppChanges"
                     ? html`<${PddAppChangesView} highlightRowId=${appChangesHighlightId} />`
                   : view === "darbaUzdevumiIad"
                     ? null

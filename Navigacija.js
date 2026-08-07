@@ -842,7 +842,6 @@
       const darbaUzdevumiNavOpen = view === "darbaUzdevumiIad";
       const vestureAccordionOpen =
         Boolean(showPddAppChangesBadge) ||
-        view === "aktualitatesHistory" ||
         view === "pddAppChanges" ||
         (view === "prombutnes" && promSub === "changes");
       const showBack = Boolean(canGoBack && typeof onGoBack === "function");
@@ -1014,13 +1013,6 @@
                     }}
                   >
                     Auditācijas vēsture
-                  </button>
-                  <button
-                    type="button"
-                    class=${`app-nav-sublink ${view === "aktualitatesHistory" ? "active" : ""}`}
-                    onClick=${() => onChangeView("aktualitatesHistory")}
-                  >
-                    Aktualitāšu vēsture
                   </button>
                   <button
                     type="button"

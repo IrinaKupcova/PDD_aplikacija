@@ -7,6 +7,8 @@
   const REMOTE_SAL_INFO_TABLE = "pdd_saliedesana_info";
   const REMOTE_IDEJU_CHAT_TABLE = "pdd_ideju_chat";
   const REMOTE_IDEJU_CHAT_REACTIONS_TABLE = "pdd_ideju_chat_reactions";
+  /** Čats atslēgts — atbrīvo vietu Supabase FREE limitā. */
+  const IDEJU_CHAT_DISABLED = true;
   const IDEJU_CHAT_EMOJI = ["👍", "❤️", "😂", "🎉", "👀"];
   /** Supabase: public."Saliedesana" — kolonnas kā Table Editor (arī saīsinātie nosaukumi). */
   const REMOTE_TABLE = "Saliedesana";
@@ -1158,6 +1160,14 @@
   }
 
   function mountIdejuChatPreview(hostEl, options = {}) {
+    if (IDEJU_CHAT_DISABLED) {
+      try {
+        if (hostEl) hostEl.innerHTML = "";
+      } catch {
+        /* ignore */
+      }
+      return () => {};
+    }
     if (!hostEl || typeof document === "undefined") return () => {};
     ensureIdejuChatModalStyles();
     const theme = options.theme === "sal" ? "sal" : "akt";
@@ -1254,6 +1264,10 @@
   }
 
   function mountIdejuChatFloatWidget() {
+    if (IDEJU_CHAT_DISABLED) {
+      ensureIdejuChatFloatWidget();
+      return () => {};
+    }
     if (typeof document === "undefined") return () => {};
     if (document.getElementById("pdd-ideju-float-root")) return () => {};
     ensureIdejuChatModalStyles();
@@ -1328,29 +1342,58 @@
   }
 
   function canMountIdejuChatFloat() {
+    return false;
+  }
+
+  function clearIdejuChatLocalStorage() {
     try {
-      if (typeof sessionStorage === "undefined") return false;
-      if (sessionStorage.getItem("pdd_local_ok") !== "1") return false;
-      const em = String(sessionStorage.getItem("pdd_local_email") || "").trim();
-      const uid = String(sessionStorage.getItem("pdd_local_user_id") || "").trim();
-      return Boolean(em.includes("@") && uid);
+      localStorage.removeItem(LS_IDEJU_CHAT_KEY);
+      localStorage.removeItem(LS_IDEJU_CHAT_REACTIONS_KEY);
+      localStorage.removeItem("pdd_ideju_chat_seen_v1");
+      localStorage.removeItem("pdd_ideju_chat_float_open_v1");
     } catch {
-      return false;
+      /* ignore */
+    }
+  }
+
+  let idejuChatRemotePurgeStarted = false;
+
+  async function purgeIdejuChatRemoteOnce() {
+    if (!IDEJU_CHAT_DISABLED || idejuChatRemotePurgeStarted) return;
+    idejuChatRemotePurgeStarted = true;
+    const sb = globalThis.__PDD_SUPABASE__ ?? null;
+    if (!sb) return;
+    try {
+      await Promise.race([
+        (async () => {
+          try {
+            await sb.from(REMOTE_IDEJU_CHAT_REACTIONS_TABLE).delete().gte("created_at", "1970-01-01");
+          } catch {
+            /* ignore */
+          }
+          try {
+            await sb.from(REMOTE_IDEJU_CHAT_TABLE).delete().gte("created_at", "1970-01-01");
+          } catch {
+            /* ignore */
+          }
+        })(),
+        new Promise((r) => setTimeout(r, 8000)),
+      ]);
+    } catch (e) {
+      console.warn("[Čats.purge]", e?.message || e);
     }
   }
 
   function ensureIdejuChatFloatWidget() {
     if (typeof document === "undefined") return;
     try {
-      if (!canMountIdejuChatFloat()) {
-        document.getElementById("pdd-ideju-float-root")?.remove();
-        return;
-      }
-      if (document.getElementById("pdd-ideju-float-root")) return;
-      mountIdejuChatFloatWidget();
-    } catch (e) {
-      console.warn("[Čats.float]", e?.message || e);
+      document.getElementById("pdd-ideju-float-root")?.remove();
+      document.getElementById("pdd-ideju-chat-modal-root")?.remove();
+      clearIdejuChatLocalStorage();
+    } catch {
+      /* ignore */
     }
+    void purgeIdejuChatRemoteOnce();
   }
 
   if (typeof document !== "undefined") {
@@ -1366,9 +1409,9 @@
     } else {
       setTimeout(bootFloat, 0);
     }
-    // Pēc pieslēgšanās (reload) vai ja sesija parādās vēlāk.
     window.addEventListener("storage", bootFloat);
-    setTimeout(bootFloat, 1500);
+    setTimeout(bootFloat, 500);
+    setTimeout(bootFloat, 4000);
   }
 
   let idejuChatPollTimer = null;
@@ -1388,15 +1431,7 @@
       }
       idejuChatChannel = null;
     }
-    const rootEl = document.getElementById("pdd-ideju-chat-modal-root");
-    if (rootEl && typeof rootEl.__pddIdejuCleanup === "function") {
-      try {
-        rootEl.__pddIdejuCleanup();
-      } catch {
-        /* ignore */
-      }
-    }
-    rootEl?.remove();
+    document.getElementById("pdd-ideju-chat-modal-root")?.remove();
   }
 
   function idejuChatNearBottom(listEl, thresholdPx = 90) {
@@ -1504,6 +1539,10 @@
   }
 
   function openIdejuChatModal(options = {}) {
+    if (IDEJU_CHAT_DISABLED) {
+      ensureIdejuChatFloatWidget();
+      return;
+    }
     if (typeof document === "undefined") return;
     ensureIdejuChatModalStyles();
     closeIdejuChatModal();
