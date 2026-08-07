@@ -1,0 +1,49 @@
+# Automātiska Supabase resursu / pieejamības pārbaude.
+# Ja DB neatbild vai ir pārslogota — e-pasts (Resend) + GitHub Issue.
+# Secrets (jau lietoti citās darbplūsmās): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+#   RESEND_API_KEY, RESEND_FROM. Opcionāli: PDD_RESOURCE_ALERT_TO, PDD_RESOURCE_ALERT_CC.
+name: Supabase resource watch
+
+on:
+  schedule:
+    # Katru 30. minūti (UTC)
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      RESEND_FROM: ${{ secrets.RESEND_FROM }}
+      PDD_RESOURCE_ALERT_TO: ${{ secrets.PDD_RESOURCE_ALERT_TO || 'irina.kupcova@vid.gov.lv' }}
+      PDD_RESOURCE_ALERT_CC: ${{ secrets.PDD_RESOURCE_ALERT_CC || 'katrina.jurgensone@vid.gov.lv' }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Probe Supabase + alert
+        id: probe
+        continue-on-error: true
+        run: node scripts/supabase-resource-watch.js
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.probe.outcome }}" = "success" ]; then
+            echo "Supabase pārbaude: OK"
+          else
+            echo "::warning::Supabase pārbaude: problēma — skatīt e-pastu / Issue ar label supabase-resource-alert"
+          fi
