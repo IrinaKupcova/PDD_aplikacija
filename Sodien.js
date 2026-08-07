@@ -1258,42 +1258,27 @@ function applyCmd(cmd, value) {
 }
 
 const AKT_IMG_SPACE_WARN =
-  "Uzmanību: datubāzē trūkst vietas (Supabase FREE limits).\n\n" +
-  "Bildes ļoti ātri aizņem vietu un var no jauna bloķēt aplikāciju.\n" +
-  "Labāk raksti tekstu, nevis liec screenshotus.\n\n" +
-  "Vai tomēr pievienot bildi?";
+  "Bildes aktualitātēs vairs nav atļautas — datubāzes vietas taupīšanai.\nLūdzu, izmanto tekstu vai failu-pielikumu (ne screenshot).";
+
+/** Bildes aktualitātēs ir aizliegtas (FREE DB limits). */
+const AKTUALITATES_IMAGES_DISABLED = true;
 
 function confirmAktualitateImageInsert() {
-  if (typeof confirm !== "function") return true;
-  return confirm(AKT_IMG_SPACE_WARN);
+  if (typeof alert === "function") alert(AKT_IMG_SPACE_WARN);
+  return false;
+}
+
+function stripAktualitateImagesFromHtml(html) {
+  let s = String(html || "");
+  if (!s) return s;
+  s = s.replace(/<img\b[^>]*>/gi, "");
+  s = s.replace(/<figure\b[^>]*>[\s\S]*?<\/figure>/gi, "");
+  return s;
 }
 
 function onPickImage(ev) {
-  const f = ev?.target?.files?.[0];
-  if (!f) return;
-  if (!confirmAktualitateImageInsert()) {
-    ev.target.value = "";
-    return;
-  }
-  const fr = new FileReader();
-  fr.onload = () => {
-    void (async () => {
-      const raw = String(fr.result || "");
-      if (!raw) return;
-      let src = raw;
-      try {
-        src = (await compressAktualitateImageDataUrl(raw, f.type)) || raw;
-      } catch {
-        src = raw;
-      }
-      insertAtCursor(
-        `<img data-akt-img="1" draggable="true" src="${escHtml(src)}" alt="${escHtml(f.name)}"` +
-          ` style="display:block;max-width:100%;width:min(100%,420px);height:auto;border-radius:8px;margin:0.35rem 0;" />`,
-      );
-    })();
-  };
-  fr.readAsDataURL(f);
-  ev.target.value = "";
+  if (ev?.target) ev.target.value = "";
+  confirmAktualitateImageInsert();
 }
 
 const AKT_IMG_MAX_EDGE = 960;
@@ -1377,40 +1362,16 @@ async function shrinkHeavyImagesInHtml(html) {
 function onEditorPasteImages(ev) {
   const cd = ev?.clipboardData;
   if (!cd?.items) return;
-  const images = [];
+  let hasImage = false;
   for (const it of cd.items) {
     if (it.kind === "file" && String(it.type || "").startsWith("image/")) {
-      const f = it.getAsFile?.();
-      if (f) images.push(f);
+      hasImage = true;
+      break;
     }
   }
-  if (!images.length) return;
-  if (!confirmAktualitateImageInsert()) {
-    ev.preventDefault();
-    return;
-  }
+  if (!hasImage) return;
   ev.preventDefault();
-  void (async () => {
-    for (const f of images) {
-      const raw = await new Promise((resolve) => {
-        const fr = new FileReader();
-        fr.onload = () => resolve(String(fr.result || ""));
-        fr.onerror = () => resolve("");
-        fr.readAsDataURL(f);
-      });
-      if (!raw) continue;
-      let src = raw;
-      try {
-        src = (await compressAktualitateImageDataUrl(raw, f.type)) || raw;
-      } catch {
-        src = raw;
-      }
-      insertAtCursor(
-        `<img data-akt-img="1" draggable="true" src="${escHtml(src)}" alt="${escHtml(f.name || "attēls")}"` +
-          ` style="display:block;max-width:100%;width:min(100%,420px);height:auto;border-radius:8px;margin:0.35rem 0;" />`,
-      );
-    }
-  })();
+  confirmAktualitateImageInsert();
 }
 
 function markSelectedEditorImage(img) {
@@ -1548,6 +1509,11 @@ function onPickAttachment(ev) {
   if (ev?.target?.dataset) ev.target.dataset.attachmentAllowed = "";
   const f = ev?.target?.files?.[0];
   if (!f) return;
+  if (String(f.type || "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(f.name || ""))) {
+    if (ev?.target) ev.target.value = "";
+    confirmAktualitateImageInsert();
+    return;
+  }
   const sb = globalThis.__PDD_SUPABASE__;
   const useRemote = Boolean(sodienUiOpts.useSupabase && sb);
 
@@ -1614,12 +1580,12 @@ async function addAktualitate() {
     alert("Ievadi aktualitātes tekstu.");
     return;
   }
-  // Automātiski samazina lielos (arī vecos) base64 attēlus pirms saglabāšanas.
-  try {
-    content = await shrinkHeavyImagesInHtml(content);
-    ed.innerHTML = content;
-  } catch (e) {
-    console.warn("[aktualitates.img.shrink]", e?.message || e);
+  // Bildes nav atļautas — noņem pirms saglabāšanas (arī no paste/veciem draftiem).
+  content = stripAktualitateImagesFromHtml(content);
+  ed.innerHTML = content;
+  if (!String(content || "").replace(/<[^>]+>/g, "").trim()) {
+    alert("Ievadi aktualitātes tekstu (bildes nav atļautas).");
+    return;
   }
   const today = ymd(new Date());
   ensureSodienDraftDefaults();
@@ -2372,23 +2338,12 @@ function renderTodayInfo({
 
           <div class="row" style=${{ gap: "0.45rem", flexWrap: "wrap" }}>
             <label class="btn btn-ghost btn-small" style=${{ cursor: "pointer" }}>
-              Pievienot bildi / screenshot
-              <input type="file" accept="image/*" style=${{ display: "none" }} onChange=${onPickImage} />
-            </label>
-            <label class="btn btn-ghost btn-small" style=${{ cursor: "pointer" }}>
               Pievienot pielikumu
               <input type="file" style=${{ display: "none" }} onClick=${onBeforePickAttachment} onChange=${onPickAttachment} />
             </label>
+            <span style=${{ fontSize: "0.82rem", color: "var(--muted)" }}>Bildes / screenshot nav atļauti (vietas taupīšanai).</span>
           </div>
           <div class="row" style=${{ gap: "0.35rem", flexWrap: "wrap" }}>
-            <button type="button" class="btn btn-ghost btn-small" onClick=${() => resizeSelectedImage(0.8)}>Bilde -</button>
-            <button type="button" class="btn btn-ghost btn-small" onClick=${() => resizeSelectedImage(1.25)}>Bilde +</button>
-            <button type="button" class="btn btn-danger btn-small" onClick=${deleteSelectedImage}>Dzēst bildi</button>
-            <button type="button" class="btn btn-ghost btn-small" onClick=${() => alignSelectedImage("left")}>Pa kreisi</button>
-            <button type="button" class="btn btn-ghost btn-small" onClick=${() => alignSelectedImage("center")}>Centrā</button>
-            <button type="button" class="btn btn-ghost btn-small" onClick=${() => alignSelectedImage("right")}>Pa labi</button>
-            <button type="button" class="btn btn-ghost btn-small" onClick=${() => moveSelectedImage(-1)}>Uz augšu</button>
-            <button type="button" class="btn btn-ghost btn-small" onClick=${() => moveSelectedImage(1)}>Uz leju</button>
             <button type="button" class="btn btn-danger btn-small" onClick=${() => void deleteSelectedAttachment()}>Dzēst pielikumu</button>
           </div>
 
@@ -2468,6 +2423,62 @@ function renderTodayInfo({
   return out;
 }
 
+function retentionCutoffYmd() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  return ymd(d);
+}
+
+let aktualitatesHistoryPurgeStarted = false;
+
+/** Automātiski dzēš beigušās / vecākas aktualitātes un noņem <img> no atlikušajām. */
+async function purgeAktualitatesHistoryOnce(sb) {
+  if (aktualitatesHistoryPurgeStarted || !sb) return;
+  aktualitatesHistoryPurgeStarted = true;
+  const today = ymd(new Date());
+  const cutoff = retentionCutoffYmd();
+  try {
+    await Promise.race([
+      (async () => {
+        const t = await resolveAktualitatesTableName(sb);
+        // Beigušās vai vecākas par iepriekšējā mēneša sākumu
+        try {
+          await sb.from(t).delete().lt("Beigas", cutoff);
+        } catch (e) {
+          console.warn("[aktualitates.purge.old]", e?.message || e);
+        }
+        try {
+          await sb.from(t).delete().lt("Beigas", today);
+        } catch (e) {
+          console.warn("[aktualitates.purge.expired]", e?.message || e);
+        }
+        // Lokālā keša
+        try {
+          const local = loadAktualitates();
+          const cleaned = local
+            .filter((x) => {
+              const end = String(x?.end || x?.Beigas || "");
+              return !end || (end >= cutoff && end >= today);
+            })
+            .map((x) => ({
+              ...x,
+              html: stripAktualitateImagesFromHtml(x?.html || ""),
+            }));
+          if (cleaned.length !== local.length) saveAktualitates(cleaned);
+          else saveAktualitates(cleaned);
+        } catch {
+          /* ignore */
+        }
+      })(),
+      new Promise((r) => setTimeout(r, 12000)),
+    ]);
+  } catch (e) {
+    console.warn("[aktualitates.purge]", e?.message || e);
+  }
+}
+
 window.PDDSodien = {
   renderTodayInfo,
   htmlHasAttachments,
@@ -2481,4 +2492,7 @@ window.PDDSodien = {
   ensureSodienAktStyleOnce,
   TABLE_AKTUALITATES,
   navigateToPrombutnesVestureDetail,
+  purgeAktualitatesHistoryOnce,
+  stripAktualitateImagesFromHtml,
+  AKTUALITATES_IMAGES_DISABLED,
 };

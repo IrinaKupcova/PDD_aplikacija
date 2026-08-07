@@ -3248,21 +3248,8 @@
       }
 
       function salInfoOnPickImage(ev) {
-        const f = ev?.target?.files?.[0];
-        if (!f) return;
-        const fr = new FileReader();
-        fr.onload = () => {
-          const src = String(fr.result || "");
-          if (!src) return;
-          const safeSrc = escapeHtmlLite(src);
-          const safeName = escapeHtmlLite(f.name);
-          salInfoInsertAtCursor(
-            `<img data-sal-info-img="1" draggable="true" src="${safeSrc}" alt="${safeName}"` +
-              ` style="display:block;max-width:100%;width:min(100%,420px);height:auto;border-radius:8px;margin:0.35rem 0;" />`,
-          );
-        };
-        fr.readAsDataURL(f);
-        ev.target.value = "";
+        if (ev?.target) ev.target.value = "";
+        alert("Bildes vairs nav atļautas — datubāzes vietas taupīšanai. Izmanto tekstu vai failu-pielikumu.");
       }
 
       function salInfoOnBeforePickAttachment(ev) {
@@ -3288,6 +3275,11 @@
         if (ev?.target?.dataset) ev.target.dataset.attachmentAllowed = "";
         const f = ev?.target?.files?.[0];
         if (!f) return;
+        if (String(f.type || "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(f.name || ""))) {
+          if (ev?.target) ev.target.value = "";
+          alert("Bildes vairs nav atļautas — datubāzes vietas taupīšanai.");
+          return;
+        }
 
         const fallbackToInline = () => {
           const fr = new FileReader();
@@ -3350,9 +3342,11 @@
         e?.preventDefault?.();
         const title = String(salInfoTitle || "").trim();
         const ed = salInfoCurrentEditor();
-        const body = String(ed?.innerHTML || salInfoBody || "").trim();
+        let body = String(ed?.innerHTML || salInfoBody || "").trim();
+        body = body.replace(/<img\b[^>]*>/gi, "").replace(/<figure\b[^>]*>[\s\S]*?<\/figure>/gi, "");
+        if (ed) ed.innerHTML = body;
         if (!salInfoBodyIsMeaningful(body)) {
-          alert("Ieraksti tekstu.");
+          alert("Ieraksti tekstu (bildes nav atļautas).");
           return;
         }
         setSalInfoBusy(true);
@@ -3915,6 +3909,10 @@
       }
 
       function addAttachment(kind = "link") {
+        if (kind === "image") {
+          alert("Bildes vairs nav atļautas — datubāzes vietas taupīšanai.");
+          return;
+        }
         const url = String(attUrl || "").trim();
         if (!url) return;
         let label = String(attLabel || "").trim();
@@ -3941,40 +3939,16 @@
         setAttUrl("");
       }
 
-      function addImageFromFile(file) {
-        if (!file) return;
-        const fallback = file.name ? file.name.replace(/\.[^.]+$/, "") : "Attēls";
-        const pushDataUrl = () => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const dataUrl = String(reader.result || "");
-            if (!dataUrl) return;
-            setAttachments((prev) => [...prev, { label: fallback, url: dataUrl, kind: "image", storagePath: "" }]);
-            const safeLabel = escapeHtmlAttr(fallback);
-            const safeSrc = escapeHtmlAttr(dataUrl);
-            setDescHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
-          };
-          reader.readAsDataURL(file);
-        };
-        if (supabase) {
-          uploadSaliedesanaFileToStorage(supabase, file, attachmentUploadFolder())
-            .then(({ publicUrl, storagePath }) => {
-              setAttachments((prev) => [...prev, { label: fallback, url: publicUrl, kind: "image", storagePath }]);
-              const safeLabel = escapeHtmlAttr(fallback);
-              const safeSrc = escapeHtmlAttr(publicUrl);
-              setDescHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
-            })
-            .catch((e) => {
-              setDbMessage(`Attēla augšupielāde neizdevās (${String(e?.message || e)}); saglabāts lokāli kā datu URL.`);
-              pushDataUrl();
-            });
-        } else {
-          pushDataUrl();
-        }
+      function addImageFromFile(_file) {
+        alert("Bildes vairs nav atļautas — datubāzes vietas taupīšanai. Izmanto saiti vai failu-pielikumu.");
       }
 
       async function addBinaryFileAttachment(file) {
         if (!file) return;
+        if (String(file.type || "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(file.name || ""))) {
+          alert("Bildes vairs nav atļautas — datubāzes vietas taupīšanai.");
+          return;
+        }
         const label = String(file.name || "Fails").trim() || "Fails";
         if (!supabase) {
           setDbMessage("Failu augšupielādei vajag Supabase sesiju. Izmanto saiti (URL) lauku.");
@@ -4015,66 +3989,44 @@
       }
 
       function addCelProgramAttachment(kind = "link") {
+        if (kind === "image") {
+          alert("Bildes vairs nav atļautas — datubāzes vietas taupīšanai.");
+          return;
+        }
         const url = String(celProgAttUrl || "").trim();
         if (!url) return;
         let label = String(celProgAttLabel || "").trim();
         if (!label) {
           try {
-            const withProto = /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? url : `https://${url}`;
-            const u = /^data:image\//i.test(withProto) ? null : new URL(withProto);
+            const withProto = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+            const u = new URL(withProto);
             const host = String(u?.hostname || "").replace(/^www\./i, "");
             const pathName = String(u?.pathname || "").replace(/\/+$/, "");
             const tail = pathName.split("/").filter(Boolean).pop() || "";
             label = tail ? decodeURIComponent(tail) : host || "Saite";
           } catch {
-            label = kind === "image" ? "Attēls" : "Saite";
+            label = "Saite";
           }
         }
         setCelProgramAttachments((prev) => [...prev, { label, url, kind, storagePath: "" }]);
-        if (kind === "image") {
-          const safeUrl = /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? url : `https://${url}`;
-          const safeLabel = escapeHtmlAttr(label || "Attēls");
-          const safeSrc = escapeHtmlAttr(safeUrl);
-          setCelProgramHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
-        }
         setCelProgAttLabel("");
         setCelProgAttUrl("");
       }
 
-      function addCelProgramImageFromFile(file) {
-        if (!file) return;
-        const fallback = file.name ? file.name.replace(/\.[^.]+$/, "") : "Attēls";
-        const pushDataUrl = () => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const dataUrl = String(reader.result || "");
-            if (!dataUrl) return;
-            setCelProgramAttachments((prev) => [...prev, { label: fallback, url: dataUrl, kind: "image", storagePath: "" }]);
-            const safeLabel = escapeHtmlAttr(fallback);
-            const safeSrc = escapeHtmlAttr(dataUrl);
-            setCelProgramHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
-          };
-          reader.readAsDataURL(file);
-        };
-        if (supabase) {
-          uploadSaliedesanaFileToStorage(supabase, file, attachmentUploadFolder())
-            .then(({ publicUrl, storagePath }) => {
-              setCelProgramAttachments((prev) => [...prev, { label: fallback, url: publicUrl, kind: "image", storagePath }]);
-              const safeLabel = escapeHtmlAttr(fallback);
-              const safeSrc = escapeHtmlAttr(publicUrl);
-              setCelProgramHtml((prev) => `${String(prev || "")}<div class="sal-image-wrap"><img src="${safeSrc}" alt="${safeLabel}" /><span class="sal-image-caption">${safeLabel}</span></div>`);
-            })
-            .catch((e) => {
-              setDbMessage(`Attēla augšupielāde neizdevās (${String(e?.message || e)}); saglabāts lokāli kā datu URL.`);
-              pushDataUrl();
-            });
-        } else {
-          pushDataUrl();
-        }
+      function addCelProgramImageFromFile(_file) {
+        alert("Bildes vairs nav atļautas — datubāzes vietas taupīšanai.");
+      }
+
+      function addCelProgramFileFromFile(file) {
+        void addCelProgramBinaryFile(file);
       }
 
       async function addCelProgramBinaryFile(file) {
         if (!file) return;
+        if (String(file.type || "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(file.name || ""))) {
+          alert("Bildes vairs nav atļautas — datubāzes vietas taupīšanai.");
+          return;
+        }
         const label = String(file.name || "Fails").trim() || "Fails";
         if (!supabase) {
           setDbMessage("Failu augšupielādei vajag Supabase sesiju. Izmanto saiti (URL) lauku.");
@@ -4894,10 +4846,6 @@
               </div>
               <div class="row" style=${{ gap: "0.45rem", flexWrap: "wrap" }}>
                 <label class="btn btn-ghost btn-small" style=${{ cursor: "pointer" }}>
-                  Pievienot bildi / screenshot
-                  <input type="file" accept="image/*" style=${{ display: "none" }} onChange=${salInfoOnPickImage} />
-                </label>
-                <label class="btn btn-ghost btn-small" style=${{ cursor: "pointer" }}>
                   Pievienot pielikumu
                   <input
                     type="file"
@@ -4906,16 +4854,9 @@
                     onChange=${salInfoOnPickAttachment}
                   />
                 </label>
+                <span style=${{ fontSize: "0.82rem", color: "var(--muted)" }}>Bildes nav atļautas.</span>
               </div>
               <div class="row" style=${{ gap: "0.35rem", flexWrap: "wrap" }}>
-                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoResizeSelectedImage(0.8)}>Bilde -</button>
-                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoResizeSelectedImage(1.25)}>Bilde +</button>
-                <button type="button" class="btn btn-danger btn-small" onClick=${salInfoDeleteSelectedImage}>Dzēst bildi</button>
-                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoAlignSelectedImage("left")}>Pa kreisi</button>
-                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoAlignSelectedImage("center")}>Centrā</button>
-                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoAlignSelectedImage("right")}>Pa labi</button>
-                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoMoveSelectedImage(-1)}>Uz augšu</button>
-                <button type="button" class="btn btn-ghost btn-small" onClick=${() => salInfoMoveSelectedImage(1)}>Uz leju</button>
                 <button type="button" class="btn btn-danger btn-small" onClick=${() => void salInfoDeleteSelectedAttachment()}>
                   Dzēst pielikumu
                 </button>
@@ -5184,32 +5125,11 @@
                               <div class="row" style=${{ gap: ".45rem", flexWrap: "wrap" }}>
                                 <input class="input" style=${{ flex: 1 }} placeholder="https://..." value=${attUrl} onInput=${(e) => setAttUrl(e.target.value)} />
                                 <button type="button" class="btn btn-ghost btn-small" onClick=${() => addAttachment("link")}>Pievienot saiti</button>
-                                <button
-                                  type="button"
-                                  class="btn btn-ghost btn-small"
-                                  onClick=${() => {
-                                    if (String(attUrl || "").trim()) addAttachment("image");
-                                    else document.getElementById("sal-image-upload-input")?.click();
-                                  }}
-                                >
-                                  Pievienot attēlu
-                                </button>
                                 <button type="button" class="btn btn-ghost btn-small" onClick=${() => document.getElementById("sal-file-upload-input")?.click()}>Pievienot failu</button>
-                                <input
-                                  id="sal-image-upload-input"
-                                  type="file"
-                                  accept="image/*"
-                                  style=${{ display: "none" }}
-                                  onChange=${(e) => {
-                                    const file = e.target?.files?.[0];
-                                    addImageFromFile(file);
-                                    e.target.value = "";
-                                  }}
-                                />
                                 <input
                                   id="sal-file-upload-input"
                                   type="file"
-                                  accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,image/*"
+                                  accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
                                   style=${{ display: "none" }}
                                   onChange=${(e) => {
                                     const file = e.target?.files?.[0];
@@ -5218,6 +5138,7 @@
                                   }}
                                 />
                               </div>
+                              <p style=${{ margin: "0.25rem 0 0", fontSize: "0.78rem", color: "var(--muted)" }}>Bildes / screenshot nav atļauti.</p>
                               ${attachments.map((a, idx) => html`
                                 <div key=${`att-${idx}`} class="sal-att-item">
                                   <button type="button" class="btn btn-ghost btn-small" onClick=${() => openUrlSafe(a.url)}>
@@ -5856,43 +5777,23 @@
                                         <button
                                           type="button"
                                           class="btn btn-ghost btn-small"
-                                          onClick=${() => {
-                                            if (String(celProgAttUrl || "").trim()) addCelProgramAttachment("image");
-                                            else document.getElementById("sal-cel-prog-image-upload")?.click();
-                                          }}
-                                        >
-                                          Pievienot attēlu
-                                        </button>
-                                        <button
-                                          type="button"
-                                          class="btn btn-ghost btn-small"
                                           onClick=${() => document.getElementById("sal-cel-prog-file-upload")?.click()}
                                         >
                                           Pievienot failu
                                         </button>
                                         <input
-                                          id="sal-cel-prog-image-upload"
-                                          type="file"
-                                          accept="image/*"
-                                          style=${{ display: "none" }}
-                                          onChange=${(e) => {
-                                            const file = e.target?.files?.[0];
-                                            addCelProgramImageFromFile(file);
-                                            e.target.value = "";
-                                          }}
-                                        />
-                                        <input
                                           id="sal-cel-prog-file-upload"
                                           type="file"
-                                          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,image/*"
+                                          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
                                           style=${{ display: "none" }}
                                           onChange=${(e) => {
                                             const file = e.target?.files?.[0];
-                                            void addCelProgramBinaryFile(file);
+                                            addCelProgramFileFromFile(file);
                                             e.target.value = "";
                                           }}
                                         />
                                       </div>
+                                      <p style=${{ margin: "0.25rem 0 0", fontSize: "0.78rem", color: "var(--muted)" }}>Bildes nav atļautas.</p>
                                       ${celProgramAttachments.map(
                                         (a, idx) => html`
                                           <div key=${`cel-att-${idx}`} class="sal-att-item">

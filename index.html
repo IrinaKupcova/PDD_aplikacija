@@ -539,9 +539,9 @@
       <script defer src="./Komanda.js?v=202606182"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608095"></script>
+      <script defer src="./Saliedesana.js?v=202608096"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
-      <script defer src="./Sodien.js?v=202608094"></script>
+      <script defer src="./Sodien.js?v=202608096"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
       <script defer src="./Navigacija.js?v=202608095"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
@@ -2359,6 +2359,7 @@
         }
 
         let auditRemotePurgeStarted = false;
+        let absencesRemotePurgeStarted = false;
         async function purgeOldAuditLogsRemoteOnce() {
           if (auditRemotePurgeStarted || isLocalMode() || !supabase || TIKAI_VIENKARSI_SKATS) return;
           auditRemotePurgeStarted = true;
@@ -2385,8 +2386,46 @@
             console.warn("[audit.purge]", e?.message || e);
           }
         }
+
+        async function purgeOldAbsencesRemoteOnce() {
+          if (absencesRemotePurgeStarted || isLocalMode() || !supabase || TIKAI_VIENKARSI_SKATS) return;
+          absencesRemotePurgeStarted = true;
+          const d = new Date();
+          d.setHours(0, 0, 0, 0);
+          d.setDate(1);
+          d.setMonth(d.getMonth() - 1);
+          const cutoffYmd = d.toISOString().slice(0, 10);
+          try {
+            await ensureDbReadableSession();
+            await Promise.race([
+              (async () => {
+                try {
+                  const r = await supabase.from("prombutnes_dati").delete().lt("Beigu_datums", cutoffYmd);
+                  if (r.error) console.warn("[absences.purge]", r.error.message || r.error);
+                } catch (e) {
+                  console.warn("[absences.purge]", e?.message || e);
+                }
+              })(),
+              new Promise((resolve) => setTimeout(resolve, 10000)),
+            ]);
+          } catch (e) {
+            console.warn("[absences.purge]", e?.message || e);
+          }
+        }
+
+        function runHistoryRetentionCleanup() {
+          void purgeOldAuditLogsRemoteOnce();
+          void purgeOldAbsencesRemoteOnce();
+          try {
+            const sb = globalThis.__PDD_SUPABASE__;
+            void globalThis.PDDSodien?.purgeAktualitatesHistoryOnce?.(sb);
+          } catch (e) {
+            console.warn("[history.purge]", e?.message || e);
+          }
+        }
         if (supabase && configured() && !isLocalMode() && !TIKAI_VIENKARSI_SKATS) {
-          setTimeout(() => void purgeOldAuditLogsRemoteOnce(), 3500);
+          setTimeout(() => void runHistoryRetentionCleanup(), 3500);
+          setTimeout(() => void runHistoryRetentionCleanup(), 20000);
         }
 
         function normalizeAuditLogRecord(r) {
@@ -2462,7 +2501,7 @@
           const dbLogs = (rows ?? []).map(normalizeAuditLogRecord).filter(Boolean);
           const cutoff = auditRetentionCutoffIso();
           const kept = dbLogs.filter((r) => !r.ts || String(r.ts) >= cutoff);
-          void purgeOldAuditLogsRemoteOnce();
+          void runHistoryRetentionCleanup();
           return kept.length ? kept : local;
         }
 
