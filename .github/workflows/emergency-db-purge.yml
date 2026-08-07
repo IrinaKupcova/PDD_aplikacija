@@ -1,0 +1,79 @@
+# Avārijas DB tīrīšana, kad Dashboard timeouto (FREE limitu pārsniegšana).
+# Secrets: SUPABASE_URL (vai VITE_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY
+# Papildus (labāk): SUPABASE_DB_PASSWORD + SUPABASE_PROJECT_REF + SUPABASE_ACCESS_TOKEN → psql
+name: Emergency DB purge (chat + old audit)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pārbauda secrets
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::Trūkst SUPABASE_URL/VITE_SUPABASE_URL vai SUPABASE_SERVICE_ROLE_KEY"
+            exit 1
+          fi
+          echo "URL ok; service_role ok"
+
+      - name: REST — truncate-like delete (čats)
+        run: |
+          set -e
+          BASE="${SUPABASE_URL%/}/rest/v1"
+          H=(-H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" -H "Prefer: return=minimal")
+          echo "Dzēš pdd_ideju_chat_reactions..."
+          curl -sS -X DELETE "${BASE}/pdd_ideju_chat_reactions?created_at=gte.1970-01-01" "${H[@]}" -m 120 || true
+          echo "Dzēš pdd_ideju_chat..."
+          curl -sS -X DELETE "${BASE}/pdd_ideju_chat?created_at=gte.1970-01-01" "${H[@]}" -m 120 || true
+          echo "REST chat done"
+
+      - name: REST — vecā auditācija (pa partijām)
+        run: |
+          set -e
+          BASE="${SUPABASE_URL%/}/rest/v1"
+          CUTOFF=$(date -u -d "$(date +%Y-%m-01) -1 month" +%Y-%m-%dT00:00:00Z 2>/dev/null || python3 - <<'PY'
+          from datetime import date
+          d = date.today().replace(day=1)
+          m = d.month - 1 or 12
+          y = d.year if d.month > 1 else d.year - 1
+          print(f"{y:04d}-{m:02d}-01T00:00:00Z")
+          PY
+          )
+          echo "Audit cutoff < $CUTOFF"
+          H=(-H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" -H "Prefer: return=minimal")
+          for T in Auditacijas_vesture Auditacijas_vēsture; do
+            echo "Dzēš $T (ts)..."
+            curl -sS -G -X DELETE "${BASE}/${T}" --data-urlencode "ts=lt.${CUTOFF}" "${H[@]}" -m 120 || true
+            echo "Dzēš $T (created_at)..."
+            curl -sS -G -X DELETE "${BASE}/${T}" --data-urlencode "created_at=lt.${CUTOFF}" "${H[@]}" -m 120 || true
+          done
+          echo "REST audit done"
+
+      - name: psql — TRUNCATE + DELETE (ja ir DB parole)
+        if: ${{ env.SUPABASE_DB_PASSWORD != '' && env.SUPABASE_PROJECT_REF != '' }}
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          REF="$SUPABASE_PROJECT_REF"
+          # Pooler session mode (5432) bieži labāks smagām komandām
+          export PGPASSWORD="$SUPABASE_DB_PASSWORD"
+          HOST="db.${REF}.supabase.co"
+          echo "Connecting to $HOST ..."
+          psql "host=$HOST port=5432 dbname=postgres user=postgres sslmode=require connect_timeout=30" \
+            -v ON_ERROR_STOP=0 \
+            -c "SET statement_timeout = '120s';" \
+            -f supabase/PIEMEROT_DZES_CHAT_UN_VECO_AUDIT.sql \
+            || echo "::warning::psql purge daļēji/neizdevās — skatīt logu"
+          echo "psql step finished"
