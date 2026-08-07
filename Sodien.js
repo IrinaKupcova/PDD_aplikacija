@@ -1094,7 +1094,7 @@ async function fetchActiveAktualitatesViaRest() {
     } catch {
       /* ignore */
     }
-  }, 45000);
+  }, 20000);
   try {
     const params = new URLSearchParams();
     params.set("select", "*");
@@ -1125,10 +1125,10 @@ async function fetchActiveAktualitatesViaRest() {
 }
 
 async function fetchActiveAktualitatesFromSupabase(sb) {
-  // Vispirms REST — ātri un stabili (arī ar lieliem attēliem). supabase-js paliek kā rezerve.
+  // REST vienreiz — nevilcinām ar supabase-js tabulu meklēšanu.
   try {
     const viaRest = await fetchActiveAktualitatesViaRest();
-    if (Array.isArray(viaRest) && viaRest.length > 0) return viaRest;
+    if (Array.isArray(viaRest)) return viaRest;
   } catch (e) {
     console.warn("[aktualitates.rest]", e?.message || e);
   }
@@ -1145,7 +1145,7 @@ async function fetchActiveAktualitatesFromSupabase(sb) {
         .order("Sakums", { ascending: false })
         .order("Beigas", { ascending: false }),
       new Promise((resolve) =>
-        setTimeout(() => resolve({ data: null, error: { message: "Aktualitātes noildza" } }), 15000),
+        setTimeout(() => resolve({ data: null, error: { message: "Aktualitātes noildza" } }), 12000),
       ),
     ]);
     if (!error && Array.isArray(data)) {
@@ -1153,7 +1153,7 @@ async function fetchActiveAktualitatesFromSupabase(sb) {
       try {
         nameMap = await Promise.race([
           fetchAuthorNameMap(sb, data ?? []),
-          new Promise((resolve) => setTimeout(() => resolve(new Map()), 2500)),
+          new Promise((resolve) => setTimeout(() => resolve(new Map()), 2000)),
         ]);
       } catch {
         nameMap = new Map();
@@ -1262,15 +1262,60 @@ function onPickImage(ev) {
   if (!f) return;
   const fr = new FileReader();
   fr.onload = () => {
-    const src = String(fr.result || "");
-    if (!src) return;
-    insertAtCursor(
-      `<img data-akt-img="1" draggable="true" src="${escHtml(src)}" alt="${escHtml(f.name)}"` +
-        ` style="display:block;max-width:100%;width:min(100%,420px);height:auto;border-radius:8px;margin:0.35rem 0;" />`,
-    );
+    void (async () => {
+      const raw = String(fr.result || "");
+      if (!raw) return;
+      let src = raw;
+      try {
+        src = (await compressAktualitateImageDataUrl(raw, f.type)) || raw;
+      } catch {
+        src = raw;
+      }
+      insertAtCursor(
+        `<img data-akt-img="1" draggable="true" src="${escHtml(src)}" alt="${escHtml(f.name)}"` +
+          ` style="display:block;max-width:100%;width:min(100%,420px);height:auto;border-radius:8px;margin:0.35rem 0;" />`,
+      );
+    })();
   };
   fr.readAsDataURL(f);
   ev.target.value = "";
+}
+
+/** Samazina jaunus attēlus pirms ievietošanas (mazāks DB apjoms). */
+function compressAktualitateImageDataUrl(dataUrl, mimeHint) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const maxW = 1280;
+        const maxH = 1280;
+        let w = img.naturalWidth || img.width || 0;
+        let h = img.naturalHeight || img.height || 0;
+        if (!w || !h) {
+          resolve(dataUrl);
+          return;
+        }
+        const scale = Math.min(1, maxW / w, maxH / h);
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        const mime = String(mimeHint || "").includes("png") ? "image/jpeg" : "image/jpeg";
+        resolve(canvas.toDataURL(mime, 0.72));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
 }
 
 function markSelectedEditorImage(img) {
@@ -1740,10 +1785,11 @@ function editAktualitate(id) {
 
 function ensureSodienAktStyleOnce() {
   if (typeof document === "undefined") return;
-  if (document.getElementById("pdd-sodien-akt-style-v2")) return;
+  if (document.getElementById("pdd-sodien-akt-style-v3")) return;
+  document.getElementById("pdd-sodien-akt-style-v2")?.remove();
   document.getElementById("pdd-sodien-akt-style")?.remove();
   const s = document.createElement("style");
-  s.id = "pdd-sodien-akt-style-v2";
+  s.id = "pdd-sodien-akt-style-v3";
   s.textContent = `
     #sodien-aktualitates-panel .sodien-akt-html {
       overflow-wrap: anywhere;
@@ -1766,6 +1812,31 @@ function ensureSodienAktStyleOnce() {
       overflow-x: auto;
       white-space: pre-wrap;
       word-break: break-word;
+    }
+    .pdd-akt-img-collapsed {
+      display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
+      width: 100%; max-width: 420px; margin: 0.4rem 0; padding: 0.55rem 0.7rem;
+      border: 1px dashed rgba(2,132,199,0.55); border-radius: 10px;
+      background: linear-gradient(180deg, #f0f9ff, #e0f2fe); color: #075985;
+      cursor: pointer; font: inherit; text-align: left;
+    }
+    .pdd-akt-img-collapsed:hover { background: #bae6fd; }
+    .pdd-akt-img-collapsed .pdd-akt-img-ico { font-size: 1.35rem; line-height: 1; }
+    .pdd-akt-img-collapsed .pdd-akt-img-meta { font-size: 0.82rem; opacity: 0.9; }
+    .pdd-akt-img-lightbox {
+      position: fixed; inset: 0; z-index: 90; background: rgba(15,23,42,0.72);
+      display: flex; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .pdd-akt-img-lightbox-inner {
+      position: relative; max-width: min(960px, 100%); max-height: 90vh;
+      background: #fff; border-radius: 12px; padding: 0.65rem; box-shadow: 0 18px 50px rgba(0,0,0,.35);
+    }
+    .pdd-akt-img-lightbox-inner img {
+      display: block; max-width: 100%; max-height: min(82vh, 900px); height: auto; border-radius: 8px;
+    }
+    .pdd-akt-img-lightbox-close {
+      position: absolute; top: 0.35rem; right: 0.45rem; border: 0; background: rgba(15,23,42,0.75);
+      color: #fff; width: 2rem; height: 2rem; border-radius: 999px; cursor: pointer; font-size: 1.1rem; line-height: 1;
     }
     .akt-vesture-html {
       box-sizing: border-box;
@@ -1920,6 +1991,82 @@ function htmlHasAttachments(htmlRaw) {
   return false;
 }
 
+/** Lieli base64 attēli — sarakstā tikai mazs pogas vietturis; pilnais atveras uz klikšķa. */
+const heavyAktImgStore = new Map();
+const HEAVY_AKT_IMG_CHARS = 12000; // ~9KB — tipiski screenshoti/base64
+
+function formatAktImageSizeLabel(dataUrl) {
+  const n = String(dataUrl || "").length;
+  const kb = Math.max(1, Math.round(n / 1024));
+  if (kb >= 1024) return `${(kb / 1024).toFixed(1)} MB`;
+  return `${kb} KB`;
+}
+
+function prepareAktualitateHtmlForPaint(html) {
+  const s = String(html || "");
+  if (!/data:image\//i.test(s)) return s;
+  let n = 0;
+  return s.replace(/<img\b([^>]*?)src=(["'])(data:image\/[^"']+)\2([^>]*)>/gi, (full, _pre, _q, src) => {
+    if (String(src).length < HEAVY_AKT_IMG_CHARS) return full;
+    n += 1;
+    const id = `pddakt${Date.now().toString(36)}_${n}_${Math.random().toString(36).slice(2, 7)}`;
+    heavyAktImgStore.set(id, src);
+    const size = formatAktImageSizeLabel(src);
+    return (
+      `<button type="button" class="pdd-akt-img-collapsed" data-pdd-akt-open="${id}" title="Atvērt attēlu">` +
+      `<span class="pdd-akt-img-ico" aria-hidden="true">📷</span>` +
+      `<span><strong>Attēls</strong><span class="pdd-akt-img-meta"> · ${size} · nospied, lai atvērtu</span></span>` +
+      `</button>`
+    );
+  });
+}
+
+function closeHeavyAktImageLightbox() {
+  document.getElementById("pdd-akt-img-lightbox")?.remove();
+}
+
+function openHeavyAktImageLightbox(id) {
+  const src = heavyAktImgStore.get(String(id || ""));
+  if (!src || typeof document === "undefined") return;
+  closeHeavyAktImageLightbox();
+  const bg = document.createElement("div");
+  bg.id = "pdd-akt-img-lightbox";
+  bg.className = "pdd-akt-img-lightbox";
+  bg.setAttribute("role", "dialog");
+  bg.setAttribute("aria-modal", "true");
+  bg.setAttribute("aria-label", "Attēls");
+  bg.innerHTML =
+    `<div class="pdd-akt-img-lightbox-inner">` +
+    `<button type="button" class="pdd-akt-img-lightbox-close" aria-label="Aizvērt">×</button>` +
+    `<img alt="Attēls" />` +
+    `</div>`;
+  const img = bg.querySelector("img");
+  if (img) img.src = src;
+  bg.addEventListener("click", (ev) => {
+    if (ev.target === bg || ev.target?.closest?.(".pdd-akt-img-lightbox-close")) closeHeavyAktImageLightbox();
+  });
+  document.body.appendChild(bg);
+}
+
+function ensureHeavyAktImageClickHandler() {
+  if (typeof document === "undefined") return;
+  if (document.documentElement.dataset.pddAktImgClick === "1") return;
+  document.documentElement.dataset.pddAktImgClick = "1";
+  document.addEventListener(
+    "click",
+    (ev) => {
+      const btn = ev.target?.closest?.("[data-pdd-akt-open]");
+      if (!btn) return;
+      ev.preventDefault();
+      openHeavyAktImageLightbox(btn.getAttribute("data-pdd-akt-open"));
+    },
+    true,
+  );
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeHeavyAktImageLightbox();
+  });
+}
+
 function renderTodayInfo({
   html,
   absences,
@@ -2046,7 +2193,7 @@ function renderTodayInfo({
                       <div
                         class="sodien-akt-html"
                         style=${sodienAktHtmlBox}
-                        dangerouslySetInnerHTML=${{ __html: String(x.html || "") }}
+                        dangerouslySetInnerHTML=${{ __html: prepareAktualitateHtmlForPaint(x.html) }}
                       ></div>
                       ${canCurrentActorManageAktualitate(x)
                         ? html`
@@ -2208,6 +2355,7 @@ function renderTodayInfo({
     </section>
   `;
   scheduleHydrateEngagePanels();
+  ensureHeavyAktImageClickHandler();
   return out;
 }
 
