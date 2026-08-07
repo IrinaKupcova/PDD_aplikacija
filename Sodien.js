@@ -1281,34 +1281,45 @@ function onPickImage(ev) {
   ev.target.value = "";
 }
 
-/** Samazina jaunus attēlus pirms ievietošanas (mazāks DB apjoms). */
-function compressAktualitateImageDataUrl(dataUrl, mimeHint) {
+const AKT_IMG_MAX_EDGE = 960;
+const AKT_IMG_TARGET_CHARS = 90000; // ~70 KB data-URL
+const AKT_IMG_SHRINK_IF_OVER = 18000; // sākam mazāku, ja lielāks par ~14 KB
+
+/** Automātiski samazina attēlu (izmērs + JPEG kvalitāte), lai DB/apjoms būtu mazāks. */
+function compressAktualitateImageDataUrl(dataUrl, mimeHint, options = {}) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       try {
-        const maxW = 1280;
-        const maxH = 1280;
+        const maxEdge = Number(options.maxEdge) > 0 ? Number(options.maxEdge) : AKT_IMG_MAX_EDGE;
+        const targetChars = Number(options.targetChars) > 0 ? Number(options.targetChars) : AKT_IMG_TARGET_CHARS;
         let w = img.naturalWidth || img.width || 0;
         let h = img.naturalHeight || img.height || 0;
         if (!w || !h) {
           resolve(dataUrl);
           return;
         }
-        const scale = Math.min(1, maxW / w, maxH / h);
-        w = Math.max(1, Math.round(w * scale));
-        h = Math.max(1, Math.round(h * scale));
+        let scale = Math.min(1, maxEdge / w, maxEdge / h);
+        let out = String(dataUrl || "");
         const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
         const ctx = canvas.getContext("2d");
         if (!ctx) {
           resolve(dataUrl);
           return;
         }
-        ctx.drawImage(img, 0, 0, w, h);
-        const mime = String(mimeHint || "").includes("png") ? "image/jpeg" : "image/jpeg";
-        resolve(canvas.toDataURL(mime, 0.72));
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const tw = Math.max(1, Math.round(w * scale));
+          const th = Math.max(1, Math.round(h * scale));
+          canvas.width = tw;
+          canvas.height = th;
+          ctx.clearRect(0, 0, tw, th);
+          ctx.drawImage(img, 0, 0, tw, th);
+          let quality = 0.68 - attempt * 0.08;
+          out = canvas.toDataURL("image/jpeg", Math.max(0.4, quality));
+          if (out.length <= targetChars) break;
+          scale *= 0.75;
+        }
+        resolve(out.length > 0 && out.length < String(dataUrl).length ? out : dataUrl);
       } catch {
         resolve(dataUrl);
       }
@@ -1316,6 +1327,71 @@ function compressAktualitateImageDataUrl(dataUrl, mimeHint) {
     img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
   });
+}
+
+/** Visus lielos data:image HTML saturā saspiež automātiski (arī vecie ieraksti pie saglabāšanas). */
+async function shrinkHeavyImagesInHtml(html) {
+  const s = String(html || "");
+  if (!/data:image\//i.test(s)) return s;
+  const re = /src=(["'])(data:image\/[^"']+)\1/gi;
+  const seen = new Map();
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const src = m[2];
+    if (!src || src.length < AKT_IMG_SHRINK_IF_OVER) continue;
+    if (seen.has(src)) continue;
+    seen.set(src, null);
+  }
+  if (!seen.size) return s;
+  for (const src of [...seen.keys()]) {
+    try {
+      const compressed = await compressAktualitateImageDataUrl(src);
+      seen.set(src, compressed && compressed.length < src.length ? compressed : src);
+    } catch {
+      seen.set(src, src);
+    }
+  }
+  let out = s;
+  for (const [src, next] of seen.entries()) {
+    if (!next || next === src) continue;
+    out = out.split(src).join(next);
+  }
+  return out;
+}
+
+function onEditorPasteImages(ev) {
+  const cd = ev?.clipboardData;
+  if (!cd?.items) return;
+  const images = [];
+  for (const it of cd.items) {
+    if (it.kind === "file" && String(it.type || "").startsWith("image/")) {
+      const f = it.getAsFile?.();
+      if (f) images.push(f);
+    }
+  }
+  if (!images.length) return;
+  ev.preventDefault();
+  void (async () => {
+    for (const f of images) {
+      const raw = await new Promise((resolve) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result || ""));
+        fr.onerror = () => resolve("");
+        fr.readAsDataURL(f);
+      });
+      if (!raw) continue;
+      let src = raw;
+      try {
+        src = (await compressAktualitateImageDataUrl(raw, f.type)) || raw;
+      } catch {
+        src = raw;
+      }
+      insertAtCursor(
+        `<img data-akt-img="1" draggable="true" src="${escHtml(src)}" alt="${escHtml(f.name || "attēls")}"` +
+          ` style="display:block;max-width:100%;width:min(100%,420px);height:auto;border-radius:8px;margin:0.35rem 0;" />`,
+      );
+    }
+  })();
 }
 
 function markSelectedEditorImage(img) {
@@ -1514,10 +1590,17 @@ function onPickAttachment(ev) {
 async function addAktualitate() {
   const ed = currentEditor();
   if (!ed) return;
-  const content = String(ed.innerHTML || "").trim();
+  let content = String(ed.innerHTML || "").trim();
   if (!content || content === "<br>") {
     alert("Ievadi aktualitātes tekstu.");
     return;
+  }
+  // Automātiski samazina lielos (arī vecos) base64 attēlus pirms saglabāšanas.
+  try {
+    content = await shrinkHeavyImagesInHtml(content);
+    ed.innerHTML = content;
+  } catch (e) {
+    console.warn("[aktualitates.img.shrink]", e?.message || e);
   }
   const today = ymd(new Date());
   ensureSodienDraftDefaults();
@@ -1761,7 +1844,13 @@ function editAktualitate(id) {
   if (editorPanel) editorPanel.open = true;
   if (editorPanel?.scrollIntoView) editorPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   const ed = currentEditor();
-  if (ed) ed.innerHTML = String(item.html || "");
+  if (ed) {
+    ed.innerHTML = String(item.html || "");
+    // Automātiski samazina vecos lielos attēlus redaktorā (saglabājot — DB arī kļūst mazāka).
+    void shrinkHeavyImagesInHtml(String(ed.innerHTML || "")).then((shrunk) => {
+      if (shrunk && shrunk !== ed.innerHTML && currentEditor() === ed) ed.innerHTML = shrunk;
+    });
+  }
   markSelectedEditorImage(null);
   if (selectedEditorAttachment) {
     selectedEditorAttachment.classList.remove("sodien-selected-attachment");
@@ -2244,6 +2333,7 @@ function renderTodayInfo({
             id="sodien-akt-editor"
             contenteditable="true"
             onClick=${onEditorClickForImageSelection}
+            onPaste=${onEditorPasteImages}
             style=${{
               minHeight: "110px",
               border: "1px solid var(--border)",
