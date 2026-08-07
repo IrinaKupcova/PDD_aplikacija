@@ -541,7 +541,7 @@
       <script defer src="./IAD.js?v=202606196"></script>
       <script defer src="./Saliedesana.js?v=202608096"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
-      <script defer src="./Sodien.js?v=202608096"></script>
+      <script defer src="./Sodien.js?v=202608097"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
       <script defer src="./Navigacija.js?v=202608095"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
@@ -3186,11 +3186,15 @@
               }
               const remote = Array.isArray(list) ? list : null;
               const local = localFallback();
-              // Tukšu remote nepārrakstām, ja lokāli ir saturs (sesijas/RLS kļūda).
-              if (remote && (remote.length > 0 || local.length === 0)) {
+              // Tukšu remote / timeout — vienmēr paturam lokālo, ja tāds ir.
+              if (remote && remote.length > 0) {
+                setSodienRows(remote);
+              } else if (local.length > 0) {
+                setSodienRows(local);
+              } else if (remote) {
                 setSodienRows(remote);
               } else {
-                setSodienRows(local);
+                setSodienRows([]);
               }
               setSodienErr(null);
             } catch (e) {
@@ -8447,16 +8451,21 @@
                   console.warn("[home.absences.ensure]", e?.message || e);
                 }
                 let rows = null;
-                const r1 = await supabase.from("prombutnes_dati").select("*");
-                if (r1.error) {
-                  const rr = await fetchTableDirectFromRest("prombutnes_dati");
-                  if (rr.error) {
-                    console.warn("[home.absences]", rr.error?.message || rr.error || r1.error);
-                    return;
+                try {
+                  const r1 = await withTimeout(supabase.from("prombutnes_dati").select("*"), 12000, "Prombūtnes");
+                  if (r1.error) {
+                    const rr = await withTimeout(fetchTableDirectFromRest("prombutnes_dati"), 12000, "Prombūtnes REST");
+                    if (rr.error) {
+                      console.warn("[home.absences]", rr.error?.message || rr.error || r1.error);
+                      return;
+                    }
+                    rows = rr.data;
+                  } else {
+                    rows = r1.data;
                   }
-                  rows = rr.data;
-                } else {
-                  rows = r1.data;
+                } catch (e) {
+                  console.warn("[home.absences.timeout]", e?.message || e);
+                  return;
                 }
                 const { data: profs } = await supabase.from("users").select("*");
                 const { data: typesRows } = await supabase.from("prombutnes_veidi").select("*");

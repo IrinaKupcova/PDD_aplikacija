@@ -2,6 +2,8 @@ const SODIEN_STORE_KEY = "pdd_sodien_aktualitates_v1";
 const ENGAGE_STORE_KEY = "pdd_aktualitates_engage_v1";
 const TABLE_REACTIONS = "aktualitates_reactions";
 const TABLE_COMMENTS = "aktualitates_comments";
+/** Reakcijas/komentāri atslēgti — vietas taupīšanai un vienkāršākam UI. */
+const AKTUALITATES_ENGAGE_DISABLED = true;
 
 /** DB tabula (ASCII), kā Supabase kļūdziņā: „AKTUALITATES”. */
 const TABLE_AKTUALITATES = "AKTUALITATES";
@@ -407,6 +409,7 @@ function formatEngageTs(iso) {
 }
 
 async function syncEngageFromSupabase(aktualitateId) {
+  if (AKTUALITATES_ENGAGE_DISABLED) return emptyEngageBucket();
   const sb = globalThis.__PDD_SUPABASE__;
   const id = String(aktualitateId ?? "").trim();
   if (!sb || !id || !sodienUiOpts.useSupabase) return getEngageBucket(id);
@@ -571,6 +574,7 @@ async function deleteAktualitateComment(aktualitateId, commentId) {
 }
 
 function renderEngagePanelHtml(aktualitateId) {
+  if (AKTUALITATES_ENGAGE_DISABLED) return "";
   const id = String(aktualitateId ?? "").trim();
   const bucket = getEngageBucket(id);
   const actor = currentEngageActor();
@@ -694,6 +698,7 @@ function engagePanelIdFromChangePayload(payload) {
 }
 
 function ensureEngageRealtimeSubscription() {
+  if (AKTUALITATES_ENGAGE_DISABLED) return;
   const sb = globalThis.__PDD_SUPABASE__;
   if (!sb || !sodienUiOpts.useSupabase || engageRealtimeChannel) return;
   try {
@@ -718,6 +723,19 @@ function ensureEngageRealtimeSubscription() {
 }
 
 function hydrateEngagePanels() {
+  if (AKTUALITATES_ENGAGE_DISABLED) {
+    try {
+      localStorage.removeItem(ENGAGE_STORE_KEY);
+      sodienEngageCache = {};
+      document.querySelectorAll(".sodien-akt-engage").forEach((el) => {
+        el.innerHTML = "";
+        el.remove();
+      });
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
   ensureEngageRealtimeSubscription();
   const hosts = document.querySelectorAll(".sodien-akt-engage[data-akt-id]");
   hosts.forEach((host) => {
@@ -728,6 +746,10 @@ function hydrateEngagePanels() {
 }
 
 function scheduleHydrateEngagePanels() {
+  if (AKTUALITATES_ENGAGE_DISABLED) {
+    hydrateEngagePanels();
+    return;
+  }
   clearTimeout(sodienEngageHydrateTimer);
   sodienEngageHydrateTimer = setTimeout(() => hydrateEngagePanels(), 30);
 }
@@ -1066,12 +1088,15 @@ async function removeStorageAttachmentsForItem(sb, item) {
 
 function visibleAktualitatesActive() {
   const today = ymd(new Date());
+  // Nerakstām atpakaļ „iztīrītu” sarakstu — lai lokālā keša nepazūd, kad DB neatbild.
   const cleaned = cleanExpired(loadAktualitates()).filter((x) => !isSaliedesanaAktualitateHtml(x?.html));
-  saveAktualitates(cleaned);
-  return cleaned.filter((x) => {
+  const active = cleaned.filter((x) => {
     const e = pick(x.end || "");
     return !e || e >= today;
   });
+  // Ja aktīvo nav, bet kešā ir ieraksti — rādām tos (DB limitu/timeout režīmā).
+  if (active.length === 0 && cleaned.length > 0) return cleaned.slice(0, 40);
+  return active;
 }
 
 /**
@@ -1111,12 +1136,40 @@ async function fetchActiveAktualitatesViaRest() {
       throw new Error(txt || `HTTP ${resp.status}`);
     }
     const data = await resp.json();
-    const list = (Array.isArray(data) ? data : []).map((row) => rowFromDb(row, new Map())).filter(Boolean);
+    let list = (Array.isArray(data) ? data : []).map((row) => rowFromDb(row, new Map())).filter(Boolean);
+    if (!list.length) {
+      // Rezerves: bez datuma filtra (ja kolonnas/RLS dēļ aktīvais SELECT ir tukšs).
+      const params2 = new URLSearchParams();
+      params2.set("select", "*");
+      params2.set("order", "created_at.desc");
+      params2.set("limit", "80");
+      const resp2 = await fetch(`${base}/rest/v1/AKTUALITATES?${params2}`, {
+        method: "GET",
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+        signal: ctrl?.signal,
+      });
+      if (resp2.ok) {
+        const data2 = await resp2.json();
+        const all = (Array.isArray(data2) ? data2 : []).map((row) => rowFromDb(row, new Map())).filter(Boolean);
+        const active = all.filter((x) => {
+          const s = pick(x.start || "");
+          const e = pick(x.end || "");
+          if (s && s > today) return false;
+          if (e && e < today) return false;
+          return true;
+        });
+        list = active.length ? active : all.slice(0, 40);
+      }
+    }
     try {
       // Lielus base64 attēlus localStorage bieži nevar ietilpināt — kešojam tikai tad, ja ietilpst.
       if (list.length) saveAktualitates(mergeAktualitatesPreferRemote(loadAktualitates(), list));
     } catch {
       /* ignore */
+    }
+    if (!list.length) {
+      const local = visibleAktualitatesActive();
+      if (local.length) return local;
     }
     return list;
   } finally {
@@ -2277,7 +2330,6 @@ function renderTodayInfo({
                             </div>
                           `
                         : null}
-                      <div class="sodien-akt-engage" data-akt-id=${String(x.id)}></div>
                     </div>
                   `
                 )}
@@ -2433,50 +2485,18 @@ function retentionCutoffYmd() {
 
 let aktualitatesHistoryPurgeStarted = false;
 
-/** Automātiski dzēš beigušās / vecākas aktualitātes un noņem <img> no atlikušajām. */
-async function purgeAktualitatesHistoryOnce(sb) {
-  if (aktualitatesHistoryPurgeStarted || !sb) return;
+/** Automātiskā tīrīšana: NEIZDZĒŠ aktualitāšu saturu (lai lapa nepaliktu tukša).
+ *  Tikai notīra reakciju/komentāru lokālo kešu. */
+async function purgeAktualitatesHistoryOnce(_sb) {
+  if (aktualitatesHistoryPurgeStarted) return;
   aktualitatesHistoryPurgeStarted = true;
-  const today = ymd(new Date());
-  const cutoff = retentionCutoffYmd();
   try {
-    await Promise.race([
-      (async () => {
-        const t = await resolveAktualitatesTableName(sb);
-        // Beigušās vai vecākas par iepriekšējā mēneša sākumu
-        try {
-          await sb.from(t).delete().lt("Beigas", cutoff);
-        } catch (e) {
-          console.warn("[aktualitates.purge.old]", e?.message || e);
-        }
-        try {
-          await sb.from(t).delete().lt("Beigas", today);
-        } catch (e) {
-          console.warn("[aktualitates.purge.expired]", e?.message || e);
-        }
-        // Lokālā keša
-        try {
-          const local = loadAktualitates();
-          const cleaned = local
-            .filter((x) => {
-              const end = String(x?.end || x?.Beigas || "");
-              return !end || (end >= cutoff && end >= today);
-            })
-            .map((x) => ({
-              ...x,
-              html: stripAktualitateImagesFromHtml(x?.html || ""),
-            }));
-          if (cleaned.length !== local.length) saveAktualitates(cleaned);
-          else saveAktualitates(cleaned);
-        } catch {
-          /* ignore */
-        }
-      })(),
-      new Promise((r) => setTimeout(r, 12000)),
-    ]);
-  } catch (e) {
-    console.warn("[aktualitates.purge]", e?.message || e);
+    localStorage.removeItem(ENGAGE_STORE_KEY);
+    sodienEngageCache = {};
+  } catch {
+    /* ignore */
   }
+  // Veco/beigušos datus vairs nedzēšam no klienta — to dara tikai manuāls SQL, kad DB atbild.
 }
 
 window.PDDSodien = {
