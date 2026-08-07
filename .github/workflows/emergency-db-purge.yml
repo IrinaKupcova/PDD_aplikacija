@@ -44,12 +44,27 @@ jobs:
           print(json.dumps({"query": q}))
           PY
           )
+          post_sql() {
+            local name="$1"
+            local body="$2"
+            local max="$3"
+            echo "=== $name ==="
+            code=$(curl -sS -m "$max" -o "/tmp/${name}.json" -w "%{http_code}" -X POST \
+              "https://api.supabase.com/v1/projects/${REF}/database/query" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$body" || echo "000")
+            echo "HTTP $code"
+            head -c 1500 "/tmp/${name}.json" || true
+            echo
+            if [ "$code" != "201" ] && [ "$code" != "200" ]; then
+              echo "::error::$name failed with HTTP $code"
+              exit 1
+            fi
+          }
+
           echo "SQL1 truncate chat..."
-          curl -sS -m 120 -X POST "https://api.supabase.com/v1/projects/${REF}/database/query" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "$BODY1" | tee /tmp/sql1.json
-          echo
+          post_sql sql1 "$BODY1" 120
           BODY2=$(python3 - <<'PY'
           import json
           q = """
@@ -81,11 +96,7 @@ jobs:
           PY
           )
           echo "SQL2 purge audit..."
-          curl -sS -m 180 -X POST "https://api.supabase.com/v1/projects/${REF}/database/query" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "$BODY2" | tee /tmp/sql2.json
-          echo
+          post_sql sql2 "$BODY2" 180
           BODY3=$(python3 - <<'PY'
           import json
           q = r"""
@@ -102,11 +113,7 @@ jobs:
           PY
           )
           echo "SQL3 strip images..."
-          curl -sS -m 240 -X POST "https://api.supabase.com/v1/projects/${REF}/database/query" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "$BODY3" | tee /tmp/sql3.json
-          echo
+          post_sql sql3 "$BODY3" 240
           echo "Management API steps done"
 
       - name: Brīdinājums ja nav access token
