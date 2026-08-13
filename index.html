@@ -539,11 +539,11 @@
       <script defer src="./Komanda.js?v=202606182"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608130"></script>
+      <script defer src="./Saliedesana.js?v=202608131d"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=202608099"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202608095"></script>
+      <script defer src="./Navigacija.js?v=202608131d"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
@@ -586,6 +586,8 @@
         const LS_TYPES = "pdd_local_types";
         const LS_LOCAL_CITS = "pdd_local_cits_requests";
         const LS_CHANGE_LOG = "pdd_change_log_v1";
+        /** Auditācijas vēsture navigācijā — tikai šajā pārlūkā (localStorage), bez DB. */
+        const LS_LOCAL_AUDIT_VIEWER = "pdd_local_audit_viewer_v1";
         const LS_LOCAL_DEPUTY_USER_ID = "pdd_local_deputy_user_id";
         const LS_LOCAL_DEPUTY_FROM = "pdd_local_deputy_from";
         const LS_LOCAL_DEPUTY_TO = "pdd_local_deputy_to";
@@ -1389,7 +1391,6 @@
           }
         }
         let cachedIadPanel = null;
-        let cachedSaliedesanaPanel = null;
         let cachedProcesuVadibaPanel = null;
         let cachedPakalpojumuVadibaPanel = null;
         function getIadPanel() {
@@ -1397,12 +1398,6 @@
             cachedIadPanel = globalThis.IAD.createIadModule(html, React);
           }
           return cachedIadPanel;
-        }
-        function getSaliedesanaPanel() {
-          if (!cachedSaliedesanaPanel && globalThis.SALIEDESANA?.createSaliedesanaPanel) {
-            cachedSaliedesanaPanel = globalThis.SALIEDESANA.createSaliedesanaPanel(html, React);
-          }
-          return cachedSaliedesanaPanel;
         }
         function getProcesuVadibaPanel() {
           if (!cachedProcesuVadibaPanel && globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule) {
@@ -2501,14 +2496,34 @@
           };
         }
 
-        /** Audit DB select("*") bez limita — izņemts (slogo Nano + Egress). Tikai lokālais žurnāls. */
+        /** Auditācijas vēsture — tikai lokāli šajā pārlūkā; DB netiek lasīta/rakstīta. */
         async function fetchAuditLogs() {
           return getChangeLog().map(normalizeAuditLogRecord).filter(Boolean);
         }
 
-        /** Remote audit ieraksti izslēgti — neaizpilda Auditacijas_* tabulas. */
+        /** Audit DB rakstīšana izslēgta — neaizpilda Auditacijas_* tabulas. */
         async function insertAuditLog(_row) {
           return;
+        }
+
+        function canViewLocalAuditNav(role) {
+          try {
+            return localStorage.getItem(LS_LOCAL_AUDIT_VIEWER) === "1";
+          } catch {
+            return false;
+          }
+        }
+
+        /** Ieslēdz auditācijas skatu tikai šajā pārlūkā (admin — vienu reizi). */
+        function enableLocalAuditViewerOnce(role) {
+          if (String(role || "").toLowerCase() !== "admin") return;
+          try {
+            if (localStorage.getItem(LS_LOCAL_AUDIT_VIEWER) !== "1") {
+              localStorage.setItem(LS_LOCAL_AUDIT_VIEWER, "1");
+            }
+          } catch {
+            /* ignore */
+          }
         }
 
         function pushChangeLog(action, details) {
@@ -2526,7 +2541,6 @@
           logs.unshift(row);
           // paturam pēdējos 1500 ierakstus
           localStorage.setItem(LS_CHANGE_LOG, JSON.stringify(logs.slice(0, 1500)));
-          void insertAuditLog(row);
         }
 
         function normalizeApproverMode(raw) {
@@ -3112,7 +3126,7 @@
           return html`<${View} supabase=${supabase} highlightRowId=${highlightRowId || ""} />`;
         }
 
-        function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenSaliedesana, onOpenProcesuVadiba, onOpenPakalpojumuVadiba, onOpenTodayTask, absencesToday }) {
+        function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenProcesuVadiba, onOpenPakalpojumuVadiba, onOpenTodayTask, absencesToday }) {
           const [sodienRows, setSodienRows] = useState(() => {
             // Uzreiz lokālā keša — nekad nekarājamies uz «Ielādē…», kamēr Supabase atbild.
             try {
@@ -3353,9 +3367,6 @@
                 <button type="button" class="card" onClick=${onOpenPakalpojumuVadiba}>
                   <h3>Pakalpojumu vadība</h3>
                 </button>
-                <button type="button" class="card" onClick=${onOpenSaliedesana}>
-                  <h3>Saliedēšanas pasākumi, svētku dienas u.c.</h3>
-                </button>
               </div>
               ${sodienBlock}
             </section>
@@ -3544,7 +3555,7 @@
           };
         }
 
-        function AbsenceCalendar({ month, onMonthChange, absences, caption, onPickAbsence, onPickDay, onAddSaliedesanaDay, types }) {
+        function AbsenceCalendar({ month, onMonthChange, absences, salEvents, caption, onPickAbsence, onPickDay, onAddSaliedesanaDay, onPickSalEvent, types }) {
           const minMonth = calendarMinMonthDate();
           const safeMonth = clampCalendarMonth(month);
           const canGoPrev = startOfMonth(safeMonth).getTime() > minMonth.getTime();
@@ -3597,6 +3608,11 @@
               return true;
             });
           };
+          const salEntriesForDay = (d) => {
+            const key = dayKey(d);
+            const list = Array.isArray(salEvents) ? salEvents : [];
+            return list.filter((ev) => String(ev?.date || "").slice(0, 10) === key);
+          };
           const title = format(safeMonth, "LLLL yyyy", { locale: lv });
           return html`
             <div class="cal-wrap">
@@ -3643,13 +3659,13 @@
                                 <button
                                   type="button"
                                   class="btn btn-ghost btn-small"
-                                  title="Pievienot saliedēšanas pasākumu"
+                                  title="Ievietot pasākumu"
                                   onClick=${(ev) => {
                                     ev.stopPropagation();
                                     onAddSaliedesanaDay(d);
                                   }}
                                 >
-                                  Pasākums
+                                  Ievietot pasākumu
                                 </button>
                               `
                             : null}
@@ -3664,7 +3680,7 @@
                                     onPickDay(d);
                                   }}
                                 >
-                                  Pieteikt
+                                  Pieteikt prombūtni
                                 </button>
                               `
                             : null}
@@ -3712,7 +3728,7 @@
                                 ? isAtvCal
                                   ? "Spied — atvērt Atvaļinājumu grafiku"
                                   : salOpen
-                                    ? "Spied — atvērt Saliedēšanas pasākumu (piezīme)"
+                                    ? "Spied — atvērt pasākumu"
                                     : "Spied, lai atvērtu vēsturē"
                                 : "",
                             ]
@@ -3775,6 +3791,37 @@
                                   </span>
                                 `
                               : null}
+                          </span>
+                        `;
+                      })}
+                      ${salEntriesForDay(d).map((ev) => {
+                        const timeFrom = String(ev?.time || "").trim().slice(0, 5);
+                        const timeTo = String(ev?.details?.timeTo || "").trim().slice(0, 5);
+                        const timeLbl =
+                          timeFrom && timeTo && timeFrom !== timeTo
+                            ? `${timeFrom}–${timeTo}`
+                            : timeFrom || timeTo || "";
+                        const noteLbl = String(ev?.note || "").trim();
+                        return html`
+                          <span
+                            key=${`sal-${ev.id}`}
+                            role="button"
+                            tabindex="0"
+                            class="cal-chip cal-chip--pdd-saliedesana"
+                            style=${{ background: "#fb923c", color: "#7c2d12", boxShadow: "inset 0 0 0 1px rgba(234,88,12,0.35)" }}
+                            title=${[ev.title, timeLbl ? `Laiks: ${timeLbl}` : "", noteLbl ? `Piezīme: ${noteLbl}` : ""].filter(Boolean).join(" — ")}
+                            onClick=${(e) => {
+                              e.stopPropagation();
+                              onPickSalEvent?.(ev);
+                            }}
+                            onKeyDown=${(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                onPickSalEvent?.(ev);
+                              }
+                            }}
+                          >
+                            ${ev.title || "Pasākums"}${timeLbl ? html` · ${timeLbl}` : null}
                           </span>
                         `;
                       })}
@@ -7309,6 +7356,7 @@
           actorDisplayName,
           canGoBack,
           onGoBack,
+          showLocalAuditNav,
         }) {
           const [month, setMonth] = useState(() => new Date());
           const [absences, setAbsences] = useState([]);
@@ -7330,9 +7378,89 @@
           const [salQuickOpen, setSalQuickOpen] = useState(false);
           const [salQuickDate, setSalQuickDate] = useState("");
           const [salQuickTitle, setSalQuickTitle] = useState("");
+          const [salQuickTime, setSalQuickTime] = useState("08:00");
+          const [salQuickTimeTo, setSalQuickTimeTo] = useState("17:00");
           const [salQuickNote, setSalQuickNote] = useState("");
+          const [salQuickId, setSalQuickId] = useState("");
           const [salQuickBusy, setSalQuickBusy] = useState(false);
           const [salQuickMsg, setSalQuickMsg] = useState("");
+          const [salEvents, setSalEvents] = useState([]);
+          function refreshSalEvents() {
+            try {
+              const rows = globalThis.SALIEDESANA?.loadLocalEvents?.();
+              setSalEvents(Array.isArray(rows) ? rows : []);
+            } catch {
+              setSalEvents([]);
+            }
+          }
+          function openSalEventEditor(ref) {
+            const loadFn = globalThis.SALIEDESANA?.loadLocalEvents;
+            if (typeof loadFn !== "function") return false;
+            let events = [];
+            try {
+              events = loadFn();
+            } catch {
+              return false;
+            }
+            const eventId = String(ref?.eventId || ref?.id || "").trim();
+            const date = String(ref?.date || "").slice(0, 10);
+            const title = String(ref?.title || "").trim();
+            let ev = eventId ? events.find((x) => String(x?.id || "") === eventId) : null;
+            if (!ev && date && title) {
+              ev = events.find(
+                (x) => String(x?.date || "").slice(0, 10) === date && String(x?.title || "").trim() === title
+              );
+            }
+            if (!ev && date && title) {
+              ev = events.find((x) => String(x?.date || "").slice(0, 10) === date);
+            }
+            if (!ev) return false;
+            setSalQuickId(String(ev.id || ""));
+            setSalQuickDate(String(ev.date || date).slice(0, 10));
+            setSalQuickTitle(String(ev.title || title));
+            setSalQuickTime(String(ev.time || "08:00").trim() || "08:00");
+            setSalQuickTimeTo(String(ev?.details?.timeTo || "17:00").trim() || "17:00");
+            setSalQuickNote(
+              String(ev.note || "").trim() ||
+                String(ev.descriptionHtml || "")
+                  .replace(/<[^>]+>/g, " ")
+                  .replace(/\s+/g, " ")
+                  .trim()
+            );
+            setSalQuickMsg("");
+            setSalQuickOpen(true);
+            return true;
+          }
+          function resetSalQuickForm(dateYmd = "") {
+            setSalQuickId("");
+            setSalQuickDate(dateYmd);
+            setSalQuickTitle("");
+            setSalQuickTime("08:00");
+            setSalQuickTimeTo("17:00");
+            setSalQuickNote("");
+            setSalQuickMsg("");
+          }
+          useEffect(() => {
+            refreshSalEvents();
+            const onChanged = () => refreshSalEvents();
+            window.addEventListener("pdd:saliedesana-news-changed", onChanged);
+            globalThis.__PDD_OPEN_SAL_EVENT_EDITOR__ = (ref) => openSalEventEditor(ref || {});
+            return () => {
+              window.removeEventListener("pdd:saliedesana-news-changed", onChanged);
+              if (globalThis.__PDD_OPEN_SAL_EVENT_EDITOR__) delete globalThis.__PDD_OPEN_SAL_EVENT_EDITOR__;
+            };
+          }, []);
+          useEffect(() => {
+            if (promSub !== "calendar") return;
+            refreshSalEvents();
+            deferNonCritical(() => {
+              try {
+                void globalThis.SALIEDESANA?.syncNewsCacheForNav?.();
+              } catch {
+                /* ignore */
+              }
+            });
+          }, [promSub]);
           const requestReturnPromSubRef = useRef("calendar");
           const prevPromSubRef = useRef(promSub);
           useEffect(() => {
@@ -7666,12 +7794,7 @@
           function tryOpenSaliedesanaFromCalendarChip(a, clickedDay) {
             const detail = buildPrombutnesSaliedesanaOpenDetail(a, clickedDay);
             if (!detail) return false;
-            try {
-              window.dispatchEvent(new CustomEvent("pdd:open-saliedesana-event", { detail }));
-              return true;
-            } catch {
-              return false;
-            }
+            return openSalEventEditor(detail);
           }
           const headerSubLabel = promSub === "teamUsers" ? "" : promSubLabel;
           return html`
@@ -7715,18 +7838,17 @@
                         month=${month}
                         onMonthChange=${setMonth}
                         absences=${absences}
+                        salEvents=${salEvents}
                         types=${typesList}
-                        caption="Komandas kalendārs. Violetie — tavi atvaļinājumi. Oranžie — saliedēšanas pasākumi. Poga „Pasākums” — pievienot ar piezīmi."
+                        caption="Komandas kalendārs. Oranžie — komandas pasākumi. „Ievietot pasākumu” — pievienot (nosaukums, laika intervāls, piezīme)."
                         onAddSaliedesanaDay=${(d) => {
                           const ymd =
                             window.KALENDARS?.toYmd?.(d) ??
                             format(d, "yyyy-MM-dd");
-                          setSalQuickDate(ymd);
-                          setSalQuickTitle("");
-                          setSalQuickNote("");
-                          setSalQuickMsg("");
+                          resetSalQuickForm(ymd);
                           setSalQuickOpen(true);
                         }}
+                        onPickSalEvent=${(ev) => openSalEventEditor(ev)}
                         onPickDay=${(d) => {
                           const ymd =
                             window.KALENDARS?.toYmd?.(d) ??
@@ -7808,7 +7930,7 @@
                   `
                 : null}
               ${promSub === "changes"
-                ? html`<${ChangeHistoryPanel} isAdmin=${normalizeUserRole(role) === "admin"} />`
+                ? html`<${ChangeHistoryPanel} canView=${showLocalAuditNav} />`
                 : null}
               ${promSub === "atvalinajumi"
                 ? (() => {
@@ -7845,7 +7967,7 @@
                         style=${{ maxWidth: "420px", width: "100%", margin: 0 }}
                         onClick=${(e) => e.stopPropagation()}
                       >
-                        <h3 style=${{ margin: "0 0 0.35rem" }}>Jauns pasākums</h3>
+                        <h3 style=${{ margin: "0 0 0.35rem" }}>${salQuickId ? "Labot pasākumu" : "Jauns pasākums"}</h3>
                         <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
                           Datums: <strong>${salQuickDate || "—"}</strong>
                         </p>
@@ -7863,6 +7985,27 @@
                             />
                           </div>
                           <div class="field">
+                            <label>Laika intervāls</label>
+                            <div class="row" style=${{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                              <label style=${{ fontSize: "0.82rem", color: "var(--muted)" }}>No</label>
+                              <input
+                                class="input"
+                                type="time"
+                                value=${salQuickTime}
+                                onInput=${(e) => setSalQuickTime(e.target.value)}
+                                style=${{ width: "7.5rem" }}
+                              />
+                              <label style=${{ fontSize: "0.82rem", color: "var(--muted)" }}>Līdz</label>
+                              <input
+                                class="input"
+                                type="time"
+                                value=${salQuickTimeTo}
+                                onInput=${(e) => setSalQuickTimeTo(e.target.value)}
+                                style=${{ width: "7.5rem" }}
+                              />
+                            </div>
+                          </div>
+                          <div class="field">
                             <label>Piezīme</label>
                             <textarea
                               class="textarea"
@@ -7872,7 +8015,7 @@
                               onInput=${(e) => setSalQuickNote(e.target.value)}
                             />
                           </div>
-                          <div class="row" style=${{ gap: "0.45rem" }}>
+                          <div class="row" style=${{ gap: "0.45rem", flexWrap: "wrap" }}>
                             <button
                               type="button"
                               class="btn btn-primary btn-small"
@@ -7882,18 +8025,17 @@
                                 setSalQuickMsg("");
                                 try {
                                   const fn = globalThis.SALIEDESANA?.upsertSimpleEvent;
-                                  if (typeof fn !== "function") throw new Error("Saliedēšanas modulis nav ielādēts.");
+                                  if (typeof fn !== "function") throw new Error("Pasākumu modulis nav ielādēts.");
                                   await fn({
+                                    id: salQuickId || undefined,
                                     date: salQuickDate,
                                     title: salQuickTitle,
                                     note: salQuickNote,
+                                    time: salQuickTime,
+                                    timeTo: salQuickTimeTo,
                                   });
                                   setSalQuickOpen(false);
-                                  try {
-                                    globalThis.__PDD_SALIEDESANA_REPAINT_MAIN_CALENDAR__?.();
-                                  } catch {
-                                    /* ignore */
-                                  }
+                                  refreshSalEvents();
                                 } catch (e) {
                                   setSalQuickMsg(String(e?.message || e));
                                 } finally {
@@ -7903,6 +8045,33 @@
                             >
                               Saglabāt
                             </button>
+                            ${salQuickId
+                              ? html`
+                                  <button
+                                    type="button"
+                                    class="btn btn-danger btn-small"
+                                    disabled=${salQuickBusy}
+                                    onClick=${async () => {
+                                      if (!confirm("Dzēst šo pasākumu?")) return;
+                                      setSalQuickBusy(true);
+                                      setSalQuickMsg("");
+                                      try {
+                                        const del = globalThis.SALIEDESANA?.deleteSimpleEvent;
+                                        if (typeof del !== "function") throw new Error("Dzēšana nav pieejama.");
+                                        await del(salQuickId);
+                                        setSalQuickOpen(false);
+                                        refreshSalEvents();
+                                      } catch (e) {
+                                        setSalQuickMsg(String(e?.message || e));
+                                      } finally {
+                                        setSalQuickBusy(false);
+                                      }
+                                    }}
+                                  >
+                                    Dzēst
+                                  </button>
+                                `
+                              : null}
                             <button
                               type="button"
                               class="btn btn-ghost btn-small"
@@ -7921,7 +8090,7 @@
           `;
         }
 
-        function ChangeHistoryPanel({ isAdmin }) {
+        function ChangeHistoryPanel({ canView }) {
           const [logs, setLogs] = useState([]);
           const [page, setPage] = useState(0);
           const PAGE_SIZE = 20;
@@ -7940,12 +8109,12 @@
           const safePage = Math.min(page, totalPages - 1);
           const pageRows = logs.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
 
-          if (!isAdmin) {
+          if (!canView) {
             return html`
               <section class="list-panel">
                 <h2 style=${{ margin: "0 0 0.5rem" }}>Auditācijas vēsture</h2>
                 <p style=${{ margin: 0, color: "var(--muted)" }}>
-                  Šī sadaļa pieejama tikai Admin lietotājiem.
+                  Nav pieejama.
                 </p>
               </section>
             `;
@@ -7960,7 +8129,7 @@
                 </button>
               </div>
               <p style=${{ margin: "0 0 0.65rem", fontSize: "0.82rem", color: "var(--muted)" }}>
-                Tikai lokālais žurnāls šajā pārlūkā — DB audit tabula vairs netiek ielādēta (taupa resursus).
+                Tikai lokālais žurnāls šajā pārlūkā — netiek saglabāts datubāzē.
               </p>
               <div class="table-wrap">
                 <table class="hist-table">
@@ -8215,9 +8384,6 @@
             return true;
           }
           const [showPddAppChangesBadge, setShowPddAppChangesBadge] = useState(false);
-          const [showSaliedesanaNewBadge, setShowSaliedesanaNewBadge] = useState(() =>
-            Boolean(globalThis.PDD_NAV?.shouldShowSaliedesanaNewBadge?.()),
-          );
           const [appChangesLatestId, setAppChangesLatestId] = useState("");
           const appChangesLatestIdRef = useRef("");
           const [appChangesHighlightId, setAppChangesHighlightId] = useState("");
@@ -8225,7 +8391,7 @@
           function makeSectionLabel(sectionView, sectionPromSub, sectionAnchor) {
             if (sectionView === "home") return "Sākums";
             if (sectionView === "team") return "Komanda";
-            if (sectionView === "saliedesana") return "Saliedēšanas pasākumi, svētku dienas u.c.";
+            if (sectionView === "saliedesana") return "Prombūtnes kalendārs";
             if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-current") return "IAD: Aktuālie";
             if (sectionView === "darbaUzdevumiIad" && sectionAnchor === "iad-done") return "IAD: Neaktuālie";
             if (sectionView === "darbaUzdevumiIad") return "IAD ieteikumi";
@@ -8242,7 +8408,8 @@
             return "Prombūtnes kalendārs";
           }
           function normalizeSection(sectionView, sectionPromSub, sectionAnchor) {
-            const safeView = String(sectionView ?? "").trim();
+            let safeView = String(sectionView ?? "").trim();
+            if (safeView === "saliedesana") safeView = "prombutnes";
             if (safeView === "aktualitatesHistory") return null;
             const safePromSub = String(sectionPromSub ?? "").trim();
             const safeAnchor = String(sectionAnchor ?? "").trim();
@@ -8289,6 +8456,9 @@
           );
           const handleChangeView = useCallback((v) => {
             if (v === "aktualitatesHistory") v = "home";
+            if (v === "saliedesana") {
+              v = "prombutnes";
+            }
             if (v === view) {
               if (v === "prombutnes") {
                 setNavPast((p) => [...p, { view, promSub }]);
@@ -8324,14 +8494,6 @@
                 }
               })();
             }
-            if (v === "saliedesana") {
-              try {
-                globalThis.PDD_NAV?.markSaliedesanaNewsSeen?.();
-              } catch {
-                /* ignore */
-              }
-              setShowSaliedesanaNewBadge(false);
-            }
             setView(v);
             if (v === "prombutnes") setPromSub("calendar");
             if (v !== "darbaUzdevumiIad") setDarbaUzdevumiFocus(null);
@@ -8357,94 +8519,35 @@
           }, [handlePromSubChange]);
           useEffect(() => {
             globalThis.__PDD_OPEN_SALIEDESANA_VIEW__ = () => {
-              setView("saliedesana");
+              setView("prombutnes");
+              setPromSub("calendar");
             };
             return () => {
               if (globalThis.__PDD_OPEN_SALIEDESANA_VIEW__) delete globalThis.__PDD_OPEN_SALIEDESANA_VIEW__;
             };
           }, []);
-          const tryOpenPendingSaliedesanaEvent = (maxTries = 72, delayMs = 140) => {
+          function openSalEventFromPendingRef() {
             const eventId = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ || "").trim();
             const date = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ || "").trim();
             const title = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ || "").trim();
             if (!eventId && !date && !title) return;
-            if (globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__) {
-              clearInterval(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__);
-              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = null;
-            }
-            let tries = 0;
-            globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = setInterval(() => {
-              tries += 1;
-              try {
-                globalThis.__PDD_OPEN_SALIEDESANA_VIEW__?.();
-              } catch {
-                // ignore
-              }
-              const openNow = globalThis.__PDD_SALIEDESANA_OPEN_EVENT_CARD__;
-              if (typeof openNow === "function") {
-                let ok = openNow({ eventId, date, title });
-                // Hard fallback: ja eventId neatbilst (lokālais/remote mismatch), atver pēc datuma.
-                if (!ok && date) ok = openNow({ eventId: "", date, title: "" });
-                if (ok) {
-                  clearInterval(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__);
-                  globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = null;
-                  return;
-                }
-              }
-              if (tries >= maxTries) {
-                clearInterval(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__);
-                globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = null;
-              }
-            }, delayMs);
-          };
+            setView("prombutnes");
+            setPromSub("calendar");
+            setTimeout(() => {
+              globalThis.__PDD_OPEN_SAL_EVENT_EDITOR__?.({ eventId, date, title });
+            }, 250);
+          }
           useEffect(() => {
             const onOpenSalEvent = (ev) => {
               const detail = ev?.detail && typeof ev.detail === "object" ? ev.detail : {};
-              const eventId = String(detail.eventId || "").trim();
-              const date = String(detail.date || "").trim();
-              const title = String(detail.title || "").trim();
-              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ = eventId;
-              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ = date;
-              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ = title;
-              setView("saliedesana");
-              tryOpenPendingSaliedesanaEvent(72, 140);
+              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ = String(detail.eventId || "").trim();
+              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ = String(detail.date || "").trim();
+              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ = String(detail.title || "").trim();
+              openSalEventFromPendingRef();
             };
             window.addEventListener("pdd:open-saliedesana-event", onOpenSalEvent);
-            return () => {
-              window.removeEventListener("pdd:open-saliedesana-event", onOpenSalEvent);
-              if (globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__) {
-                clearInterval(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__);
-                globalThis.__PDD_SALIEDESANA_PENDING_OPEN_TIMER__ = null;
-              }
-            };
+            return () => window.removeEventListener("pdd:open-saliedesana-event", onOpenSalEvent);
           }, []);
-          useEffect(() => {
-            const onCalendarBadgeClick = (ev) => {
-              const target = ev?.target instanceof Element ? ev.target.closest(".sal-main-cal-badge,[data-sal-event-date],[data-sal-event-id]") : null;
-              if (!target) return;
-              const eventId = String(target.getAttribute("data-sal-event-id") || "").trim();
-              const date = String(target.getAttribute("data-sal-event-date") || "").trim();
-              const title = String(target.getAttribute("data-sal-event-title") || "").trim();
-              if (!eventId && !date && !title) return;
-              ev.preventDefault();
-              ev.stopPropagation();
-              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ = eventId;
-              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ = date;
-              globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ = title;
-              setView("saliedesana");
-              tryOpenPendingSaliedesanaEvent(180, 130);
-            };
-            document.addEventListener("click", onCalendarBadgeClick, true);
-            return () => document.removeEventListener("click", onCalendarBadgeClick, true);
-          }, []);
-          useEffect(() => {
-            if (view !== "saliedesana") return;
-            const eventId = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ || "").trim();
-            const date = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ || "").trim();
-            const title = String(globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ || "").trim();
-            if (!eventId && !date && !title) return;
-            tryOpenPendingSaliedesanaEvent(90, 140);
-          }, [view]);
           const handleGoBack = useCallback(() => {
             setNavPast((p) => {
               if (p.length === 0) return p;
@@ -8655,59 +8758,6 @@
             deferNonCritical(() => refreshAppChangesBadge());
           }, [refreshAppChangesBadge]);
           useEffect(() => {
-            let cancelled = false;
-            let salNewsChannel = null;
-            async function refreshSalNew() {
-              if (cancelled) return;
-              try {
-                await globalThis.SALIEDESANA?.syncNewsCacheForNav?.();
-              } catch {
-                /* ignore */
-              }
-              if (cancelled) return;
-              try {
-                globalThis.PDD_NAV?.ensureSaliedesanaNewsBaseline?.();
-                setShowSaliedesanaNewBadge(Boolean(globalThis.PDD_NAV?.shouldShowSaliedesanaNewBadge?.()));
-              } catch {
-                setShowSaliedesanaNewBadge(false);
-              }
-            }
-            void refreshSalNew();
-            window.addEventListener("pdd:saliedesana-news-changed", refreshSalNew);
-            window.addEventListener("pdd:saliedesana-news-seen", refreshSalNew);
-            window.addEventListener("storage", refreshSalNew);
-            const t = setInterval(() => void refreshSalNew(), 10000);
-            const sb = globalThis.__PDD_SUPABASE__;
-            if (sb) {
-              try {
-                salNewsChannel = sb
-                  .channel("pdd-saliedesana-news-badge")
-                  .on("postgres_changes", { event: "*", schema: "public", table: "pdd_saliedesana_info" }, () => void refreshSalNew())
-                  .on("postgres_changes", { event: "*", schema: "public", table: "Saliedesana" }, () => void refreshSalNew())
-                  .subscribe();
-              } catch {
-                /* ignore */
-              }
-            }
-            return () => {
-              cancelled = true;
-              window.removeEventListener("pdd:saliedesana-news-changed", refreshSalNew);
-              window.removeEventListener("pdd:saliedesana-news-seen", refreshSalNew);
-              window.removeEventListener("storage", refreshSalNew);
-              clearInterval(t);
-              if (salNewsChannel) void sb?.removeChannel(salNewsChannel);
-            };
-          }, [session?.user?.id, session?.user?.email]);
-          useEffect(() => {
-            if (view !== "saliedesana") return;
-            try {
-              globalThis.PDD_NAV?.markSaliedesanaNewsSeen?.();
-            } catch {
-              /* ignore */
-            }
-            setShowSaliedesanaNewBadge(false);
-          }, [view]);
-          useEffect(() => {
             if (!session?.user) return;
             hydrateAppChangesSeenFromMeta(session);
             void (async () => {
@@ -8807,6 +8857,14 @@
             globalThis.__PDD_ACTOR_DISPLAY_NAME__ = name;
           }, [session?.user, profile, profileLoading]);
           const showPromDeputyTab = false;
+          const [showLocalAuditNav, setShowLocalAuditNav] = useState(() => canViewLocalAuditNav());
+          useEffect(() => {
+            enableLocalAuditViewerOnce(normalizeUserRole(role));
+            setShowLocalAuditNav(canViewLocalAuditNav());
+          }, [role, session?.user?.email]);
+          useEffect(() => {
+            if (!showLocalAuditNav && promSub === "changes") setPromSub("calendar");
+          }, [showLocalAuditNav, promSub]);
           const [citsToken, setCitsToken] = useState(() => readCitsTokenFromUrl());
           const title = useMemo(
             () => html`
@@ -8965,7 +9023,7 @@
               showPromDeputyTab=${showPromDeputyTab}
               showPendingCitsBadge=${pendingCitsNav}
               showPddAppChangesBadge=${showPddAppChangesBadge}
-              showSaliedesanaNewBadge=${showSaliedesanaNewBadge}
+              showLocalAuditNav=${showLocalAuditNav}
               canGoBack=${navPast.length > 0}
               onGoBack=${handleGoBack}
               onPinCurrentSection=${handlePinCurrentSection}
@@ -8991,7 +9049,6 @@
             >
               ${(() => {
                 const IadPanel = getIadPanel();
-                const SaliedesanaPanel = getSaliedesanaPanel();
                 if (view === "darbaUzdevumiIad") {
                   return IadPanel
                     ? html`<${IadPanel}
@@ -9002,11 +9059,6 @@
                         onPinListChange=${handleIadListPinChange}
                       />`
                     : html`<section class="list-panel"><p>IAD modulis nav ielādēts.</p></section>`;
-                }
-                if (view === "saliedesana") {
-                  return SaliedesanaPanel
-                    ? html`<${SaliedesanaPanel} />`
-                    : html`<section class="list-panel"><p>Saliedēšanas modulis nav ielādēts.</p></section>`;
                 }
                 if (view === "procesuVadiba") {
                   const ProcesuVadibaPanel = getProcesuVadibaPanel();
@@ -9037,10 +9089,6 @@
                       setNavPast((p) => [...p, { view, promSub }]);
                       setDarbaUzdevumiFocus(null);
                       setView("darbaUzdevumiIad");
-                    }}
-                    onOpenSaliedesana=${() => {
-                      setNavPast((p) => [...p, { view, promSub }]);
-                      setView("saliedesana");
                     }}
                     onOpenProcesuVadiba=${() => {
                       setNavPast((p) => [...p, { view, promSub }]);
@@ -9076,8 +9124,6 @@
                     ? null
                   : view === "pakalpojumuVadiba"
                     ? null
-                  : view === "saliedesana"
-                    ? null
                   : view === "team"
                     ? html`<${PrombutnesSection}
                         userId=${effectiveUserId}
@@ -9100,6 +9146,7 @@
                         actorDisplayName=${actorDisplayName}
                         canGoBack=${navPast.length > 0}
                         onGoBack=${handleGoBack}
+                        showLocalAuditNav=${showLocalAuditNav}
                       />`}
             </${AppShellWithNav}>
           `;

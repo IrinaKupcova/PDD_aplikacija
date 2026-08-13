@@ -805,7 +805,7 @@
       showPromDeputyTab,
       showPendingCitsBadge,
       showPddAppChangesBadge: _showPddAppChangesBadgeProp,
-      showSaliedesanaNewBadge: _showSaliedesanaNewBadgeProp,
+      showLocalAuditNav: _showLocalAuditNavProp,
       canGoBack,
       onGoBack,
       onPinCurrentSection,
@@ -825,7 +825,7 @@
       }
 
       const showPddAppChangesBadge = Boolean(_showPddAppChangesBadgeProp);
-      const showSaliedesanaNewBadge = Boolean(_showSaliedesanaNewBadgeProp);
+      const showLocalAuditNav = Boolean(_showLocalAuditNavProp);
 
       function openPddAppChangesNav() {
         onChangeView("pddAppChanges");
@@ -986,34 +986,23 @@
               >
                 Pakalpojumu vadība
               </button>
-              <button
-                type="button"
-                class=${`app-nav-link ${view === "saliedesana" ? "active" : ""}`}
-                onClick=${() => {
-                  try {
-                    pddMarkSaliedesanaNewsSeen();
-                  } catch {
-                    /* ignore */
-                  }
-                  onChangeView("saliedesana");
-                }}
-              >
-                Saliedēšanas pasākumi, svētku dienas u.c.
-                ${showSaliedesanaNewBadge ? html`<span class="app-nav-badge-new">NEW</span>` : null}
-              </button>
               <details class="app-nav-vesture-details" open=${vestureAccordionOpen}>
                 <summary class="app-nav-link app-nav-vesture-summary">Vēsture</summary>
                 <div class="app-nav-sub" role="group" aria-label="Vēstures apakšsadaļas">
-                  <button
-                    type="button"
-                    class=${`app-nav-sublink ${view === "prombutnes" && promSub === "changes" ? "active" : ""}`}
-                    onClick=${() => {
-                      onChangeView("prombutnes");
-                      onPromSubChange("changes");
-                    }}
-                  >
-                    Auditācijas vēsture
-                  </button>
+                  ${showLocalAuditNav
+                    ? html`
+                        <button
+                          type="button"
+                          class=${`app-nav-sublink ${view === "prombutnes" && promSub === "changes" ? "active" : ""}`}
+                          onClick=${() => {
+                            onChangeView("prombutnes");
+                            onPromSubChange("changes");
+                          }}
+                        >
+                          Auditācijas vēsture
+                        </button>
+                      `
+                    : null}
                   <button
                     type="button"
                     class=${`app-nav-sublink ${view === "pddAppChanges" ? "active" : ""}`}
@@ -1062,8 +1051,8 @@
                           type="button"
                           class="btn btn-primary btn-small"
                           onClick=${() => {
+                            const f = pendingPoll.first || pendingPoll;
                             try {
-                              const f = pendingPoll.first || pendingPoll;
                               globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_ID__ = String(f.eventId || "");
                               globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_DATE__ = String(f.date || "");
                               globalThis.__PDD_SALIEDESANA_PENDING_OPEN_EVENT_TITLE__ = String(f.title || "");
@@ -1071,7 +1060,20 @@
                             } catch {
                               // ignore
                             }
-                            onChangeView("saliedesana");
+                            onChangeView("prombutnes");
+                            try {
+                              window.dispatchEvent(
+                                new CustomEvent("pdd:open-saliedesana-event", {
+                                  detail: {
+                                    eventId: String(f.eventId || ""),
+                                    date: String(f.date || ""),
+                                    title: String(f.title || ""),
+                                  },
+                                })
+                              );
+                            } catch {
+                              // ignore
+                            }
                           }}
                         >
                           Aizpildīt
@@ -1090,7 +1092,7 @@
                             } catch {
                               // ignore
                             }
-                            onChangeView("saliedesana");
+                            onChangeView("prombutnes");
                           }}
                         >
                           Atteikties
