@@ -2394,7 +2394,7 @@
     put(SAL_COL_CANDIDATES.Dress_code, details.dressCode || null);
     put(SAL_COL_CANDIDATES.Ko_nemt_lidzi, details.bringAlong || null);
     put(SAL_COL_CANDIDATES.Dalibas_maksa, details.fee || null);
-    put(SAL_COL_CANDIDATES.Brivs_apraksts, ev.descriptionHtml || null);
+    put(SAL_COL_CANDIDATES.Brivs_apraksts, String(ev.descriptionHtml ?? "").trim() || null);
     put(SAL_COL_CANDIDATES.Papildu_piezimes, buildPapilduPiezimes(ev.note, metaPack));
     const pielikumiPayload = (Array.isArray(ev.attachments) ? ev.attachments : [])
       .map((a) => ({
@@ -3032,6 +3032,63 @@
   installGlobalMainCalendarBadgeSync();
 
   let salSyncNavLastAt = 0;
+
+  function eventUpdatedMs(ev) {
+    const s = String(ev?.updatedAt ?? ev?.updated_at ?? "").trim();
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  /** Apvieno lokālos un remote pasākumus — jaunākais updatedAt uzvar (nevis akli remote pārraksta). */
+  function mergeSaliedesanaEvents(localRows, remoteRows) {
+    const local = filterEventsByRetention(
+      (Array.isArray(localRows) ? localRows : []).map(normalizeEvent).filter((x) => x.id && x.date && x.title)
+    );
+    const remote = filterEventsByRetention(
+      (Array.isArray(remoteRows) ? remoteRows : []).filter((x) => x.id && x.date && x.title)
+    );
+    const localById = new Map(local.map((ev) => [String(ev.id), ev]));
+    const localByRemoteId = new Map(
+      local.filter((ev) => Number(ev.remoteId || 0) > 0).map((ev) => [Number(ev.remoteId), ev])
+    );
+    const usedLocalIds = new Set();
+    const out = [];
+
+    for (const rem of remote) {
+      const rid = Number(rem.remoteId || 0);
+      let loc =
+        (rid > 0 ? localByRemoteId.get(rid) : null) ||
+        localById.get(String(rem.id)) ||
+        null;
+      if (!loc) {
+        for (const lev of local) {
+          if (rid > 0 && Number(lev.remoteId) === rid) {
+            loc = lev;
+            break;
+          }
+        }
+      }
+      if (loc) {
+        usedLocalIds.add(String(loc.id));
+        const pick =
+          eventUpdatedMs(loc) >= eventUpdatedMs(rem)
+            ? { ...loc, remoteId: rid || loc.remoteId || null }
+            : { ...rem, id: loc.id, remoteId: rid || loc.remoteId || null };
+        out.push(normalizeEvent(pick));
+      } else {
+        out.push(normalizeEvent(rem));
+      }
+    }
+
+    for (const loc of local) {
+      if (!usedLocalIds.has(String(loc.id))) out.push(normalizeEvent(loc));
+    }
+
+    return filterEventsByRetention(out).sort((a, b) =>
+      `${String(b.date)} ${String(b.time || "")}`.localeCompare(`${String(a.date)} ${String(a.time || "")}`)
+    );
+  }
+
   async function syncSaliedesanaNewsCacheForNav() {
     const now = Date.now();
     if (now - salSyncNavLastAt < 30000) return;
@@ -3042,7 +3099,9 @@
     const remoteEvents = await fetchRemoteEvents(sb);
     if (remoteEvents) {
       try {
-        localStorage.setItem(LS_EVENTS_KEY, JSON.stringify(remoteEvents));
+        const localEvents = loadLocalEvents();
+        const merged = mergeSaliedesanaEvents(localEvents, remoteEvents);
+        localStorage.setItem(LS_EVENTS_KEY, JSON.stringify(merged));
         touched = true;
       } catch {
         /* ignore */
@@ -3077,6 +3136,7 @@
     const timeEnd = normalizeTimeHHMM(
       String(timeTo ?? prev?.details?.timeTo ?? "").trim()
     );
+    const noteClean = String(note !== undefined && note !== null ? note : prev?.note ?? "").trim();
     const row = normalizeEvent({
       id: nid,
       remote_id: prev?.remoteId || null,
@@ -3091,7 +3151,7 @@
       icon: "📌",
       color: "#fb923c",
       description_html: "",
-      note: String(note ?? prev?.note ?? "").trim(),
+      note: noteClean,
       details: {
         ...(prev?.details && typeof prev.details === "object" ? prev.details : {}),
         timeTo: timeEnd,
@@ -3106,14 +3166,10 @@
     saveLocalEvents(next);
     const sb = globalThis.__PDD_SUPABASE__ ?? null;
     if (sb) {
-      try {
-        const rid = await upsertRemoteEvent(sb, row);
-        if (rid) {
-          row.remoteId = rid;
-          saveLocalEvents(next.map((x) => (String(x.id) === nid ? { ...x, remoteId: rid } : x)));
-        }
-      } catch (e) {
-        console.warn("[saliedesana.upsertSimple]", e?.message || e);
+      const rid = await upsertRemoteEvent(sb, row);
+      if (rid) {
+        row.remoteId = rid;
+        saveLocalEvents(next.map((x) => (String(x.id) === nid ? { ...x, remoteId: rid } : x)));
       }
     }
     try {

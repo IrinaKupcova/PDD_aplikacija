@@ -539,7 +539,7 @@
       <script defer src="./Komanda.js?v=202608131f"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608131e"></script>
+      <script defer src="./Saliedesana.js?v=202608132"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=202608099"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
@@ -6459,6 +6459,8 @@
             const editId = editedRow.id;
             const editFromTime = form.all_day ? null : normalizeEditTime(form.from_time) || null;
             const editToTime = form.all_day ? null : normalizeEditTime(form.to_time) || null;
+            const commentVal = form.comment.trim();
+            const commentForDb = commentVal ? commentVal : null;
             if (isLocalMode()) {
               const rows = getLocalAbsences().map((r) =>
                 String(r.id) === String(editId)
@@ -6469,7 +6471,7 @@
                       end_date: form.end_date,
                       laiks_no: editFromTime,
                       laiks_lidz: editToTime,
-                      comment: form.comment.trim() || null,
+                      comment: commentForDb,
                     }
                   : r
               );
@@ -6497,7 +6499,12 @@
                 [ABSENCE_COLS_RUNTIME.end_date]: form.end_date,
                 [ABSENCE_COLS_RUNTIME.laiks_no]: editFromTime,
                 [ABSENCE_COLS_RUNTIME.laiks_lidz]: editToTime,
-                [ABSENCE_COLS_RUNTIME.comment]: form.comment.trim() || null,
+                [ABSENCE_COLS_RUNTIME.comment]: commentForDb,
+                comment: commentForDb,
+                Komentārs: commentForDb,
+                Komentars: commentForDb,
+                "Komentāri": commentForDb,
+                komentari: commentForDb,
               },
               {
                 type: typeForPayload,
@@ -6505,7 +6512,7 @@
                 Beigu_datums: form.end_date,
                 Laiks_no: editFromTime,
                 Laiks_lidz: editToTime,
-                Komentārs: form.comment.trim() || null,
+                Komentārs: commentForDb,
               },
               {
                 type: typeForPayload,
@@ -6513,7 +6520,7 @@
                 "Beigu datums": form.end_date,
                 "Laiks no": editFromTime,
                 "Laiks līdz": editToTime,
-                "Komentāri": form.comment.trim() || null,
+                "Komentāri": commentForDb,
               },
             ];
             const noRowMsg = "Rinda netika izmainīta (RLS vai neatbilstošas kolonnas).";
@@ -7544,13 +7551,7 @@
             setSalQuickTitle(String(ev.title || title));
             setSalQuickTime(String(ev.time || "08:00").trim() || "08:00");
             setSalQuickTimeTo(String(ev?.details?.timeTo || "17:00").trim() || "17:00");
-            setSalQuickNote(
-              String(ev.note || "").trim() ||
-                String(ev.descriptionHtml || "")
-                  .replace(/<[^>]+>/g, " ")
-                  .replace(/\s+/g, " ")
-                  .trim()
-            );
+            setSalQuickNote(String(ev.note || "").trim());
             setSalQuickMsg("");
             setSalQuickOpen(true);
             return true;
