@@ -1,5 +1,8 @@
 (function () {
   const LS_TEAM_USERS = "pdd_team_users_v1";
+  const LS_TEAM_USERS_SYNC_AT = "pdd_team_users_sync_at_v1";
+  /** Cik ilgi uzticam kešu bez jauna `users` SELECT (samazina Egress). */
+  const TEAM_USERS_CACHE_TTL_MS = 12 * 60 * 1000;
   const LS_LOCAL_USER_ID = "pdd_local_user_id";
   const LOCAL_USER_ID = "local-user-1";
   const TEAM_SECTION_IMAGE_SRC = "./public/komanda-info.png?v=20260413";
@@ -388,6 +391,16 @@
     }
   }
 
+  function isTeamUsersCacheFresh() {
+    try {
+      const at = Number(localStorage.getItem(LS_TEAM_USERS_SYNC_AT) || 0);
+      const users = loadTeamUsers();
+      return users.length >= 2 && at > 0 && Date.now() - at < TEAM_USERS_CACHE_TTL_MS;
+    } catch {
+      return false;
+    }
+  }
+
   function loadTeamUsers() {
     const raw = localStorage.getItem(LS_TEAM_USERS);
     const hasDb = Boolean(globalThis.__PDD_SUPABASE__);
@@ -410,6 +423,11 @@
 
   function saveTeamUsers(users) {
     localStorage.setItem(LS_TEAM_USERS, JSON.stringify((users ?? []).map(normalizeUser)));
+    try {
+      localStorage.setItem(LS_TEAM_USERS_SYNC_AT, String(Date.now()));
+    } catch {
+      /* ignore */
+    }
     notifyTeamUsersChanged();
   }
 
@@ -1397,6 +1415,7 @@
   window.KOMANDA = {
     loadTeamUsers,
     saveTeamUsers,
+    isTeamUsersCacheFresh,
     mergeTeamUsersCache(rows) {
       if (!Array.isArray(rows) || !rows.length) return;
       const byId = new Map(loadTeamUsers().map((u) => [String(u.id), u]));

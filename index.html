@@ -536,7 +536,7 @@
       <div id="root"></div>
 
       <!-- Lokālie dati + ziņas komandai (bez Supabase/API) -->
-      <script defer src="./Komanda.js?v=202606182"></script>
+      <script defer src="./Komanda.js?v=202608131f"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
       <script defer src="./Saliedesana.js?v=202608131e"></script>
@@ -549,10 +549,7 @@
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
       <script defer src="./Prombutnes_vesture.js?v=20260515"></script>
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
-      <script defer src="./ProcesuVadiba.js?v=202608090"></script>
-      <script defer src="./ProcesuVadibaPieslegums.js?v=202606284"></script>
-      <script defer src="./PakalpojumuVadiba.js?v=202608090"></script>
-      <script defer src="./PakalpojumuVadibaPieslegums.js?v=202607310"></script>
+      <!-- Procesu / Pakalpojumu vadība — lazy-load, kad atver attiecīgo sadaļu -->
       <script defer src="./DbResursuBridinajums.js?v=202608070"></script>
 
       <script type="module">
@@ -1419,6 +1416,32 @@
           }
           return cachedPakalpojumuVadibaPanel;
         }
+        function LazyHeavyModulePanel({ label, loadScripts, getPanel }) {
+          const [tick, setTick] = useState(0);
+          const [err, setErr] = useState("");
+          useEffect(() => {
+            let cancelled = false;
+            void (async () => {
+              try {
+                await loadScripts();
+                if (!cancelled) setTick((n) => n + 1);
+              } catch (e) {
+                if (!cancelled) setErr(String(e?.message || e));
+              }
+            })();
+            return () => {
+              cancelled = true;
+            };
+          }, [loadScripts]);
+          if (err) {
+            return html`<section class="list-panel"><p style=${{ color: "var(--danger, #dc2626)" }}>${label} nav ielādēta: ${err}</p></section>`;
+          }
+          const Panel = getPanel();
+          if (!Panel) {
+            return html`<section class="list-panel"><p style=${{ color: "var(--muted)" }}>Ielādē ${label}…</p></section>`;
+          }
+          return html`<div class="pv-embed-host"><${Panel} key=${`lazy-${tick}`} /></div>`;
+        }
         globalThis.__PDD_DEBUG_PROCESU_VADIBA__ = () => ({
           hasApi: Boolean(globalThis.PDD_PROCESU_VADIBA),
           hasFactory: typeof globalThis.PDD_PROCESU_VADIBA?.createProcesuVadibaModule === "function",
@@ -2118,7 +2141,7 @@
           }
         }
 
-        async function fetchTableDirectFromRest(tableName, { orderBy, ascending = true } = {}) {
+        async function fetchTableDirectFromRest(tableName, { orderBy, ascending = true, gteColumn = null, gteValue = null } = {}) {
           const cfg = loadConfig();
           const baseUrl = normalizeProjectUrl(cfg.url);
           const apiKey = String(cfg.key || "").trim();
@@ -2126,6 +2149,9 @@
           if (!isLocalMode() && supabase) await ensureDbReadableSession();
           const params = new URLSearchParams();
           params.set("select", "*");
+          if (gteColumn && gteValue != null && String(gteValue).trim()) {
+            params.set(String(gteColumn), `gte.${String(gteValue).trim()}`);
+          }
           if (orderBy) {
             params.set("order", `${orderBy}.${ascending ? "asc" : "desc"}`);
           }
@@ -2338,6 +2364,84 @@
 
         function historyRetentionCutoffYmd() {
           return historyRetentionCutoffDate().toISOString().slice(0, 10);
+        }
+
+        /** Prombūtnes SELECT — tikai ieraksti, kas nav senāki par retention (mazāks Egress). */
+        function filterAbsenceRowsByRetention(rows) {
+          const cutoff = historyRetentionCutoffYmd();
+          const endCol = ABSENCE_COLS_RUNTIME.end_date;
+          return (Array.isArray(rows) ? rows : []).filter((r) => {
+            const end = String(r?.[endCol] ?? r?.Beigu_datums ?? r?.end_date ?? "").slice(0, 10);
+            return end && end >= cutoff;
+          });
+        }
+
+        function applyPrombutnesRetentionToQuery(query) {
+          const cutoff = historyRetentionCutoffYmd();
+          const col = ABSENCE_COLS_RUNTIME.end_date || "Beigu_datums";
+          return query.gte(col, cutoff);
+        }
+
+        const PDD_LAZY_SCRIPT_PROMISES = Object.create(null);
+        function loadDeferredScriptOnce(src) {
+          const key = String(src || "").trim();
+          if (!key) return Promise.reject(new Error("Nav skripta ceļa"));
+          if (PDD_LAZY_SCRIPT_PROMISES[key]) return PDD_LAZY_SCRIPT_PROMISES[key];
+          PDD_LAZY_SCRIPT_PROMISES[key] = new Promise((resolve, reject) => {
+            if (document.querySelector(`script[data-pdd-lazy-src="${key}"]`)) {
+              resolve();
+              return;
+            }
+            const s = document.createElement("script");
+            s.defer = true;
+            s.src = key;
+            s.dataset.pddLazySrc = key;
+            s.onload = () => resolve();
+            s.onerror = () => reject(new Error(`Neizdevās ielādēt ${key}`));
+            document.head.appendChild(s);
+          });
+          return PDD_LAZY_SCRIPT_PROMISES[key];
+        }
+        async function ensureProcesuVadibaScriptsLoaded() {
+          await loadDeferredScriptOnce("./ProcesuVadiba.js?v=202608090");
+          await loadDeferredScriptOnce("./ProcesuVadibaPieslegums.js?v=202606284");
+        }
+        async function ensurePakalpojumuVadibaScriptsLoaded() {
+          await loadDeferredScriptOnce("./PakalpojumuVadiba.js?v=202608090");
+          await loadDeferredScriptOnce("./PakalpojumuVadibaPieslegums.js?v=202607310");
+        }
+
+        /** Realtime — atslēdz, kad cilne fona režīmā (taupa Realtime + Egress). */
+        function bindSupabaseRealtimeVisibility(sb, createChannel) {
+          if (!sb || typeof createChannel !== "function") return () => {};
+          let ch = null;
+          const connect = () => {
+            if (document.visibilityState === "hidden" || ch) return;
+            try {
+              ch = createChannel();
+            } catch (e) {
+              console.warn("[PDD Realtime.connect]", e?.message || e);
+            }
+          };
+          const disconnect = () => {
+            if (!ch) return;
+            try {
+              void sb.removeChannel(ch);
+            } catch {
+              /* ignore */
+            }
+            ch = null;
+          };
+          const onVis = () => {
+            if (document.visibilityState === "hidden") disconnect();
+            else connect();
+          };
+          if (document.visibilityState !== "hidden") connect();
+          document.addEventListener("visibilitychange", onVis);
+          return () => {
+            disconnect();
+            document.removeEventListener("visibilitychange", onVis);
+          };
         }
 
         /** Agrākais kalendāra mēnesis, ko drīkst atvērt (mēneša 1. diena). */
@@ -3283,9 +3387,8 @@
           useEffect(() => {
             const sb = globalThis.__PDD_SUPABASE__;
             if (!sb || isLocalMode() || TIKAI_VIENKARSI_SKATS) return undefined;
-            let ch = null;
             let cancelled = false;
-            // Realtime tikai pēc pirmā paint — citādi Nano CPU aizķeras.
+            let unbindVis = () => {};
             const timer = setTimeout(() => {
               void (async () => {
                 try {
@@ -3294,14 +3397,16 @@
                   if (cancelled) return;
                   const tbl = globalThis.__PDD_AKTUALITATES_TABLE__;
                   if (!tbl) return;
-                  ch = sb
-                    .channel("pdd-aktualitates-dashboard")
-                    .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshSodienAktualitates())
-                    .subscribe((status, er) => {
-                      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-                        console.warn("[PDD Aktualitātes Realtime]", status, er?.message ?? er);
-                      }
-                    });
+                  unbindVis = bindSupabaseRealtimeVisibility(sb, () =>
+                    sb
+                      .channel("pdd-aktualitates-dashboard")
+                      .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshSodienAktualitates())
+                      .subscribe((status, er) => {
+                        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+                          console.warn("[PDD Aktualitātes Realtime]", status, er?.message ?? er);
+                        }
+                      })
+                  );
                 } catch (e) {
                   console.warn("[PDD Aktualitātes Realtime]", e);
                 }
@@ -3310,7 +3415,7 @@
             return () => {
               cancelled = true;
               clearTimeout(timer);
-              if (ch) void sb.removeChannel(ch);
+              unbindVis();
             };
           }, [refreshSodienAktualitates]);
           useEffect(() => {
@@ -7531,7 +7636,8 @@
             }
             await ensureDbReadableSession();
             const cachedUsers = window.KOMANDA?.loadTeamUsers?.() ?? [];
-            if (Array.isArray(cachedUsers) && cachedUsers.length >= 2) {
+            const cacheFresh = Boolean(window.KOMANDA?.isTeamUsersCacheFresh?.());
+            if (Array.isArray(cachedUsers) && cachedUsers.length >= 2 && cacheFresh) {
               const normalizedUsers = cachedUsers.map(normalizeTeamUserRecord);
               setApproverCols(detectUserApproverColumns(cachedUsers));
               setTeamUsers(normalizedUsers);
@@ -7638,22 +7744,27 @@
               return;
             }
             await ensureDbReadableSession();
-            // 1) Prombūtnes ieraksti
-            const { data: rows, error: qErr } = await supabase
-              .from("prombutnes_dati")
-              .select("*")
-              .order(ABSENCE_COLS_RUNTIME.start_date, { ascending: true });
-            let absRows = rows;
+            // 1) Prombūtnes ieraksti (tikai pēdējie 2 mēneši)
+            const retentionCutoff = historyRetentionCutoffYmd();
+            let { data: rows, error: qErr } = await applyPrombutnesRetentionToQuery(
+              supabase.from("prombutnes_dati").select("*")
+            ).order(ABSENCE_COLS_RUNTIME.start_date, { ascending: true });
+            let absRows = filterAbsenceRowsByRetention(rows);
             let absErr = qErr;
             if (absErr) {
               let rr = await fetchTableDirectFromRest("prombutnes_dati", {
                 orderBy: ABSENCE_COLS_RUNTIME.start_date,
                 ascending: true,
+                gteColumn: ABSENCE_COLS_RUNTIME.end_date,
+                gteValue: retentionCutoff,
               });
               if (rr.error) {
-                rr = await fetchTableDirectFromRest("prombutnes_dati");
+                rr = await fetchTableDirectFromRest("prombutnes_dati", {
+                  gteColumn: ABSENCE_COLS_RUNTIME.end_date,
+                  gteValue: retentionCutoff,
+                });
               }
-              absRows = rr.data;
+              absRows = filterAbsenceRowsByRetention(rr.data);
               absErr = rr.error;
             }
             if (absErr) {
@@ -7663,9 +7774,10 @@
             // 2) Lietotāju profili
             let profs = null;
             let pErr = null;
-            const cachedUsers = window.KOMANDA?.loadTeamUsers?.() ?? [];
-            if (Array.isArray(cachedUsers) && cachedUsers.length >= 2) {
-              profs = cachedUsers;
+            const cachedUsersRefresh = window.KOMANDA?.loadTeamUsers?.() ?? [];
+            const usersCacheFresh = Boolean(window.KOMANDA?.isTeamUsersCacheFresh?.());
+            if (Array.isArray(cachedUsersRefresh) && cachedUsersRefresh.length >= 2 && usersCacheFresh) {
+              profs = cachedUsersRefresh;
             } else {
               const pu1 = await supabase.from("users").select("*");
               profs = pu1.data;
@@ -7784,23 +7896,26 @@
             const bump = () => {
               clearTimeout(debounceT);
               debounceT = setTimeout(() => {
+                if (document.visibilityState === "hidden") return;
                 void loadTeamAndDeputy();
                 void refresh();
               }, 320);
             };
-            const ch = supabase
-              .channel("pdd-prombutnes-live")
-              .on("postgres_changes", { event: "*", schema: "public", table: "prombutnes_dati" }, bump)
-              .on("postgres_changes", { event: "*", schema: "public", table: "prombutnes_veidi" }, bump)
-              .on("postgres_changes", { event: "*", schema: "public", table: "users" }, bump)
-              .subscribe((status, err) => {
-                if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-                  console.warn("[PDD Realtime]", status, err?.message ?? err);
-                }
-              });
+            const unbindVis = bindSupabaseRealtimeVisibility(supabase, () =>
+              supabase
+                .channel("pdd-prombutnes-live")
+                .on("postgres_changes", { event: "*", schema: "public", table: "prombutnes_dati" }, bump)
+                .on("postgres_changes", { event: "*", schema: "public", table: "prombutnes_veidi" }, bump)
+                .on("postgres_changes", { event: "*", schema: "public", table: "users" }, bump)
+                .subscribe((status, err) => {
+                  if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+                    console.warn("[PDD Realtime]", status, err?.message ?? err);
+                  }
+                })
+            );
             return () => {
               clearTimeout(debounceT);
-              void supabase.removeChannel(ch);
+              unbindVis();
             };
           }, [loadTeamAndDeputy, refresh]);
           useEffect(() => {
@@ -8724,23 +8839,38 @@
                   console.warn("[home.absences.ensure]", e?.message || e);
                 }
                 let rows = null;
+                const retentionCutoff = historyRetentionCutoffYmd();
                 try {
-                  const r1 = await withTimeout(supabase.from("prombutnes_dati").select("*"), 7000, "Prombūtnes");
+                  const q = applyPrombutnesRetentionToQuery(supabase.from("prombutnes_dati").select("*"));
+                  const r1 = await withTimeout(q, 7000, "Prombūtnes");
                   if (r1.error) {
-                    const rr = await withTimeout(fetchTableDirectFromRest("prombutnes_dati"), 7000, "Prombūtnes REST");
+                    const rr = await withTimeout(
+                      fetchTableDirectFromRest("prombutnes_dati", {
+                        gteColumn: ABSENCE_COLS_RUNTIME.end_date,
+                        gteValue: retentionCutoff,
+                      }),
+                      7000,
+                      "Prombūtnes REST"
+                    );
                     if (rr.error) {
                       console.warn("[home.absences]", rr.error?.message || rr.error || r1.error);
                       return;
                     }
-                    rows = rr.data;
+                    rows = filterAbsenceRowsByRetention(rr.data);
                   } else {
-                    rows = r1.data;
+                    rows = filterAbsenceRowsByRetention(r1.data);
                   }
                 } catch (e) {
                   console.warn("[home.absences.timeout]", e?.message || e);
                   return;
                 }
-                const { data: profs } = await supabase.from("users").select("*");
+                let profs = null;
+                if (window.KOMANDA?.isTeamUsersCacheFresh?.()) {
+                  profs = window.KOMANDA.loadTeamUsers?.() ?? [];
+                } else {
+                  const uq = await supabase.from("users").select("*");
+                  profs = uq.data;
+                }
                 const { data: typesRows } = await supabase.from("prombutnes_veidi").select("*");
                 if (cancelled) return;
                 const pmap = new Map((profs ?? []).map((p) => [String(p.id), normalizeTeamUserRecord(p)]));
@@ -8855,8 +8985,8 @@
           useEffect(() => {
             const sb = globalThis.__PDD_SUPABASE__;
             if (!sb || isLocalMode() || TIKAI_VIENKARSI_SKATS) return undefined;
-            let ch = null;
             let cancelled = false;
+            let unbindVis = () => {};
             (async () => {
               try {
                 let tbl = "";
@@ -8868,17 +8998,19 @@
                   }
                 }
                 if (cancelled || !tbl) return;
-                ch = sb
-                  .channel("pdd-app-changes-nav")
-                  .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshAppChangesBadge())
-                  .subscribe();
+                unbindVis = bindSupabaseRealtimeVisibility(sb, () =>
+                  sb
+                    .channel("pdd-app-changes-nav")
+                    .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshAppChangesBadge())
+                    .subscribe()
+                );
               } catch {
-                // ignore
+                /* ignore */
               }
             })();
             return () => {
               cancelled = true;
-              if (ch) void sb.removeChannel(ch);
+              unbindVis();
             };
           }, [refreshAppChangesBadge]);
           useEffect(() => {
@@ -9115,20 +9247,18 @@
                     : html`<section class="list-panel"><p>IAD modulis nav ielādēts.</p></section>`;
                 }
                 if (view === "procesuVadiba") {
-                  const ProcesuVadibaPanel = getProcesuVadibaPanel();
-                  return ProcesuVadibaPanel
-                    ? html`<div class="pv-embed-host">
-                        <${ProcesuVadibaPanel} />
-                      </div>`
-                    : html`<section class="list-panel"><p>Procesu vadība nav ielādēta.</p></section>`;
+                  return html`<${LazyHeavyModulePanel}
+                    label="Procesu vadība"
+                    loadScripts=${ensureProcesuVadibaScriptsLoaded}
+                    getPanel=${getProcesuVadibaPanel}
+                  />`;
                 }
                 if (view === "pakalpojumuVadiba") {
-                  const PakalpojumuVadibaPanel = getPakalpojumuVadibaPanel();
-                  return PakalpojumuVadibaPanel
-                    ? html`<div class="pv-embed-host">
-                        <${PakalpojumuVadibaPanel} />
-                      </div>`
-                    : html`<section class="list-panel"><p>Pakalpojumu vadība nav ielādēta.</p></section>`;
+                  return html`<${LazyHeavyModulePanel}
+                    label="Pakalpojumu vadība"
+                    loadScripts=${ensurePakalpojumuVadibaScriptsLoaded}
+                    getPanel=${getPakalpojumuVadibaPanel}
+                  />`;
                 }
                 return null;
               })()}

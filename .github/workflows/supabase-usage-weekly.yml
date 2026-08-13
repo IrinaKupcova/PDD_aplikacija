@@ -1,0 +1,71 @@
+# Nedēļas Supabase Usage/Egress trenda pārbaude (Management API + e-pasts).
+# Egress GB joprojām jāskatās Dashboard → Organization → Usage (Free: 5 GB).
+# Secrets: SUPABASE_ACCESS_TOKEN, SUPABASE_PROJECT_REF, RESEND_API_KEY (kā citās darbplūsmās).
+name: Supabase usage weekly
+
+on:
+  schedule:
+    # Pirmdienas 07:00 UTC (~10:00 Rīga vasarā)
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  usage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      RESEND_FROM: ${{ secrets.RESEND_FROM }}
+      PDD_RESOURCE_ALERT_TO: ${{ secrets.PDD_RESOURCE_ALERT_TO || 'irina.kupcova@vid.gov.lv' }}
+      PDD_RESOURCE_ALERT_CC: ${{ secrets.PDD_RESOURCE_ALERT_CC || 'katrina.jurgensone@vid.gov.lv' }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PDD_USAGE_SNAPSHOT_PATH: .usage-cache/previous.json
+      PDD_USAGE_SNAPSHOT_OUT: .usage-cache/previous.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Restore previous usage snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: .usage-cache
+          key: supabase-usage-weekly-v1-${{ github.repository }}
+
+      - name: Weekly usage trend + email
+        id: usage
+        if: ${{ env.SUPABASE_ACCESS_TOKEN != '' && env.SUPABASE_PROJECT_REF != '' }}
+        continue-on-error: true
+        run: node scripts/supabase-usage-weekly.js
+
+      - name: Skip (nav Management API secrets)
+        if: ${{ env.SUPABASE_ACCESS_TOKEN == '' || env.SUPABASE_PROJECT_REF == '' }}
+        run: |
+          echo "::warning::Trūkst SUPABASE_ACCESS_TOKEN vai SUPABASE_PROJECT_REF — nedēļas Usage pārbaude izlaista."
+
+      - name: Save usage snapshot for next week
+        if: ${{ env.SUPABASE_ACCESS_TOKEN != '' && env.SUPABASE_PROJECT_REF != '' && steps.usage.outcome != 'skipped' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .usage-cache
+          key: supabase-usage-weekly-v1-${{ github.repository }}
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.usage.outcome }}" = "success" ]; then
+            echo "Nedēļas Usage trends: OK (e-pasts nosūtīts)"
+          elif [ "${{ steps.usage.outcome }}" = "failure" ]; then
+            echo "::warning::Usage trends aug — skatīt e-pastu / Issue ar label supabase-usage-weekly"
+          elif [ "${{ env.SUPABASE_ACCESS_TOKEN }}" != "" ] && [ "${{ env.SUPABASE_PROJECT_REF }}" != "" ]; then
+            echo "::error::Usage skripts neizdevās — skatīt logu"
+          fi
