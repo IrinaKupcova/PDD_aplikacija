@@ -31,6 +31,12 @@
 
   function hideBanner() {
     document.getElementById(BANNER_ID)?.remove();
+    document.body.style.paddingTop = "";
+    try {
+      void globalThis.PDD_USAGE_WEEKLY_NOTICE?.fetchNoticeOnce?.();
+    } catch {
+      /* ignore */
+    }
   }
 
   function showBanner(detail) {
@@ -88,6 +94,11 @@
     };
     actions.append(snoozeBtn, closeBtn);
     el.append(text, actions);
+    try {
+      void globalThis.PDD_USAGE_WEEKLY_NOTICE?.fetchNoticeOnce?.();
+    } catch {
+      /* ignore */
+    }
   }
 
   function looksBad(errMsg, ms) {
