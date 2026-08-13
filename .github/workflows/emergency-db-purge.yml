@@ -1,7 +1,7 @@
 # Avārijas DB tīrīšana — palaidās arī pēc push.
 # Secrets: SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_REF (Management SQL)
 #          + VITE_SUPABASE_URL / SUPABASE_URL + KEY (REST fallback)
-# Trigger: 2026-08-13 restart+purge
+# Trigger: 2026-08-13 restart+kill-idle+purge-v2
 name: Emergency DB purge (chat + old audit)
 
 on:
@@ -44,8 +44,38 @@ jobs:
           echo "restart HTTP $code"
           head -c 400 /tmp/restart.json || true
           echo
-          echo "Gaida 90s pēc restart..."
-          sleep 90
+          echo "Gaida 150s pēc restart..."
+          sleep 150
+
+      - name: Management API — atbrīvo stuck savienojumus + ping
+        if: ${{ env.SUPABASE_ACCESS_TOKEN != '' && env.SUPABASE_PROJECT_REF != '' }}
+        continue-on-error: true
+        run: |
+          REF="$SUPABASE_PROJECT_REF"
+          TOKEN="$SUPABASE_ACCESS_TOKEN"
+          post_sql() {
+            local name="$1"
+            local query="$2"
+            body=$(python3 -c 'import json,sys; print(json.dumps({"query": sys.argv[1]}))' "$query")
+            code=$(curl -sS -m 90 -o "/tmp/${name}.json" -w "%{http_code}" -X POST \
+              "https://api.supabase.com/v1/projects/${REF}/database/query" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$body" || echo "000")
+            echo "$name HTTP $code"
+            head -c 500 "/tmp/${name}.json" || true
+            echo
+          }
+          post_sql ping 'select 1 as ok;'
+          post_sql kill_idle 'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND state in (''idle'', ''idle in transaction'') AND now() - state_change > interval ''30 seconds'';'
+          post_sql del_akt 'DELETE FROM public."AKTUALITATES" WHERE "Beigas" < (CURRENT_DATE - interval ''2 months'');'
+          post_sql del_prom 'DELETE FROM public.prombutnes_dati WHERE "Beigu_datums" < (CURRENT_DATE - interval ''2 months'');'
+          post_sql del_sal 'DELETE FROM public."Saliedesana" WHERE "Datums" < (CURRENT_DATE - interval ''2 months'');'
+          post_sql del_audit 'DELETE FROM public."Auditacijas_vesture" WHERE ts < ((CURRENT_DATE - interval ''2 months'')::timestamptz);'
+          post_sql trunc_rx 'TRUNCATE TABLE public.aktualitates_reactions;'
+          post_sql trunc_chat 'TRUNCATE TABLE public.pdd_ideju_chat;'
+          post_sql trunc_chatrx 'TRUNCATE TABLE public.pdd_ideju_chat_reactions;'
+          post_sql ping2 'select count(*)::int as users from public.users;'
 
       - name: Management API — SQL pa vienai komandai
         if: ${{ env.SUPABASE_ACCESS_TOKEN != '' && env.SUPABASE_PROJECT_REF != '' }}
