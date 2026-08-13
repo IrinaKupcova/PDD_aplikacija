@@ -1,7 +1,7 @@
 # Avārijas DB tīrīšana — palaidās arī pēc push.
 # Secrets: SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_REF (Management SQL)
 #          + VITE_SUPABASE_URL / SUPABASE_URL + KEY (REST fallback)
-# Trigger: 2026-08-13 manual re-run
+# Trigger: 2026-08-13 restart+purge
 name: Emergency DB purge (chat + old audit)
 
 on:
@@ -28,6 +28,24 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restart Supabase project
+        if: ${{ env.SUPABASE_ACCESS_TOKEN != '' && env.SUPABASE_PROJECT_REF != '' }}
+        continue-on-error: true
+        run: |
+          REF="$SUPABASE_PROJECT_REF"
+          TOKEN="$SUPABASE_ACCESS_TOKEN"
+          echo "Restart project $REF"
+          code=$(curl -sS -m 60 -o /tmp/restart.json -w "%{http_code}" -X POST \
+            "https://api.supabase.com/v1/projects/${REF}/restart" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{}' || echo "000")
+          echo "restart HTTP $code"
+          head -c 400 /tmp/restart.json || true
+          echo
+          echo "Gaida 90s pēc restart..."
+          sleep 90
 
       - name: Management API — SQL pa vienai komandai
         if: ${{ env.SUPABASE_ACCESS_TOKEN != '' && env.SUPABASE_PROJECT_REF != '' }}
