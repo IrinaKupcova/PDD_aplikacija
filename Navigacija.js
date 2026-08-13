@@ -425,7 +425,9 @@
     const sb = globalThis.__PDD_SUPABASE__;
     if (!M?.fetchRows || !M?.latestStamp || !sb) return "";
     await navEnsureDbSession();
-    const rows = await M.fetchRows(sb);
+    const fetchCached = globalThis.__PDD_FETCH_APP_CHANGES_ROWS__;
+    const rows =
+      typeof fetchCached === "function" ? await fetchCached(sb) : await M.fetchRows(sb);
     return navAppChangesStampId(M.latestStamp(rows));
   }
 
@@ -443,7 +445,9 @@
       const sb = globalThis.__PDD_SUPABASE__;
       if (!M?.fetchRows || !M?.latestStamp || !sb) return false;
       await navEnsureDbSession();
-      const rows = await M.fetchRows(sb);
+      const fetchCached = globalThis.__PDD_FETCH_APP_CHANGES_ROWS__;
+      const rows =
+        typeof fetchCached === "function" ? await fetchCached(sb) : await M.fetchRows(sb);
       const latestId = navAppChangesStampId(M.latestStamp(rows));
       if (!latestId) return false;
 
@@ -821,7 +825,6 @@
 
       if (!globalThis.__PDD_NAV_CHANGES_INIT__) {
         globalThis.__PDD_NAV_CHANGES_INIT__ = true;
-        void navShouldShowAppChangesNew(view === "pddAppChanges" ? "pddAppChanges" : "home");
       }
 
       const showPddAppChangesBadge = Boolean(_showPddAppChangesBadgeProp);

@@ -539,11 +539,11 @@
       <script defer src="./Komanda.js?v=202606182"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608131d"></script>
+      <script defer src="./Saliedesana.js?v=202608131e"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=202608099"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202608131d"></script>
+      <script defer src="./Navigacija.js?v=202608131e"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
@@ -2526,6 +2526,21 @@
           }
         }
 
+        const APP_CHANGES_ROWS_CACHE_MS = 45000;
+        async function fetchAppChangesRowsCached(sb) {
+          const M = globalThis.PDD_IZMAINAS;
+          if (!M?.fetchRows || !sb) return [];
+          const cache = globalThis.__PDD_APP_CHANGES_ROWS_CACHE__;
+          const now = Date.now();
+          if (cache?.rows && now - Number(cache.at || 0) < APP_CHANGES_ROWS_CACHE_MS) {
+            return cache.rows;
+          }
+          const rows = await M.fetchRows(sb);
+          globalThis.__PDD_APP_CHANGES_ROWS_CACHE__ = { at: now, rows };
+          return rows;
+        }
+        globalThis.__PDD_FETCH_APP_CHANGES_ROWS__ = fetchAppChangesRowsCached;
+
         function pushChangeLog(action, details) {
           const actor = currentLocalActor();
           const logs = getChangeLog();
@@ -2867,7 +2882,7 @@
           if (me) {
             return {
               profile: normalizeTeamUserRecord({ ...me, id: uid }),
-              loading: true,
+              loading: false,
             };
           }
           return { profile: null, loading: true };
@@ -3303,28 +3318,31 @@
             if (!sb || isLocalMode() || TIKAI_VIENKARSI_SKATS) return undefined;
             let ch = null;
             let cancelled = false;
-            (async () => {
-              try {
-                const I = globalThis.IAD;
-                if (!I?.fetchIadRowsFromSupabase) return;
-                const tbl = await (async () => {
-                  for (const name of ["IAD", "iad", "Iad"]) {
-                    const probe = await sb.from(name).select("*").limit(1);
-                    if (!probe.error) return name;
-                  }
-                  return "";
-                })();
-                if (cancelled || !tbl) return;
-                ch = sb
-                  .channel("pdd-iad-dashboard")
-                  .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshTodayTasks())
-                  .subscribe();
-              } catch (_) {
-                // ignore realtime errors for task cards
-              }
-            })();
+            const timer = setTimeout(() => {
+              void (async () => {
+                try {
+                  const I = globalThis.IAD;
+                  if (!I?.fetchIadRowsFromSupabase) return;
+                  const tbl = await (async () => {
+                    for (const name of ["IAD", "iad", "Iad"]) {
+                      const probe = await sb.from(name).select("*").limit(1);
+                      if (!probe.error) return name;
+                    }
+                    return "";
+                  })();
+                  if (cancelled || !tbl) return;
+                  ch = sb
+                    .channel("pdd-iad-dashboard")
+                    .on("postgres_changes", { event: "*", schema: "public", table: tbl }, () => void refreshTodayTasks())
+                    .subscribe();
+                } catch (_) {
+                  // ignore realtime errors for task cards
+                }
+              })();
+            }, 12000);
             return () => {
               cancelled = true;
+              clearTimeout(timer);
               if (ch) void sb.removeChannel(ch);
             };
           }, [refreshTodayTasks]);
@@ -7512,6 +7530,26 @@
               return;
             }
             await ensureDbReadableSession();
+            const cachedUsers = window.KOMANDA?.loadTeamUsers?.() ?? [];
+            if (Array.isArray(cachedUsers) && cachedUsers.length >= 2) {
+              const normalizedUsers = cachedUsers.map(normalizeTeamUserRecord);
+              setApproverCols(detectUserApproverColumns(cachedUsers));
+              setTeamUsers(normalizedUsers);
+              if (window.SASKANOSANA?.loadState) {
+                const st = await window.SASKANOSANA.loadState(supabase, DEFAULT_MANAGER_NAME);
+                if (!st?.error) {
+                  setDeputyUserId(st.deputyUserId ?? null);
+                  setDeputyValidFrom(st.deputyFrom ?? null);
+                  setDeputyValidTo(st.deputyTo ?? null);
+                  return;
+                }
+              }
+              const activeDeputy = resolveActiveDeputyUser(normalizedUsers);
+              setDeputyUserId(activeDeputy?.id ? String(activeDeputy.id) : null);
+              setDeputyValidFrom(activeDeputy?.[COL_USER_APPROVER_FROM] ?? null);
+              setDeputyValidTo(activeDeputy?.[COL_USER_APPROVER_TO] ?? null);
+              return;
+            }
             let urows = null;
             let uErr = null;
             const uq1 = await supabase.from("users").select("*").order(COL_USER_NAME, { ascending: true });
@@ -7625,13 +7663,18 @@
             // 2) Lietotāju profili
             let profs = null;
             let pErr = null;
-            const pu1 = await supabase.from("users").select("*");
-            profs = pu1.data;
-            pErr = pu1.error;
-            if (pErr) {
-              const pu2 = await supabase.from("profiles").select("*");
-              profs = pu2.data;
-              pErr = pu2.error;
+            const cachedUsers = window.KOMANDA?.loadTeamUsers?.() ?? [];
+            if (Array.isArray(cachedUsers) && cachedUsers.length >= 2) {
+              profs = cachedUsers;
+            } else {
+              const pu1 = await supabase.from("users").select("*");
+              profs = pu1.data;
+              pErr = pu1.error;
+              if (pErr) {
+                const pu2 = await supabase.from("profiles").select("*");
+                profs = pu2.data;
+                pErr = pu2.error;
+              }
             }
             if (pErr) setError(pErr.message);
             const pmap = new Map((profs ?? []).map((p) => [String(p.id), normalizeTeamUserRecord(p)]));
@@ -8479,7 +8522,7 @@
                     const sb = globalThis.__PDD_SUPABASE__;
                     if (M?.fetchRows && M?.latestStamp && sb) {
                       await ensureDbReadableSession();
-                      const rows = await M.fetchRows(sb);
+                      const rows = await fetchAppChangesRowsCached(sb);
                       latestId = appChangesStampId(M.latestStamp(rows));
                       appChangesLatestIdRef.current = latestId;
                       setAppChangesLatestId(latestId);
@@ -8633,7 +8676,7 @@
                 return;
               }
               await ensureDbReadableSession();
-              const rows = await M.fetchRows(sb);
+              const rows = await fetchAppChangesRowsCached(sb);
               const latest = String(M.latestStamp(rows) || "").trim();
               const latestId = appChangesStampId(latest);
               const seenKey = appChangesSeenStorageKey();
@@ -8663,8 +8706,17 @@
           }, []);
           useEffect(() => {
             let cancelled = false;
-            deferNonCritical(async () => {
-              if (!session?.user || !supabase) return;
+            const hasLocalAbs = (() => {
+              try {
+                return getLocalAbsences().length > 0;
+              } catch {
+                return false;
+              }
+            })();
+            const bootDelayMs = hasLocalAbs ? 45000 : 800;
+            const timer = setTimeout(() => {
+              deferNonCritical(async () => {
+                if (cancelled || !session?.user || !supabase) return;
               try {
                 try {
                   await withTimeout(ensureDbReadableSession(), 4000, "DB sesija");
@@ -8747,8 +8799,10 @@
                 console.warn("[home.absences]", e?.message || e);
               }
             });
+            }, bootDelayMs);
             return () => {
               cancelled = true;
+              clearTimeout(timer);
             };
           }, [session?.user]);
           useEffect(() => {
@@ -8785,7 +8839,7 @@
                 const sb = globalThis.__PDD_SUPABASE__;
                 if (!M?.fetchRows || !M?.latestStamp || !sb) return;
                 await ensureDbReadableSession();
-                const rows = await M.fetchRows(sb);
+                const rows = await fetchAppChangesRowsCached(sb);
                 const latest = String(M.latestStamp(rows) || "").trim();
                 const latestId = appChangesStampId(latest);
                 appChangesLatestIdRef.current = latestId;

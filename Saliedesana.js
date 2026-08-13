@@ -2414,7 +2414,16 @@
   }
 
   async function selectRemoteRowsSafe(supabase) {
-    const q = await supabase.from(REMOTE_TABLE).select("*");
+    const cutoff = historyRetentionCutoffYmd();
+    let q = await supabase
+      .from(REMOTE_TABLE)
+      .select("*")
+      .gte("Datums", cutoff)
+      .order("Datums", { ascending: false })
+      .limit(300);
+    if (q.error) {
+      q = await supabase.from(REMOTE_TABLE).select("*").order("id", { ascending: false }).limit(300);
+    }
     if (q.error) throw q.error;
     const data = Array.isArray(q.data) ? q.data : [];
     cacheSaliedesanaColumnsFromRows(data);
@@ -3022,19 +3031,14 @@
 
   installGlobalMainCalendarBadgeSync();
 
+  let salSyncNavLastAt = 0;
   async function syncSaliedesanaNewsCacheForNav() {
+    const now = Date.now();
+    if (now - salSyncNavLastAt < 30000) return;
+    salSyncNavLastAt = now;
     const sb = globalThis.__PDD_SUPABASE__ ?? null;
     if (!sb) return;
     let touched = false;
-    const remoteInfo = await fetchSalInfoRemote(sb);
-    if (remoteInfo) {
-      try {
-        localStorage.setItem(LS_SAL_INFO_KEY, JSON.stringify(remoteInfo));
-        touched = true;
-      } catch {
-        /* ignore */
-      }
-    }
     const remoteEvents = await fetchRemoteEvents(sb);
     if (remoteEvents) {
       try {

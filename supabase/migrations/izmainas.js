@@ -86,7 +86,7 @@
 
   async function fetchRows(sb) {
     const t = await resolveTable(sb);
-    const { data, error } = await sb.from(t).select("*").order("datums", { ascending: false }).order("created_at", { ascending: false });
+    const { data, error } = await sb.from(t).select("*").order("datums", { ascending: false }).order("created_at", { ascending: false }).limit(80);
     if (error) throw error;
     return (Array.isArray(data) ? data : []).map(rowFromDb);
   }
