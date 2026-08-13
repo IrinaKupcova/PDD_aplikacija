@@ -539,7 +539,7 @@
       <script defer src="./Komanda.js?v=202606182"></script>
       <script defer src="./Informeshana.js?v=202606195"></script>
       <script defer src="./IAD.js?v=202606196"></script>
-      <script defer src="./Saliedesana.js?v=202608099"></script>
+      <script defer src="./Saliedesana.js?v=202608130"></script>
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=202608099"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
@@ -2501,75 +2501,14 @@
           };
         }
 
+        /** Audit DB select("*") bez limita — izņemts (slogo Nano + Egress). Tikai lokālais žurnāls. */
         async function fetchAuditLogs() {
-          const local = getChangeLog().map(normalizeAuditLogRecord).filter(Boolean);
-          if (isLocalMode() || !supabase) return local;
-          await ensureDbReadableSession();
-          const tables = ["Auditacijas_vēsture", "Auditacijas_vesture"];
-          let rows = null;
-          let err = null;
-          for (const t of tables) {
-            const q1 = await supabase.from(t).select("*").order("ts", { ascending: false });
-            rows = q1.data;
-            err = q1.error;
-            if (err) {
-              const q2 = await supabase.from(t).select("*").order("created_at", { ascending: false });
-              rows = q2.data;
-              err = q2.error;
-            }
-            if (err) {
-              const r1 = await fetchTableDirectFromRest(t, { orderBy: "ts", ascending: false });
-              rows = r1.data;
-              err = r1.error;
-            }
-            if (err) {
-              const r2 = await fetchTableDirectFromRest(t, { orderBy: "created_at", ascending: false });
-              rows = r2.data;
-              err = r2.error;
-            }
-            if (!err) break;
-          }
-          if (err) {
-            console.warn("[audit.fetch]", err);
-            return local;
-          }
-          const dbLogs = (rows ?? []).map(normalizeAuditLogRecord).filter(Boolean);
-          const cutoff = auditRetentionCutoffIso();
-          const kept = dbLogs.filter((r) => !r.ts || String(r.ts) >= cutoff);
-          void runHistoryRetentionCleanup();
-          return kept.length ? kept : local;
+          return getChangeLog().map(normalizeAuditLogRecord).filter(Boolean);
         }
 
-        async function insertAuditLog(row) {
-          if (isLocalMode() || !supabase) return;
-          await ensureDbReadableSession();
-          const payloadA = {
-            ts: row.ts,
-            action: row.action,
-            details: row.details,
-            actor_name: row.actor_name,
-            actor_email: row.actor_email || null,
-            actor_id: row.actor_id || null,
-          };
-          const tables = ["Auditacijas_vēsture", "Auditacijas_vesture"];
-          let error = null;
-          for (const t of tables) {
-            const r = await supabase.from(t).insert(payloadA);
-            error = r.error;
-            if (!error) return;
-          }
-          const payloadB = {
-            Laiks: row.ts,
-            "Darbība": row.action,
-            "Detaļas": row.details,
-            "Lietotājs": row.actor_name,
-          };
-          for (const t of tables) {
-            const retry = await supabase.from(t).insert(payloadB);
-            if (!retry.error) return;
-            error = retry.error;
-          }
-          if (error) console.warn("[audit.insert]", error);
+        /** Remote audit ieraksti izslēgti — neaizpilda Auditacijas_* tabulas. */
+        async function insertAuditLog(_row) {
+          return;
         }
 
         function pushChangeLog(action, details) {
@@ -3605,7 +3544,7 @@
           };
         }
 
-        function AbsenceCalendar({ month, onMonthChange, absences, caption, onPickAbsence, onPickDay, types }) {
+        function AbsenceCalendar({ month, onMonthChange, absences, caption, onPickAbsence, onPickDay, onAddSaliedesanaDay, types }) {
           const minMonth = calendarMinMonthDate();
           const safeMonth = clampCalendarMonth(month);
           const canGoPrev = startOfMonth(safeMonth).getTime() > minMonth.getTime();
@@ -3698,21 +3637,38 @@
                     >
                       <div class="row" style=${{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.2rem" }}>
                         <div class="cal-day-num">${format(d, "d")}</div>
-                        ${onPickDay && inMonth
-                          ? html`
-                              <button
-                                type="button"
-                                class="btn btn-ghost btn-small"
-                                title="Pieteikt prombūtni šai dienai"
-                                onClick=${(ev) => {
-                                  ev.stopPropagation();
-                                  onPickDay(d);
-                                }}
-                              >
-                                Pieteikt
-                              </button>
-                            `
-                          : null}
+                        <div class="row" style=${{ gap: "0.25rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                          ${onAddSaliedesanaDay && inMonth
+                            ? html`
+                                <button
+                                  type="button"
+                                  class="btn btn-ghost btn-small"
+                                  title="Pievienot saliedēšanas pasākumu"
+                                  onClick=${(ev) => {
+                                    ev.stopPropagation();
+                                    onAddSaliedesanaDay(d);
+                                  }}
+                                >
+                                  Pasākums
+                                </button>
+                              `
+                            : null}
+                          ${onPickDay && inMonth
+                            ? html`
+                                <button
+                                  type="button"
+                                  class="btn btn-ghost btn-small"
+                                  title="Pieteikt prombūtni šai dienai"
+                                  onClick=${(ev) => {
+                                    ev.stopPropagation();
+                                    onPickDay(d);
+                                  }}
+                                >
+                                  Pieteikt
+                                </button>
+                              `
+                            : null}
+                        </div>
                       </div>
                       ${items.map((a) => {
                         const isAtvCal =
@@ -3756,7 +3712,7 @@
                                 ? isAtvCal
                                   ? "Spied — atvērt Atvaļinājumu grafiku"
                                   : salOpen
-                                    ? "Spied — atvērt Saliedēšanas pasākuma kartiņu"
+                                    ? "Spied — atvērt Saliedēšanas pasākumu (piezīme)"
                                     : "Spied, lai atvērtu vēsturē"
                                 : "",
                             ]
@@ -7371,6 +7327,12 @@
           const [highlightAbsenceId, setHighlightAbsenceId] = useState(null);
           const [requestPresetDate, setRequestPresetDate] = useState("");
           const [highlightFromUrl, setHighlightFromUrl] = useState(null);
+          const [salQuickOpen, setSalQuickOpen] = useState(false);
+          const [salQuickDate, setSalQuickDate] = useState("");
+          const [salQuickTitle, setSalQuickTitle] = useState("");
+          const [salQuickNote, setSalQuickNote] = useState("");
+          const [salQuickBusy, setSalQuickBusy] = useState(false);
+          const [salQuickMsg, setSalQuickMsg] = useState("");
           const requestReturnPromSubRef = useRef("calendar");
           const prevPromSubRef = useRef(promSub);
           useEffect(() => {
@@ -7754,7 +7716,17 @@
                         onMonthChange=${setMonth}
                         absences=${absences}
                         types=${typesList}
-                        caption="Komandas kalendārs. Violetie — tavi atvaļinājumi, ko esi ievietojis grafikā ar pogu „Atspoguļot kalendārī”. Spied uz iezīmes, lai atvērtu vēsturi vai grafiku."
+                        caption="Komandas kalendārs. Violetie — tavi atvaļinājumi. Oranžie — saliedēšanas pasākumi. Poga „Pasākums” — pievienot ar piezīmi."
+                        onAddSaliedesanaDay=${(d) => {
+                          const ymd =
+                            window.KALENDARS?.toYmd?.(d) ??
+                            format(d, "yyyy-MM-dd");
+                          setSalQuickDate(ymd);
+                          setSalQuickTitle("");
+                          setSalQuickNote("");
+                          setSalQuickMsg("");
+                          setSalQuickOpen(true);
+                        }}
                         onPickDay=${(d) => {
                           const ymd =
                             window.KALENDARS?.toYmd?.(d) ??
@@ -7853,6 +7825,98 @@
                       : html`<section class="list-panel"><p>Atvaļinājumu modulis nav ielādēts.</p></section>`;
                   })()
                 : null}
+              ${salQuickOpen
+                ? html`
+                    <div
+                      style=${{
+                        position: "fixed",
+                        inset: 0,
+                        background: "rgba(15,23,42,0.45)",
+                        zIndex: 90,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "1rem",
+                      }}
+                      onClick=${() => !salQuickBusy && setSalQuickOpen(false)}
+                    >
+                      <div
+                        class="list-panel"
+                        style=${{ maxWidth: "420px", width: "100%", margin: 0 }}
+                        onClick=${(e) => e.stopPropagation()}
+                      >
+                        <h3 style=${{ margin: "0 0 0.35rem" }}>Jauns pasākums</h3>
+                        <p style=${{ margin: "0 0 0.75rem", fontSize: "0.82rem", color: "var(--muted)" }}>
+                          Datums: <strong>${salQuickDate || "—"}</strong>
+                        </p>
+                        ${salQuickMsg
+                          ? html`<div class="banner-warn" role="alert" style=${{ marginBottom: "0.65rem" }}>${salQuickMsg}</div>`
+                          : null}
+                        <div class="stack" style=${{ gap: "0.65rem" }}>
+                          <div class="field">
+                            <label>Nosaukums</label>
+                            <input
+                              class="input"
+                              value=${salQuickTitle}
+                              placeholder="Piem., Komandas pikniks"
+                              onInput=${(e) => setSalQuickTitle(e.target.value)}
+                            />
+                          </div>
+                          <div class="field">
+                            <label>Piezīme</label>
+                            <textarea
+                              class="textarea"
+                              rows="3"
+                              value=${salQuickNote}
+                              placeholder="Īsa piezīme…"
+                              onInput=${(e) => setSalQuickNote(e.target.value)}
+                            />
+                          </div>
+                          <div class="row" style=${{ gap: "0.45rem" }}>
+                            <button
+                              type="button"
+                              class="btn btn-primary btn-small"
+                              disabled=${salQuickBusy}
+                              onClick=${async () => {
+                                setSalQuickBusy(true);
+                                setSalQuickMsg("");
+                                try {
+                                  const fn = globalThis.SALIEDESANA?.upsertSimpleEvent;
+                                  if (typeof fn !== "function") throw new Error("Saliedēšanas modulis nav ielādēts.");
+                                  await fn({
+                                    date: salQuickDate,
+                                    title: salQuickTitle,
+                                    note: salQuickNote,
+                                  });
+                                  setSalQuickOpen(false);
+                                  try {
+                                    globalThis.__PDD_SALIEDESANA_REPAINT_MAIN_CALENDAR__?.();
+                                  } catch {
+                                    /* ignore */
+                                  }
+                                } catch (e) {
+                                  setSalQuickMsg(String(e?.message || e));
+                                } finally {
+                                  setSalQuickBusy(false);
+                                }
+                              }}
+                            >
+                              Saglabāt
+                            </button>
+                            <button
+                              type="button"
+                              class="btn btn-ghost btn-small"
+                              disabled=${salQuickBusy}
+                              onClick=${() => setSalQuickOpen(false)}
+                            >
+                              Atcelt
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  `
+                : null}
             </section>
           `;
         }
@@ -7895,6 +7959,9 @@
                   Atjaunot
                 </button>
               </div>
+              <p style=${{ margin: "0 0 0.65rem", fontSize: "0.82rem", color: "var(--muted)" }}>
+                Tikai lokālais žurnāls šajā pārlūkā — DB audit tabula vairs netiek ielādēta (taupa resursus).
+              </p>
               <div class="table-wrap">
                 <table class="hist-table">
                   <thead>

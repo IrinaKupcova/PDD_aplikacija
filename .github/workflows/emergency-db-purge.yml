@@ -11,7 +11,9 @@ on:
       - ".github/workflows/emergency-db-purge.yml"
       - "supabase/PIEMEROT_DZES_CHAT_UN_VECO_AUDIT.sql"
       - "supabase/PIEMEROT_TIKAI_CHAT_TRUNCATE.sql"
+      - "supabase/PIEMEROT_TIRIT_VECO_VESTURI.sql"
       - "arhiva/avarijas_tirisana_rest.py"
+      - "arhiva/rest_tirisana_2meneshi.py"
 
 jobs:
   purge:
@@ -70,11 +72,12 @@ jobs:
 
           echo "Management API batch finished"
 
-      - name: REST — čats (vienmēr mēģina)
+      - name: REST — čats + 2 mēnešu vēsture
         if: ${{ env.SUPABASE_URL != '' && env.SUPABASE_KEY != '' }}
         continue-on-error: true
         run: |
           set +e
+          python3 arhiva/rest_tirisana_2meneshi.py || python arhiva/rest_tirisana_2meneshi.py || true
           BASE="${SUPABASE_URL%/}/rest/v1"
           H=(-H "apikey: ${SUPABASE_KEY}" -H "Authorization: Bearer ${SUPABASE_KEY}" -H "Prefer: return=minimal")
           for i in 1 2 3 4 5; do

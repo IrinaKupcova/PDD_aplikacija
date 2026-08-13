@@ -4431,56 +4431,44 @@
         ev?.preventDefault?.();
         const title = String(cardTitle ?? "").trim();
         if (!title) {
-          setDbMessage("Lai saglabātu pasākumu, jānorāda pasākuma nosaukums.");
+          setDbMessage("Lai saglabātu pasākumu, jānorāda nosaukums.");
           return;
         }
         const id = editingId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const prev = events.find((x) => x.id === id);
         const row = normalizeEvent({
           id,
-          remote_id: events.find((x) => x.id === id)?.remoteId || null,
+          remote_id: prev?.remoteId || null,
           event_date: cardDate,
-          event_time: String(cardTime || "").trim(),
-          category: cardCategory,
-          event_type: cardEventType,
+          event_time: String(cardTime || "").trim() || "08:00",
+          category: "team",
+          event_type: "saliedesana",
           title,
-          location: cardOnline ? "online" : String(cardLocation || "").trim(),
-          is_online: Boolean(cardOnline),
-          short_category: cardShortCategory,
-          icon: cardIcon,
-          color: cardColor || "#fb923c",
-          description_html: descHtml,
-          note: cardNote,
+          location: "",
+          is_online: false,
+          short_category: "cits",
+          icon: "📌",
+          color: "#fb923c",
+          description_html: "",
+          note: String(cardNote || "").trim(),
           details: {
-            eventWhat: detailEventWhat,
-            whyJoin: detailWhyJoin,
-            whatExpect: detailWhatExpect,
-            dressCode: detailDressCode,
-            bringAlong: detailBringAlong,
-            fee: detailFee,
-            timeTo: String(cardTimeTo || "").trim(),
+            ...(prev?.details && typeof prev.details === "object" ? prev.details : {}),
+            eventWhat: "",
+            whyJoin: "",
+            whatExpect: "",
+            dressCode: "",
+            bringAlong: "",
+            fee: "",
+            timeTo: "",
             showInAktualitates: false,
-            aktualitatesId: Number(events.find((x) => x.id === id)?.details?.aktualitatesId || 0) || null,
-            organizerKey: (() => {
-              const prev = events.find((x) => x.id === id);
-              const existing = String(prev?.details?.organizerKey || "").trim();
-              if (existing) return existing;
-              return (
-                String(preferredActorUserId() || "").trim() ||
-                String(globalThis.__PDD_ACTOR_EMAIL__ || sessionStorage.getItem("pdd_local_email") || "")
-                  .trim()
-                  .toLowerCase() ||
-                String(actorKey() || "").trim()
-              );
-            })(),
+            aktualitatesId: Number(prev?.details?.aktualitatesId || 0) || null,
           },
-          poll: { items: pollItemsFromState() },
-          participants,
-          attachments,
+          poll: { items: [] },
+          participants: prev?.participants && typeof prev.participants === "object" ? prev.participants : {},
+          attachments: [],
           updated_at: new Date().toISOString(),
         });
-        const nextEvents = editingId
-          ? events.map((x) => (x.id === id ? row : x))
-          : [row, ...events];
+        const nextEvents = editingId ? events.map((x) => (x.id === id ? row : x)) : [row, ...events];
         await persistEvents(nextEvents, row);
         setCardOpen(false);
       }
@@ -4844,8 +4832,9 @@
       const pollHistoryForList = (Array.isArray(polls) ? polls : []).filter((p) => keepPollItemInUiState(p));
       const pendingPollCountForCard = (Array.isArray(polls) ? polls : []).reduce((acc, p) => acc + (pollPendingForViewer(p) ? 1 : 0), 0);
 
-      const useFullEventCard = cardEventType === "saliedesana" || cardEventType === "cits";
-      const useCelebrationCard = cardEventType === "dzimsanas" || cardEventType === "varda_diena";
+      const useFullEventCard = false;
+      const useCelebrationCard = false;
+      const SIMPLE_EVENT_EDITOR = true;
       const celHeaderTitle = cardEventType === "varda_diena" ? "Vārda diena" : "Dzimšanas diena";
       const showCelMeetLink = Boolean(cardOnline) || celKinds.includes("online");
       const showCelGiftSec = cardEventType === "dzimsanas" && celKinds.includes("gifts");
@@ -4869,7 +4858,7 @@
         <section class="sal-wrap">
           <div class="sal-head">
             <h2>Saliedēšanas pasākumi, svētku dienas u.c.</h2>
-            <p>Jautri, atraktīvi un pārskatāmi pasākumi vienuviet! ✨</p>
+            <p>Kalendāra pasākumi ar piezīmi. Vecie ieraksti saglabāti. Jaunu var pievienot arī no Prombūtņu kalendāra.</p>
           </div>
 
           ${dbMessage ? html`<div class="sal-banner">${dbMessage}</div>` : null}
@@ -5035,939 +5024,47 @@
             </div>
           </div>
 
-          <details class="sal-history" open=${openHistory} onToggle=${(e) => setOpenHistory(Boolean(e.currentTarget.open))}>
-            <summary style=${{ cursor: "pointer", fontWeight: 700, color: "#9a3412" }}>Pasākumu vēsture</summary>
-            <div class="sal-history-list">
-              ${sortedEvents.length
-                ? sortedEvents.map((e) => html`
-                    <article key=${`hist-${e.id}`} class="sal-history-item" onClick=${() => openCardEdit(e)}>
-                      <strong>
-                        ${(e.icon ? `${e.icon} ` : "") + e.title}
-                        ${eventHasAttachments(e) ? html`<span class="pdd-attach-clip" title="Ir pievienots pielikums" aria-label="Ir pievienots pielikums">📎</span>` : null}
-                      </strong>
-                      <span class="sal-history-meta">${formatDateTime(e)} · ${e.location || (e.online ? "online" : "—")}</span>
-                      <div class="sal-history-actions">
-                        <button
-                          type="button"
-                          class="btn btn-danger btn-small"
-                          onClick=${async (evt) => {
-                            evt.stopPropagation();
-                            await deleteEventById(e.id, false);
-                          }}
-                        >
-                          Dzēst
-                        </button>
-                      </div>
-                    </article>
-                  `)
-                : html`<p class="sal-subnote">Vēl nav neviena pasākuma ieraksta.</p>`}
-            </div>
-          </details>
-
           ${cardOpen
             ? html`
                 <div class="sal-modal-bg" onClick=${() => setCardOpen(false)}>
-                  <div
-                    class=${`sal-modal${useCelebrationCard ? " sal-modal--cel" : ""}`}
-                    onClick=${(e) => e.stopPropagation()}
-                  >
-                    <h3>${useCelebrationCard ? celHeaderTitle : editingId ? "Pasākuma kartiņa" : "Jauns pasākums"}</h3>
-                    <p class="sal-modal-note">
-                      ${useCelebrationCard
-                        ? html`Komandas iekšējā pieteikuma kartiņa · datums <strong>${cardDate || "—"}</strong>`
-                        : html`Datums: <strong>${cardDate || "—"}</strong>. Krāsaini un atraktīvi! 🎈`}
-                    </p>
-                    <form
-                      class="stack"
-                      onSubmit=${(e) => {
-                        if (useCelebrationCard) {
-                          e.preventDefault();
-                          return;
-                        }
-                        saveCard(e);
-                      }}
-                    >
+                  <div class="sal-modal" onClick=${(e) => e.stopPropagation()}>
+                    <h3>${editingId ? "Pasākums" : "Jauns pasākums"}</h3>
+                    <p class="sal-modal-note">Vienkāršs ieraksts kalendārā — nosaukums un piezīme.</p>
+                    <form class="stack" onSubmit=${(e) => void saveCard(e)}>
+                      <div class="field">
+                        <label>Nosaukums</label>
+                        <input
+                          class="input"
+                          required
+                          value=${cardTitle}
+                          placeholder="Piem., Komandas pikniks"
+                          onInput=${(e) => setCardTitle(e.target.value)}
+                        />
+                      </div>
                       <div class="row" style=${{ gap: ".65rem" }}>
                         <div class="field" style=${{ flex: 1 }}>
-                          <label>Pasākuma veids</label>
-                          <select
-                            class="select"
-                            value=${cardEventType}
-                            onChange=${(e) => {
-                              const v = e.target.value;
-                              const prevEt = cardEventType;
-                              setCardEventType(v);
-                              if (v === "varda_diena") setCelKinds([]);
-                              if (v === "varda_diena" || (prevEt === "dzimsanas" && v !== "dzimsanas")) {
-                                setCelQuizResponsibleKey("");
-                                setCelProgramHtml("");
-                                setCelProgramAttachments([]);
-                                setCelProgAttLabel("");
-                                setCelProgAttUrl("");
-                              }
-                            }}
-                          >
-                            <option value="saliedesana">Saliedēšanas pasākums</option>
-                            <option value="dzimsanas">Dzimšanas diena</option>
-                            <option value="varda_diena">Vārda diena</option>
-                            <option value="cits">Cits pasākums</option>
-                          </select>
+                          <label>Datums</label>
+                          <input class="input" type="date" required value=${cardDate} onInput=${(e) => setCardDate(e.target.value)} />
+                        </div>
+                        <div class="field" style=${{ flex: 1 }}>
+                          <label>Laiks (neobligāti)</label>
+                          <input class="input" type="time" value=${cardTime} onInput=${(e) => setCardTime(e.target.value)} />
                         </div>
                       </div>
-
-                      ${useFullEventCard
-                        ? html`
-                            <div class="field">
-                              <label>Pasākuma nosaukums</label>
-                              <input class="input" required value=${cardTitle} placeholder="Komandas boulings, Vasaras pikniks..." onInput=${(e) => setCardTitle(e.target.value)} />
-                            </div>
-                            <div class="row" style=${{ gap: ".65rem" }}>
-                              <div class="field" style=${{ flex: 1 }}>
-                                <label>Datums</label>
-                                <input class="input" type="date" required value=${cardDate} onInput=${(e) => setCardDate(e.target.value)} />
-                              </div>
-                              <div class="field" style=${{ flex: 1 }}>
-                                <label>No cikiem</label>
-                                <input class="input" type="time" required value=${cardTime} onInput=${(e) => setCardTime(e.target.value)} />
-                              </div>
-                              <div class="field" style=${{ flex: 1 }}>
-                                <label>Līdz cikiem</label>
-                                <input class="input" type="time" value=${cardTimeTo} onInput=${(e) => setCardTimeTo(e.target.value)} />
-                              </div>
-                            </div>
-                            <div class="field">
-                              <label style=${{ display: "flex", alignItems: "center", gap: ".5rem" }}>
-                                <input type="checkbox" checked=${cardOnline} onChange=${(e) => setCardOnline(Boolean(e.target.checked))} />
-                                Online pasākums
-                              </label>
-                            </div>
-                            ${cardOnline
-                              ? null
-                              : html`
-                                  <div class="field">
-                                    <label>Norises vieta</label>
-                                    <input class="input" value=${cardLocation} onInput=${(e) => setCardLocation(e.target.value)} />
-                                  </div>
-                                `}
-                            <div class="field">
-                              <label>Kategorija + ikona</label>
-                              <select class="select" value=${cardCategoryIcon} onChange=${(e) => onCategoryIconChange(e.target.value)}>
-                                <option value="sports|🎯">Sports 🎯</option>
-                                <option value="izklaide|🎉">Izklaide 🎉</option>
-                                <option value="apmacibas|📚">Apmācības 📚</option>
-                                <option value="komanda|🤝">Komandas pasākums 🤝</option>
-                                <option value="cits|⭐">Cits ⭐</option>
-                              </select>
-                            </div>
-                            <div class="field"><label>Pasākuma apraksts</label><input class="input" value=${detailEventWhat} onInput=${(e) => setDetailEventWhat(e.target.value)} /></div>
-                            <div class="field"><label>Kāpēc piedalīties (motivējoši)</label><textarea class="textarea" value=${detailWhyJoin} onInput=${(e) => setDetailWhyJoin(e.target.value)} /></div>
-                            <div class="row" style=${{ gap: ".65rem" }}>
-                              <div class="field" style=${{ flex: 1 }}><label>Dress code</label><input class="input" value=${detailDressCode} onInput=${(e) => setDetailDressCode(e.target.value)} /></div>
-                              <div class="field" style=${{ flex: 1 }}><label>Ko ņemt līdzi</label><input class="input" value=${detailBringAlong} onInput=${(e) => setDetailBringAlong(e.target.value)} /></div>
-                            </div>
-                            <div class="field"><label>Dalības maksa</label><input class="input" value=${detailFee} onInput=${(e) => setDetailFee(e.target.value)} /></div>
-
-                            <div class="field">
-                              <label>Brīvs apraksts (Word funkcijas)</label>
-                              <div class="sal-rich-editor">
-                                <div class="sal-toolbar">
-                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("bold")}>B</button>
-                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("italic")}><em>I</em></button>
-                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("underline")}><u>U</u></button>
-                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("strikeThrough")} title="Izsvītrots"><s>S</s></button>
-                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("insertUnorderedList")}>• Saraksts</button>
-                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyEditorCommand("insertOrderedList")}>1. Saraksts</button>
-                                  <select class="select" onChange=${(e) => applyEditorCommand("fontSize", e.target.value)}>
-                                    <option value="">Šrifta lielums</option>
-                                    <option value="2">Mazs</option>
-                                    <option value="3">Normāls</option>
-                                    <option value="5">Liels</option>
-                                    <option value="6">Ļoti liels</option>
-                                  </select>
-                                  <input type="color" title="Teksta krāsa" onInput=${(e) => applyEditorCommand("foreColor", e.target.value)} />
-                                  <input type="color" title="Fona krāsa" onInput=${(e) => applyEditorCommand("hiliteColor", e.target.value)} />
-                                </div>
-                                <div
-                                  class="sal-editor"
-                                  contenteditable="true"
-                                  ref=${editorRef}
-                                  onInput=${(e) => setDescHtml(String(e.currentTarget.innerHTML || ""))}
-                                  dangerouslySetInnerHTML=${{ __html: descHtml }}
-                                ></div>
-                              </div>
-                            </div>
-
-                            <div class="field sal-attachments">
-                              <label>Pielikumi</label>
-                              <p style=${{ margin: "0 0 .35rem", fontSize: ".74rem", color: "#64748b" }}>
-                                Saglabāti DB kolonnā <strong>Pielikumi</strong> (kopā ar pasākumu). Faili un attēli — Supabase bucket
-                                <code style=${{ fontSize: ".72rem" }}>pdd-saliedesana-files</code> (vajadzīga pieslēgšanās). Ja augšupielāde neizdodas, attēlam var izmantot datu URL.
-                              </p>
-                              <div class="field" style=${{ marginBottom: ".35rem" }}>
-                                <label style=${{ fontSize: ".78rem" }}>Nosaukums (pēc izvēles, saitei / failam)</label>
-                                <input class="input" placeholder="Piem., Pieteikuma veidlapa" value=${attLabel} onInput=${(e) => setAttLabel(e.target.value)} />
-                              </div>
-                              <div class="row" style=${{ gap: ".45rem", flexWrap: "wrap" }}>
-                                <input class="input" style=${{ flex: 1 }} placeholder="https://..." value=${attUrl} onInput=${(e) => setAttUrl(e.target.value)} />
-                                <button type="button" class="btn btn-ghost btn-small" onClick=${() => addAttachment("link")}>Pievienot saiti</button>
-                                <button type="button" class="btn btn-ghost btn-small" onClick=${() => document.getElementById("sal-file-upload-input")?.click()}>Pievienot failu</button>
-                                <input
-                                  id="sal-file-upload-input"
-                                  type="file"
-                                  accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
-                                  style=${{ display: "none" }}
-                                  onChange=${(e) => {
-                                    const file = e.target?.files?.[0];
-                                    addBinaryFileAttachment(file);
-                                    e.target.value = "";
-                                  }}
-                                />
-                              </div>
-                              <p style=${{ margin: "0.25rem 0 0", fontSize: "0.78rem", color: "var(--muted)" }}>Bildes / screenshot nav atļauti.</p>
-                              ${attachments.map((a, idx) => html`
-                                <div key=${`att-${idx}`} class="sal-att-item">
-                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => openUrlSafe(a.url)}>
-                                    ${a.kind === "image" ? "🖼️ " : a.kind === "file" ? "📎 " : "🔗 "}${a.label}
-                                  </button>
-                                  <button type="button" class="btn btn-danger btn-small" onClick=${() => removeAttachmentAt(idx)}>Dzēst</button>
-                                </div>
-                              `)}
-                            </div>
-
-                            <div class="sal-poll-box">
-                              <div class="sal-poll-panels">
-                                <div class="sal-poll-panel sal-poll-panel--list">
-                                  <div class="sal-poll-panel-head">
-                                    <strong>Aptauju saraksts</strong>
-                                    <span class="sal-poll-panel-hint"
-                                      >${pollHistoryForList.length
-                                        ? `${pollHistoryForList.length} saglabātas${sentPollsForList.length ? ` · ${sentPollsForList.length} nosūtītas` : ""}`
-                                        : "vēl nav"}</span
-                                    >
-                                  </div>
-                                  ${pollHistoryForList.length
-                                    ? html`<ul class="sal-poll-sent-list">
-                                        ${pollHistoryForList.map(
-                                          (poll) => html`<li class="sal-poll-sent-item" key=${poll.id}>
-                                            <div class="sal-poll-sent-title">${pollDisplayTitle(poll)}</div>
-                                            <div class="sal-poll-sent-meta">
-                                              ${[formatPollDateLv(poll.pollDate), pollRecipientsLabel(poll)].filter(Boolean).join(" · ")}
-                                            </div>
-                                          </li>`
-                                        )}
-                                      </ul>`
-                                    : html`<p class="sal-poll-empty">Šeit parādīsies saglabātās aptaujas pēc «Saglabāt pasākumu» vai nosūtīšanas.</p>`}
-                                </div>
-
-                                ${mayDesignPolls
-                                  ? html`<div class="sal-poll-panel sal-poll-panel--design">
-                                      <button type="button" class="sal-poll-panel-toggle" onClick=${() => setPollCreationOpen((v) => !v)}>
-                                        ${pollCreationOpen ? "▼ Slēpt aptauju veidošanu" : "▶ Aptauju veidošana"}
-                                      </button>
-                                      ${pollCreationOpen
-                                        ? html`<div class="sal-poll-panel-body sal-poll-studio">
-                                            <p class="sal-poll-studio-help">
-                                              <strong>Organizatoram:</strong> sagatavo jautājumu un variantus, tad spied
-                                              <strong>Nosūtīt</strong>. Aizpildīšana un apkopojums ir atsevišķos blokos zemāk.
-                                            </p>
-                                            ${polls.map((poll, idx) => {
-                                              const lines = choiceLinesForEditor(poll);
-                                              const teamUsers = loadTeamUsersForPollTargeting();
-                                              const targets = Array.isArray(poll.targets) ? poll.targets : [];
-                                              const audience = String(poll.audience || "all") === "selected" ? "selected" : "all";
-                                              return html`<div key=${poll.id} class="sal-reason-block">
-                                                <p class="sal-poll-sec-title">Aptauja ${idx + 1}</p>
-                                                <div class="row" style=${{ gap: ".3rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => cancelPollById(poll.id)}>Atiestatīt aptauju</button>
-                                                  <button type="button" class="btn btn-danger btn-small" onClick=${() => deletePollById(poll.id)}>Dzēst aptauju</button>
-                                                </div>
-                                                <div class="sal-reason-block" style=${{ borderStyle: "dashed", background: "#fffbeb" }}>
-                                                  <strong style=${{ color: "#9a3412", fontSize: ".78rem" }}>Nosūtīt aptauju</strong>
-                                                  <p style=${{ margin: "0", fontSize: ".74rem", color: "#7c2d12" }}>
-                                                    Uzaicinājums navigācijā parādīsies tikai tiem, kam nosūtīts (vai visiem).
-                                                    ${poll.sentAt
-                                                      ? html`<br /><span style=${{ color: "#64748b" }}>Nosūtīts: ${String(poll.sentAt).slice(0, 16).replace("T", " ")} (${poll.sentBy || "—"})</span>`
-                                                      : null}
-                                                  </p>
-                                                  <div class="row" style=${{ gap: ".35rem", flexWrap: "wrap" }}>
-                                                    <button
-                                                      type="button"
-                                                      class="btn btn-ghost btn-small"
-                                                      onClick=${() => setPollAudienceAll(poll.id)}
-                                                      style=${audience === "all" ? { background: "#dcfce7", borderColor: "#4ade80", color: "#14532d" } : {}}
-                                                    >
-                                                      Visi lietotāji
-                                                    </button>
-                                                    <details class="sal-reason-block" style=${{ margin: 0, padding: ".35rem .45rem", background: "#fff" }} open=${false}>
-                                                      <summary style=${{ cursor: "pointer", fontSize: ".74rem", color: "#0f172a" }}>
-                                                        Izvēlēti lietotāji (${targets.length || 0})
-                                                      </summary>
-                                                      <div style=${{ display: "grid", gap: ".25rem", marginTop: ".35rem", maxHeight: "180px", overflow: "auto" }}>
-                                                        ${teamUsers.length
-                                                          ? teamUsers.map((u) => {
-                                                              const key = pollTargetKeyForUser(u);
-                                                              const checked = key && targets.includes(key);
-                                                              return html`<label key=${`${poll.id}-t-${key}`} style=${{ display: "flex", alignItems: "center", gap: ".45rem", fontSize: ".78rem" }}>
-                                                                <input type="checkbox" checked=${checked} onChange=${() => togglePollTarget(poll.id, key)} />
-                                                                <span>${u.name}</span>
-                                                              </label>`;
-                                                            })
-                                                          : html`<span style=${{ fontSize: ".74rem", color: "#64748b" }}>Nav ielādēts komandas saraksts.</span>`}
-                                                      </div>
-                                                      <div class="row" style=${{ gap: ".35rem", flexWrap: "wrap", marginTop: ".35rem" }}>
-                                                        <button
-                                                          type="button"
-                                                          class="btn btn-ghost btn-small"
-                                                          onClick=${() =>
-                                                            setPolls((prev) =>
-                                                              (Array.isArray(prev) ? prev : []).map((p) =>
-                                                                String(p?.id) === String(poll.id) ? { ...p, audience: "selected" } : p
-                                                              )
-                                                            )}
-                                                          style=${audience === "selected" ? { background: "#dbeafe", borderColor: "#60a5fa" } : {}}
-                                                        >
-                                                          Lietot tikai izvēlētos
-                                                        </button>
-                                                        <button
-                                                          type="button"
-                                                          class="btn btn-ghost btn-small"
-                                                          onClick=${() =>
-                                                            setPolls((prev) =>
-                                                              (Array.isArray(prev) ? prev : []).map((p) =>
-                                                                String(p?.id) === String(poll.id) ? { ...p, targets: [] } : p
-                                                              )
-                                                            )}
-                                                        >
-                                                          Notīrīt izvēli
-                                                        </button>
-                                                      </div>
-                                                    </details>
-                                                    <button type="button" class="btn btn-primary btn-small" onClick=${() => sendPollInvite(poll.id, audience)}>
-                                                      Nosūtīt
-                                                    </button>
-                                                  </div>
-                                                </div>
-                                                <div class="field">
-                                                  <label>Aptaujas veids</label>
-                                                  <select
-                                                    class="select"
-                                                    value=${poll.type || "choice"}
-                                                    onChange=${(e) => {
-                                                      const value = String(e.target.value || "choice") === "text" ? "text" : "choice";
-                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, type: value } : p)));
-                                                    }}
-                                                  >
-                                                    <option value="choice">Vairāki varianti (viena izvēle)</option>
-                                                    <option value="text">Brīva teksta atbilde</option>
-                                                  </select>
-                                                </div>
-                                                <div class="field">
-                                                  <label>Aptaujas nosaukums</label>
-                                                  <input
-                                                    class="input"
-                                                    placeholder="Piem., Kopīgais brauciens — transporta izvēle"
-                                                    value=${poll.pollTitle || ""}
-                                                    onInput=${(e) => {
-                                                      const value = e.target.value;
-                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, pollTitle: value } : p)));
-                                                    }}
-                                                  />
-                                                </div>
-                                                <div class="field">
-                                                  <label>Aptaujas datums</label>
-                                                  <input
-                                                    class="input"
-                                                    type="date"
-                                                    value=${poll.pollDate || ""}
-                                                    onInput=${(e) => {
-                                                      const value = e.target.value;
-                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, pollDate: value } : p)));
-                                                    }}
-                                                  />
-                                                </div>
-                                                <div class="field">
-                                                  <label>Jautājums</label>
-                                                  <input
-                                                    class="input"
-                                                    placeholder="Piem., Kurš datums der vislabāk?"
-                                                    value=${poll.question}
-                                                    onInput=${(e) => {
-                                                      const value = e.target.value;
-                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, question: value } : p)));
-                                                    }}
-                                                  />
-                                                </div>
-                                                ${poll.type === "text"
-                                                  ? html`<p style=${{ margin: 0, fontSize: ".74rem", color: "#64748b" }}>
-                                                      Brīvas atbildes aizpilda dalībnieki blokā «Aizpildi aptauju».
-                                                    </p>`
-                                                  : html`<div class="field">
-                                                      <label>Atbilžu varianti</label>
-                                                      <p style=${{ margin: "0 0 .25rem", fontSize: ".72rem", color: "#64748b" }}>
-                                                        Katram variantam savs lauks. Vismaz divi derīgi varianti, lai varētu balsot.
-                                                      </p>
-                                                      <div class="sal-poll-opt-list">
-                                                        ${lines.map((line, oi) => html`
-                                                          <div key=${`${poll.id}-opt-${oi}`} class="sal-poll-opt-row">
-                                                            <span class="sal-poll-opt-idx">${oi + 1}.</span>
-                                                            <input
-                                                              class="input"
-                                                              placeholder=${`Variants ${oi + 1}`}
-                                                              value=${line}
-                                                              onInput=${(e) => setChoiceLineAt(poll.id, oi, e.target.value)}
-                                                            />
-                                                            <button
-                                                              type="button"
-                                                              class="btn btn-ghost btn-small"
-                                                              disabled=${lines.length <= 2}
-                                                              title="Vismaz divas rindas"
-                                                              onClick=${() => removeChoiceLineForPoll(poll.id, oi)}
-                                                            >
-                                                              ✕
-                                                            </button>
-                                                          </div>`)}
-                                                      </div>
-                                                      <button type="button" class="btn btn-ghost btn-small" onClick=${() => addChoiceLineForPoll(poll.id)}>
-                                                        + Pievienot variantu
-                                                      </button>
-                                                      <div class="sal-poll-quick">
-                                                        <span class="sal-poll-quick-h">Ātri:</span>
-                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "yes_no_maybe")}>Jā / Nē / Varbūt</button>
-                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "agree")}>Piekritu / Nepiekritu / Neitrali</button>
-                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "scale5")}>1–5</button>
-                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "weekdaysLv")}>P–Pk</button>
-                                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyPollQuickTemplate(poll.id, "day_parts")}>Rīts / Diena / Vakars</button>
-                                                      </div>
-                                                    </div>`}
-                                              </div>`;
-                                            })}
-                                            <button
-                                              type="button"
-                                              class="btn btn-ghost btn-small"
-                                              onClick=${() =>
-                                                setPolls((prev) => [
-                                                  ...(Array.isArray(prev) ? prev : []),
-                                                  {
-                                                    id: `poll-${Date.now()}`,
-                                                    type: "choice",
-                                                    pollTitle: "",
-                                                    pollDate: String(cardDate || "").trim(),
-                                                    question: "",
-                                                    optionsText: "",
-                                                    votes: {},
-                                                    textAnswer: "",
-                                                    audience: "all",
-                                                    targets: [],
-                                                    sentAt: "",
-                                                    sentBy: "",
-                                                  },
-                                                ])}
-                                            >
-                                              + Pievienot jaunu aptauju
-                                            </button>
-                                          </div>`
-                                        : null}
-                                    </div>`
-                                  : null}
-
-                                <div
-                                  class="sal-poll-panel sal-poll-panel--fill"
-                                  id="sal-poll-fill-anchor"
-                                  style=${{ display: pendingPollCountForCard > 0 ? "grid" : "none" }}
-                                >
-                                  <div class="sal-poll-panel-head sal-poll-panel-head--urgent">
-                                    <strong>Aizpildi aptauju</strong>
-                                    <span class="sal-poll-panel-hint">${pendingPollCountForCard ? `${pendingPollCountForCard} gaida` : "—"}</span>
-                                  </div>
-                                  ${pendingPollCountForCard > 0
-                                    ? (Array.isArray(polls) ? polls : [])
-                                        .filter((poll) => pollPendingForViewer(poll))
-                                        .map((poll, idx) => {
-                                          const options = pollOptionsArray(poll.optionsText).filter((x) => String(x).trim());
-                                          const myVote = String((poll.votes && typeof poll.votes === "object" ? poll.votes[actorKey()] : "") || "");
-                                          return html`<div key=${poll.id} class="sal-reason-block sal-poll-fill-card">
-                                            <p class="sal-poll-sec-title">${pollDisplayTitle(poll)}</p>
-                                            ${formatPollDateLv(poll.pollDate)
-                                              ? html`<div style=${{ fontSize: ".72rem", color: "#64748b", marginBottom: ".25rem" }}>${formatPollDateLv(poll.pollDate)}</div>`
-                                              : null}
-                                            <div style=${{ fontSize: ".82rem", color: "#0f172a", marginBottom: ".35rem" }}>${poll.question || ""}</div>
-                                            ${poll.type === "text"
-                                              ? html`<div class="field">
-                                                  <label>Tava atbilde</label>
-                                                  <textarea
-                                                    class="textarea"
-                                                    rows="3"
-                                                    placeholder="Īss teksts…"
-                                                    value=${poll.textAnswer || myVote || ""}
-                                                    onInput=${(e) => {
-                                                      const value = e.target.value;
-                                                      setPolls((prev) => prev.map((p) => (p.id === poll.id ? { ...p, textAnswer: value } : p)));
-                                                    }}
-                                                  ></textarea>
-                                                </div>
-                                                <button type="button" class="btn btn-primary btn-small" onClick=${() => savePollTextAnswer(poll.id, poll.textAnswer || myVote || "")}>
-                                                  Saglabāt atbildi
-                                                </button>`
-                                              : html`<div class="field">
-                                                  <label>Izvēlies variantu</label>
-                                                  <div class="sal-vote-row">
-                                                    ${options.map((opt) => {
-                                                      const selected = myVote === opt;
-                                                      return html`
-                                                        <label
-                                                          key=${`${poll.id}-fill-${opt}`}
-                                                          class="sal-vote-option"
-                                                          style=${selected ? { background: "#dbeafe", borderColor: "#60a5fa" } : {}}
-                                                        >
-                                                          <span style=${{ display: "inline-flex", alignItems: "center", gap: ".45rem" }}>
-                                                            <input
-                                                              type="radio"
-                                                              name=${`sal-poll-fill-${poll.id}`}
-                                                              checked=${selected}
-                                                              onChange=${() => castPollVote(poll.id, opt)}
-                                                            />
-                                                            ${opt}
-                                                          </span>
-                                                        </label>`;
-                                                    })}
-                                                  </div>
-                                                  <button type="button" class="btn btn-ghost btn-small" onClick=${() => clearMyPollAnswer(poll.id)}>
-                                                    Notīrīt manu balsi
-                                                  </button>
-                                                </div>`}
-                                          </div>`;
-                                        })
-                                    : null}
-                                </div>
-
-                                <div class="sal-poll-panel sal-poll-panel--results">
-                                  <button type="button" class="sal-poll-panel-toggle" onClick=${() => setPollResultsOpen((v) => !v)}>
-                                    ${pollResultsOpen ? "▼ Slēpt aptauju rezultātus" : "▶ Aptauju rezultāti"}
-                                  </button>
-                                  ${pollResultsOpen
-                                    ? html`<div class="sal-poll-panel-body">
-                                        ${sentPollsForList.length
-                                          ? sentPollsForList.map((poll, idx) => {
-                                              const options = pollOptionsArray(poll.optionsText).filter((x) => String(x).trim());
-                                              const votes = poll.votes && typeof poll.votes === "object" ? poll.votes : {};
-                                              const entries = Object.entries(votes).filter(
-                                                ([uid, val]) => String(val || "").trim() && String(val) !== "__DECLINED__"
-                                              );
-                                              const totalVotes = entries.length;
-                                              return html`<div key=${poll.id} class="sal-reason-block sal-poll-results-card">
-                                                <p class="sal-poll-sec-title">${pollDisplayTitle(poll)}</p>
-                                                <div style=${{ fontSize: ".72rem", color: "#64748b", marginBottom: ".35rem" }}>
-                                                  ${[formatPollDateLv(poll.pollDate), pollRecipientsLabel(poll)].filter(Boolean).join(" · ")}
-                                                </div>
-                                                ${poll.type === "text"
-                                                  ? html`<div class="sal-poll-text-answers">
-                                                      ${entries.length
-                                                        ? entries.map(
-                                                            ([uid, val]) => html`<div key=${uid} class="sal-poll-text-answer">
-                                                              <div class="sal-poll-text-author">${prettyPersonName(uid)}</div>
-                                                              <div>${String(val || "—")}</div>
-                                                            </div>`
-                                                          )
-                                                        : html`<p class="sal-poll-empty">Vēl nav atbilžu.</p>`}
-                                                    </div>`
-                                                  : html`<div class="sal-poll-results-bars">
-                                                      ${(() => {
-                                                        const counts = {};
-                                                        options.forEach((opt) => {
-                                                          counts[opt] = 0;
-                                                        });
-                                                        entries.forEach(([, val]) => {
-                                                          if (counts[val] === undefined) counts[val] = 0;
-                                                          counts[val] += 1;
-                                                        });
-                                                        return options.map((opt) => {
-                                                          const c = counts[opt] || 0;
-                                                          const pct = totalVotes ? Math.round((c / totalVotes) * 100) : 0;
-                                                          return html`<div key=${`res-${poll.id}-${opt}`} class="sal-poll-bar-item">
-                                                            <div class="sal-poll-bar-label">
-                                                              <span>${opt}</span>
-                                                              <span>${c} (${pct}%)</span>
-                                                            </div>
-                                                            <div class="sal-poll-bar-track">
-                                                              <div class="sal-poll-bar-fill" style=${{ width: `${pct}%` }}></div>
-                                                            </div>
-                                                          </div>`;
-                                                        });
-                                                      })()}
-                                                    </div>`}
-                                              </div>`;
-                                            })
-                                          : html`<p class="sal-poll-empty">Nav nosūtītu aptauju, ko rādīt.</p>`}
-                                      </div>`
-                                    : null}
-                                </div>
-                              </div>
-                            </div>
-
-                            <div class="sal-poll-box">
-                              <strong style=${{ color: "#9a3412", fontSize: ".85rem" }}>Piedalīšanās atzīme</strong>
-                              <div class="sal-rsvp-row">
-                                <button type="button" class="btn btn-ghost btn-small" style=${myRsvp?.status === "yes" ? { background: "#dcfce7", borderColor: "#4ade80", color: "#14532d" } : {}} onClick=${() => setRsvp("yes")}>Piedalīšos</button>
-                                <button type="button" class="btn btn-ghost btn-small" style=${myRsvp?.status === "maybe" ? { background: "#fef3c7", borderColor: "#fbbf24", color: "#78350f" } : {}} onClick=${() => setRsvp("maybe")}>Varbūt</button>
-                                <button type="button" class="btn btn-ghost btn-small" style=${myRsvp?.status === "no" ? { background: "#fee2e2", borderColor: "#f87171", color: "#7f1d1d" } : {}} onClick=${() => setRsvp("no")}>Nepiedalīšos</button>
-                              </div>
-                              ${myRsvp?.status === "no"
-                                ? html`
-                                    <div class="sal-reason-block">
-                                      <strong style=${{ color: "#9a3412", fontSize: ".78rem" }}>Nepiedalīšos - iemesls</strong>
-                                      <div class="row" style=${{ gap: ".35rem", flexWrap: "wrap" }}>
-                                        <button type="button" class="btn btn-ghost btn-small" style=${noReasonType === "neder_laiks" ? { background: "#fee2e2", borderColor: "#f87171", color: "#7f1d1d" } : {}} onClick=${async () => { setNoReasonType("neder_laiks"); await updateNoReason("neder_laiks", noReasonText); }}>Neder laiks</button>
-                                        <button type="button" class="btn btn-ghost btn-small" style=${noReasonType === "neder_pasakums" ? { background: "#fee2e2", borderColor: "#f87171", color: "#7f1d1d" } : {}} onClick=${async () => { setNoReasonType("neder_pasakums"); await updateNoReason("neder_pasakums", noReasonText); }}>Neder pasākums</button>
-                                        <button type="button" class="btn btn-ghost btn-small" style=${noReasonType === "cits" ? { background: "#fee2e2", borderColor: "#f87171", color: "#7f1d1d" } : {}} onClick=${async () => { setNoReasonType("cits"); await updateNoReason("cits", noReasonText); }}>Cits</button>
-                                      </div>
-                                      <textarea
-                                        class="textarea"
-                                        placeholder="Brīvs teksts iemeslam"
-                                        value=${noReasonText}
-                                        onInput=${async (e) => {
-                                          const txt = e.target.value;
-                                          setNoReasonText(txt);
-                                          await updateNoReason(noReasonType, txt);
-                                        }}
-                                      ></textarea>
-                                    </div>
-                                  `
-                                : null}
-                              <div class="sal-rsvp-bars">
-                                <div class="sal-rsvp-bar-item">
-                                  <div class="sal-rsvp-bar-label"><span>Piedalīsies</span><span>${rsvp.yes}</span></div>
-                                  <div class="sal-rsvp-bar-track"><div class="sal-rsvp-bar-fill" style=${{ width: `${(rsvp.yes / rsvpTotal) * 100}%`, background: "#16a34a" }}></div></div>
-                                </div>
-                                <div class="sal-rsvp-bar-item">
-                                  <div class="sal-rsvp-bar-label"><span>Varbūt</span><span>${rsvp.maybe}</span></div>
-                                  <div class="sal-rsvp-bar-track"><div class="sal-rsvp-bar-fill" style=${{ width: `${(rsvp.maybe / rsvpTotal) * 100}%`, background: "#f59e0b" }}></div></div>
-                                </div>
-                                <div class="sal-rsvp-bar-item">
-                                  <div class="sal-rsvp-bar-label"><span>Nepiedalīsies</span><span>${rsvp.no}</span></div>
-                                  <div class="sal-rsvp-bar-track"><div class="sal-rsvp-bar-fill" style=${{ width: `${(rsvp.no / rsvpTotal) * 100}%`, background: "#ef4444" }}></div></div>
-                                </div>
-                              </div>
-                              <div class="sal-rsvp-summary-grid">
-                                <div class="sal-rsvp-summary-col">
-                                  <div class="sal-rsvp-summary-head"><span>✅ Piedalīsies</span><strong>${rsvpPeople.yes.length}</strong></div>
-                                  ${rsvpPeople.yes.length
-                                    ? html`<ul class="sal-rsvp-summary-list">${rsvpPeople.yes.map((name) => html`<li key=${`yes-${name}`}>${name}</li>`)}</ul>`
-                                    : html`<div class="sal-rsvp-summary-empty">Pagaidām nav atzīmju.</div>`}
-                                </div>
-                                <div class="sal-rsvp-summary-col">
-                                  <div class="sal-rsvp-summary-head"><span>🟡 Varbūt</span><strong>${rsvpPeople.maybe.length}</strong></div>
-                                  ${rsvpPeople.maybe.length
-                                    ? html`<ul class="sal-rsvp-summary-list">${rsvpPeople.maybe.map((name) => html`<li key=${`maybe-${name}`}>${name}</li>`)}</ul>`
-                                    : html`<div class="sal-rsvp-summary-empty">Pagaidām nav atzīmju.</div>`}
-                                </div>
-                                <div class="sal-rsvp-summary-col">
-                                  <div class="sal-rsvp-summary-head"><span>❌ Nepiedalīsies</span><strong>${rsvpPeople.no.length}</strong></div>
-                                  ${rsvpPeople.no.length
-                                    ? html`<ul class="sal-rsvp-summary-list">${rsvpPeople.no.map((name) => html`<li key=${`no-${name}`}>${name}</li>`)}</ul>`
-                                    : html`<div class="sal-rsvp-summary-empty">Pagaidām nav atzīmju.</div>`}
-                                </div>
-                              </div>
-                            </div>
-                          `
-                        : useCelebrationCard
-                          ? html`
-                            <datalist id="sal-cel-jubilar-list">
-                              ${celSuggestUsers.map((u) => html`<option value=${u.name} />`)}
-                            </datalist>
-                            <div class="sal-cel-wrap" role="region" aria-label=${celHeaderTitle}>
-                              <div class="sal-cel-confetti" aria-hidden="true">✨ · 🎈 · ✨</div>
-                              <div class="sal-cel-head">
-                                <div class="sal-cel-head-icon" aria-hidden="true">🎂</div>
-                                <div class="sal-cel-head-text">
-                                  <h4 class="sal-cel-title">${celHeaderTitle}</h4>
-                                  <p class="sal-cel-sub">Paziņo komandai, saplāno formātu un savāc dalības atzīmes.</p>
-                                </div>
-                              </div>
-                              <div class="sal-cel-sec">
-                                <p class="sal-cel-sec-title">Pamata informācija</p>
-                                <div class="sal-cel-field">
-                                  <label for="sal-cel-jubilar">Jubilārs / gaviļnieks</label>
-                                  <input
-                                    id="sal-cel-jubilar"
-                                    class="input"
-                                    list="sal-cel-jubilar-list"
-                                    autocomplete="off"
-                                    value=${celJubilar}
-                                    placeholder="Izvēlies no saraksta vai ieraksti vārdu…"
-                                    onInput=${(e) => setCelJubilar(e.target.value)}
-                                  />
-                                </div>
-                                <div class="sal-cel-field">
-                                  <label for="sal-cel-date">Datums</label>
-                                  <input id="sal-cel-date" class="input" type="date" value=${cardDate} onInput=${(e) => setCardDate(e.target.value)} />
-                                </div>
-                                <div class="sal-cel-row2">
-                                  <div class="sal-cel-field">
-                                    <label for="sal-cel-time-from">No</label>
-                                    <input
-                                      id="sal-cel-time-from"
-                                      class="input"
-                                      type="time"
-                                      value=${cardTime}
-                                      onInput=${(e) => setCardTime(e.target.value)}
-                                    />
-                                  </div>
-                                  <div class="sal-cel-field">
-                                    <label for="sal-cel-time-to">Līdz</label>
-                                    <input
-                                      id="sal-cel-time-to"
-                                      class="input"
-                                      type="time"
-                                      value=${cardTimeTo}
-                                      onInput=${(e) => setCardTimeTo(e.target.value)}
-                                    />
-                                  </div>
-                                </div>
-                                <div class="sal-cel-field">
-                                  <label for="sal-cel-loc">Vieta</label>
-                                  <input
-                                    id="sal-cel-loc"
-                                    class="input"
-                                    value=${cardLocation}
-                                    placeholder="Birojs, sapulču telpa…"
-                                    disabled=${Boolean(cardOnline)}
-                                    onInput=${(e) => setCardLocation(e.target.value)}
-                                  />
-                                </div>
-                                <label class="sal-cel-check">
-                                  <input type="checkbox" checked=${cardOnline} onChange=${(e) => setCardOnline(Boolean(e.target.checked))} />
-                                  Online apsveikums
-                                </label>
-                                ${showCelMeetLink
-                                  ? html`<div class="sal-cel-field sal-cel-meet">
-                                      <label for="sal-cel-meet">Tikšanās saite (Zoom, Meet, Teams…)</label>
-                                      <input
-                                        id="sal-cel-meet"
-                                        class="input"
-                                        type="url"
-                                        inputmode="url"
-                                        placeholder="https://…"
-                                        value=${celMeetingLink}
-                                        onInput=${(e) => setCelMeetingLink(e.target.value)}
-                                      />
-                                    </div>`
-                                  : null}
-                                <div class="sal-cel-field">
-                                  <label for="sal-cel-title-opt">Rādāmais nosaukums kalendārā (pēc izvēles)</label>
-                                  <input
-                                    id="sal-cel-title-opt"
-                                    class="input"
-                                    value=${cardTitle}
-                                    placeholder=${`${celJubilar || "Vārds"} — ${celHeaderTitle}`}
-                                    onInput=${(e) => setCardTitle(e.target.value)}
-                                  />
-                                </div>
-                              </div>
-                              ${cardEventType === "dzimsanas"
-                                ? html`<div class="sal-cel-sec">
-                                    <p class="sal-cel-sec-title">Pasākuma tips</p>
-                                    <p class="sal-cel-sub" style=${{ marginTop: "-.15rem" }}>Izvēlies vienu vai vairākus variantus.</p>
-                                    <div class="sal-cel-chips" role="group" aria-label="Pasākuma formāts">
-                                      ${CELEBRATION_KIND_CHIPS_BD.map(
-                                        (c) =>
-                                          html`<button
-                                            type="button"
-                                            key=${`cel-kind-${c.id}`}
-                                            class=${`sal-cel-chip ${celKinds.includes(c.id) ? "is-on" : ""}`}
-                                            aria-pressed=${celKinds.includes(c.id) ? "true" : "false"}
-                                            onClick=${() => toggleCelKind(c.id)}
-                                          >
-                                            <span aria-hidden="true">${c.icon}</span> ${c.label}
-                                          </button>`
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div class="sal-cel-sec">
-                                    <p class="sal-cel-sec-title">Viktorīna, aptauja vai cits apsveikums</p>
-                                    <p class="sal-cel-sub" style=${{ marginTop: "-.15rem" }}>
-                                      Norādi atbildīgo personu un pievieno materiālus — formāts kā aktualitātēs (teksts, attēli, saites, faili).
-                                    </p>
-                                    <div class="sal-cel-field">
-                                      <label for="sal-cel-quiz-user">Atbildīgais par sagatavošanu</label>
-                                      <select
-                                        id="sal-cel-quiz-user"
-                                        class="select"
-                                        value=${celQuizResponsibleKey}
-                                        onChange=${(e) => setCelQuizResponsibleKey(e.target.value)}
-                                      >
-                                        <option value="">— Izvēlies komandas biedru —</option>
-                                        ${celSuggestUsers.map(
-                                          (u) =>
-                                            html`<option value=${pollTargetKeyForUser(u)} key=${`cel-u-${pollTargetKeyForUser(u)}`}>
-                                              ${u.name}
-                                            </option>`
-                                        )}
-                                      </select>
-                                    </div>
-                                    <div class="sal-cel-field">
-                                      <label for="sal-cel-prog-html">Materiāli un apraksts</label>
-                                      <div class="sal-rich-editor">
-                                        <div class="sal-toolbar">
-                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("bold")}>B</button>
-                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("italic")}><em>I</em></button>
-                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("underline")}><u>U</u></button>
-                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("strikeThrough")} title="Izsvītrots"><s>S</s></button>
-                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("insertUnorderedList")}>• Saraksts</button>
-                                          <button type="button" class="btn btn-ghost btn-small" onClick=${() => applyCelProgramEditorCommand("insertOrderedList")}>1. Saraksts</button>
-                                          <select class="select" onChange=${(e) => applyCelProgramEditorCommand("fontSize", e.target.value)}>
-                                            <option value="">Šrifta lielums</option>
-                                            <option value="2">Mazs</option>
-                                            <option value="3">Normāls</option>
-                                            <option value="5">Liels</option>
-                                            <option value="6">Ļoti liels</option>
-                                          </select>
-                                          <input type="color" title="Teksta krāsa" onInput=${(e) => applyCelProgramEditorCommand("foreColor", e.target.value)} />
-                                          <input type="color" title="Fona krāsa" onInput=${(e) => applyCelProgramEditorCommand("hiliteColor", e.target.value)} />
-                                        </div>
-                                        <div
-                                          class="sal-editor"
-                                          contenteditable="true"
-                                          ref=${celProgramEditorRef}
-                                          onInput=${(e) => setCelProgramHtml(String(e.currentTarget.innerHTML || ""))}
-                                          dangerouslySetInnerHTML=${{ __html: celProgramHtml }}
-                                        ></div>
-                                      </div>
-                                    </div>
-                                    <div class="field sal-attachments" style=${{ margin: 0 }}>
-                                      <label>Pielikumi</label>
-                                      <p style=${{ margin: "0 0 .35rem", fontSize: ".74rem", color: "#64748b" }}>
-                                        Saglabāti kopā ar pasākumu (kolonna <strong>Pielikumi</strong> un metadatos). Attēli/faili —
-                                        <code style=${{ fontSize: ".72rem" }}>pdd-saliedesana-files</code>.
-                                      </p>
-                                      <div class="field" style=${{ marginBottom: ".35rem" }}>
-                                        <label style=${{ fontSize: ".78rem" }}>Nosaukums (pēc izvēles)</label>
-                                        <input
-                                          class="input"
-                                          placeholder="Piem., Viktorīnas jautājumi"
-                                          value=${celProgAttLabel}
-                                          onInput=${(e) => setCelProgAttLabel(e.target.value)}
-                                        />
-                                      </div>
-                                      <div class="row" style=${{ gap: ".45rem", flexWrap: "wrap" }}>
-                                        <input
-                                          class="input"
-                                          style=${{ flex: 1 }}
-                                          placeholder="https://..."
-                                          value=${celProgAttUrl}
-                                          onInput=${(e) => setCelProgAttUrl(e.target.value)}
-                                        />
-                                        <button type="button" class="btn btn-ghost btn-small" onClick=${() => addCelProgramAttachment("link")}>
-                                          Pievienot saiti
-                                        </button>
-                                        <button
-                                          type="button"
-                                          class="btn btn-ghost btn-small"
-                                          onClick=${() => document.getElementById("sal-cel-prog-file-upload")?.click()}
-                                        >
-                                          Pievienot failu
-                                        </button>
-                                        <input
-                                          id="sal-cel-prog-file-upload"
-                                          type="file"
-                                          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
-                                          style=${{ display: "none" }}
-                                          onChange=${(e) => {
-                                            const file = e.target?.files?.[0];
-                                            addCelProgramFileFromFile(file);
-                                            e.target.value = "";
-                                          }}
-                                        />
-                                      </div>
-                                      <p style=${{ margin: "0.25rem 0 0", fontSize: "0.78rem", color: "var(--muted)" }}>Bildes nav atļautas.</p>
-                                      ${celProgramAttachments.map(
-                                        (a, idx) => html`
-                                          <div key=${`cel-att-${idx}`} class="sal-att-item">
-                                            <button type="button" class="btn btn-ghost btn-small" onClick=${() => openUrlSafe(a.url)}>
-                                              ${a.kind === "image" ? "🖼️ " : a.kind === "file" ? "📎 " : "🔗 "}${a.label}
-                                            </button>
-                                            <button type="button" class="btn btn-danger btn-small" onClick=${() => void removeCelProgramAttachmentAt(idx)}>
-                                              Dzēst
-                                            </button>
-                                          </div>
-                                        `
-                                      )}
-                                    </div>
-                                  </div>`
-                                : null}
-                              ${showCelGiftSec
-                                ? html`<div class="sal-cel-sec sal-cel-gift">
-                                    <p class="sal-cel-sec-title">Dāvanas</p>
-                                    <div class="sal-cel-field">
-                                      <label for="sal-cel-gift">Dāvanu / pasniegšanas piezīmes</label>
-                                      <textarea
-                                        id="sal-cel-gift"
-                                        class="textarea"
-                                        rows="2"
-                                        placeholder="Piem., kopējā dāvana, naudas aploksne…"
-                                        value=${celGiftNote}
-                                        onInput=${(e) => setCelGiftNote(e.target.value)}
-                                      />
-                                    </div>
-                                  </div>`
-                                : null}
-                              <div class="sal-cel-sec">
-                                <p class="sal-cel-sec-title">Dalība un apsveikumi</p>
-                                <div class="sal-cel-field">
-                                  <label for="sal-cel-msg">Ziņa komandai / apsveikums</label>
-                                  <textarea
-                                    id="sal-cel-msg"
-                                    class="textarea"
-                                    rows="2"
-                                    placeholder="Īss sveiciens vai instrukcijas…"
-                                    value=${celMessage}
-                                    onInput=${(e) => setCelMessage(e.target.value)}
-                                  />
-                                </div>
-                                <div class="sal-cel-rsvp">
-                                  <span class="sal-rsvp-stat">Tava atzīme</span>
-                                  <button
-                                    type="button"
-                                    class="btn btn-ghost btn-small"
-                                    style=${myRsvp?.status === "yes" ? { background: "#dcfce7", borderColor: "#4ade80", color: "#14532d" } : {}}
-                                    onClick=${() => setRsvp("yes")}
-                                  >
-                                    Piedalīšos
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="btn btn-ghost btn-small"
-                                    style=${myRsvp?.status === "maybe" ? { background: "#fef3c7", borderColor: "#fbbf24", color: "#78350f" } : {}}
-                                    onClick=${() => setRsvp("maybe")}
-                                  >
-                                    Varbūt
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="btn btn-ghost btn-small"
-                                    style=${myRsvp?.status === "no" ? { background: "#fee2e2", borderColor: "#f87171", color: "#7f1d1d" } : {}}
-                                    onClick=${() => setRsvp("no")}
-                                  >
-                                    Nepiedalīšos
-                                  </button>
-                                </div>
-                                <p class="sal-cel-sub">
-                                  Kopā atbildes: ${rsvp.yes + rsvp.maybe + rsvp.no} (jā ${rsvp.yes} · varbūt ${rsvp.maybe} · nē ${rsvp.no})
-                                </p>
-                              </div>
-                              <div class="sal-cel-foot">
-                                <button type="button" class="btn btn-primary btn-small" onClick=${() => void saveCelebrationCard(true)}>Publicēt</button>
-                                <button type="button" class="btn btn-ghost btn-small" onClick=${() => void saveCelebrationCard(false)}>Saglabāt melnrakstā</button>
-                              </div>
-                            </div>
-                          `
-                          : html`<div class="sal-banner">Šim veidam kartiņas saturs būs cits (tiks pievienots nākamajos soļos).</div>`}
-
+                      <div class="field">
+                        <label>Piezīme</label>
+                        <textarea
+                          class="textarea"
+                          rows="4"
+                          value=${cardNote}
+                          placeholder="Īsa piezīme par pasākumu…"
+                          onInput=${(e) => setCardNote(e.target.value)}
+                        />
+                      </div>
                       <div class="row" style=${{ gap: ".45rem", flexWrap: "wrap" }}>
-                        ${useFullEventCard
-                          ? html`<button type="submit" class="btn btn-primary btn-small">Saglabāt</button>`
-                          : null}
+                        <button type="submit" class="btn btn-primary btn-small">Saglabāt</button>
                         ${editingId
-                          ? html`<button type="button" class="btn btn-danger btn-small" onClick=${deleteEvent}>Dzēst pasākumu</button>`
+                          ? html`<button type="button" class="btn btn-danger btn-small" onClick=${deleteEvent}>Dzēst</button>`
                           : null}
                         <button type="button" class="btn btn-ghost btn-small" onClick=${() => setCardOpen(false)}>Atcelt</button>
                       </div>
@@ -5976,6 +5073,7 @@
                 </div>
               `
             : null}
+
         </section>
       `;
     };
@@ -6019,6 +5117,63 @@
     }
   }
 
+  async function upsertSimpleEvent({ id, date, title, note, time } = {}) {
+    const cutoff = historyRetentionCutoffYmd();
+    const dateKey = String(date || "").slice(0, 10);
+    if (!dateKey || dateKey < cutoff) {
+      throw new Error("Vecāki par 2 mēnešiem kalendāra dati nav pieejami.");
+    }
+    const titleClean = String(title || "").trim();
+    if (!titleClean) throw new Error("Norādi pasākuma nosaukumu.");
+    const local = loadLocalEvents();
+    const nid = String(id || "").trim() || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const prev = local.find((x) => String(x.id) === nid) || null;
+    const row = normalizeEvent({
+      id: nid,
+      remote_id: prev?.remoteId || null,
+      event_date: dateKey,
+      event_time: String(time || prev?.time || "08:00").trim() || "08:00",
+      category: "team",
+      event_type: "saliedesana",
+      title: titleClean,
+      location: "",
+      is_online: false,
+      short_category: "cits",
+      icon: "📌",
+      color: "#fb923c",
+      description_html: "",
+      note: String(note ?? prev?.note ?? "").trim(),
+      details: {
+        ...(prev?.details && typeof prev.details === "object" ? prev.details : {}),
+        showInAktualitates: false,
+      },
+      poll: { items: [] },
+      participants: prev?.participants && typeof prev.participants === "object" ? prev.participants : {},
+      attachments: [],
+      updated_at: new Date().toISOString(),
+    });
+    const next = prev ? local.map((x) => (String(x.id) === nid ? row : x)) : [row, ...local];
+    saveLocalEvents(next);
+    const sb = globalThis.__PDD_SUPABASE__ ?? null;
+    if (sb) {
+      try {
+        const rid = await upsertRemoteEvent(sb, row);
+        if (rid) {
+          row.remoteId = rid;
+          saveLocalEvents(next.map((x) => (String(x.id) === nid ? { ...x, remoteId: rid } : x)));
+        }
+      } catch (e) {
+        console.warn("[saliedesana.upsertSimple]", e?.message || e);
+      }
+    }
+    try {
+      globalThis.__PDD_SALIEDESANA_REPAINT_MAIN_CALENDAR__?.();
+    } catch {
+      /* ignore */
+    }
+    return row;
+  }
+
   window.SALIEDESANA = {
     createSaliedesanaPanel,
     toYmd,
@@ -6029,6 +5184,7 @@
     syncNewsCacheForNav: syncSaliedesanaNewsCacheForNav,
     purgeOldSaliedesanaEventsOnce,
     historyRetentionCutoffYmd,
+    upsertSimpleEvent,
   };
 
   window.PDD_IDEJU_CHAT = {
