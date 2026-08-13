@@ -1,6 +1,7 @@
 # Avārijas DB tīrīšana — palaidās arī pēc push.
 # Secrets: SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_REF (Management SQL)
 #          + VITE_SUPABASE_URL / SUPABASE_URL + KEY (REST fallback)
+# Trigger: 2026-08-13 manual re-run
 name: Emergency DB purge (chat + old audit)
 
 on:
