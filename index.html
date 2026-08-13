@@ -551,7 +551,7 @@
       <script defer src="./Atvalinajumi.js?v=202605192"></script>
       <!-- Procesu / Pakalpojumu vadība — lazy-load, kad atver attiecīgo sadaļu -->
       <script defer src="./DbResursuBridinajums.js?v=202608132"></script>
-      <script defer src="./SupabaseUsagePazinojums.js?v=202608132"></script>
+      <script defer src="./SupabaseUsagePazinojums.js?v=202608133"></script>
 
       <script type="module">
         import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@19.0.0";
@@ -9043,6 +9043,12 @@
             }
             if (!name && em) name = em.split("@")[0].trim();
             globalThis.__PDD_ACTOR_DISPLAY_NAME__ = name;
+            try {
+              window.dispatchEvent(new CustomEvent("pdd:actor-ready"));
+              void globalThis.PDD_USAGE_WEEKLY_NOTICE?.fetchNoticeOnce?.();
+            } catch {
+              /* ignore */
+            }
           }, [session?.user, profile, profileLoading]);
           const showPromDeputyTab = false;
           const [showLocalAuditNav, setShowLocalAuditNav] = useState(() => canViewLocalAuditNav());
