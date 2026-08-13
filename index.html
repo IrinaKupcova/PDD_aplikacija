@@ -8859,9 +8859,9 @@
           const showPromDeputyTab = false;
           const [showLocalAuditNav, setShowLocalAuditNav] = useState(() => canViewLocalAuditNav());
           useEffect(() => {
-            enableLocalAuditViewerOnce(normalizeUserRole(role));
+            enableLocalAuditViewerOnce(normalizeUserRole(profile?.role ?? "user"));
             setShowLocalAuditNav(canViewLocalAuditNav());
-          }, [role, session?.user?.email]);
+          }, [profile?.role, session?.user?.email]);
           useEffect(() => {
             if (!showLocalAuditNav && promSub === "changes") setPromSub("calendar");
           }, [showLocalAuditNav, promSub]);
