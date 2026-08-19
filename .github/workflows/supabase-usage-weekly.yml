@@ -7,6 +7,14 @@ on:
   schedule:
     # Pirmdienas 07:00 UTC (~10:00 Rīga vasarā)
     - cron: "0 7 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - "SupabaseUsagePazinojums.js"
+      - "scripts/supabase-usage-weekly.js"
+      - "supabase/migrations/20260813160000_pdd_usage_weekly_notice.sql"
+      - ".github/workflows/supabase-usage-weekly.yml"
+      - ".github/workflows/supabase-migrations.yml"
   workflow_dispatch:
 
 permissions:

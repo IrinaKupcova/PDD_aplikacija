@@ -147,14 +147,10 @@ async function publishPageNotice(report, ref, capturedAt) {
 
   const noticeId = `${ref}-${capturedAt}`;
   const dashboardUrl = "https://supabase.com/dashboard/org/_/usage";
-  const summary = [
-    `REST ${fmtNum(report.totals.rest)} (${fmtPct(report.changes.rest)}),`,
-    `Realtime ${fmtNum(report.totals.realtime)} (${fmtPct(report.changes.realtime)}),`,
-    `kopā ${fmtNum(report.totals.combined)} (${fmtPct(report.changes.combined)}).`,
-    report.alert
-      ? `Trends >${SPIKE_PCT}% — pārbaudi Egress Dashboard.`
-      : "Trends normālā diapazonā.",
-  ].join(" ");
+  const when = new Date(capturedAt).toLocaleString("lv-LV", { dateStyle: "short", timeStyle: "short" });
+  const summary = report.alert
+    ? `Pārbaude (${when}): pastāv paaugstināts DB pārslogojuma risks.`
+    : `Pārbaude (${when}): paaugstināts pārslogojuma risks nav konstatēts.`;
 
   const payload = {
     id: 1,
