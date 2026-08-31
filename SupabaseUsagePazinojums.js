@@ -1,6 +1,7 @@
 /**
  * DB slodzes pārbaudes paziņojums — tikai Irinai Kupcovai, vienkāršā latviešu valodā.
  * Datus raksta GitHub Action «Supabase usage weekly».
+ * Atverot lapu, papildus parāda šī brīža atbildi un vai kaut kas jādara.
  */
 (function initPddUsageWeeklyNotice() {
   "use strict";
@@ -10,6 +11,8 @@
   const TABLE = "pdd_usage_weekly_notice";
   const OWNER_EMAIL = "irina.kupcova@vid.gov.lv";
   const FIRST_DELAY_MS = 2000;
+  const LIVE_PROBE_MS = 5000;
+  const LIVE_SLOW_MS = 4000;
 
   let closedThisPageLoad = false;
 
@@ -31,43 +34,82 @@
   }
 
   function adjustBodyPadding() {
-    const hasDb = document.getElementById("pdd-db-resource-banner");
-    const hasUsage = document.getElementById(BANNER_ID);
-    if (hasDb || hasUsage) {
-      document.body.style.paddingTop = hasDb && hasUsage ? "6.1rem" : "3.2rem";
-    } else {
-      document.body.style.paddingTop = "";
-    }
+    const db = document.getElementById("pdd-db-resource-banner");
+    const usage = document.getElementById(BANNER_ID);
+    const dbH = db ? db.offsetHeight : 0;
+    const usageH = usage ? usage.offsetHeight : 0;
+    if (usage) usage.style.top = dbH ? `${dbH}px` : "0";
+    const total = dbH + usageH;
+    document.body.style.paddingTop = total ? `${total}px` : "";
   }
 
   function formatWhen(iso) {
     if (!iso) return "";
     try {
-      return new Date(iso).toLocaleString("lv-LV", { dateStyle: "short", timeStyle: "short" });
+      return new Date(iso).toLocaleString("lv-LV", {
+        weekday: "long",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
     } catch {
       return "";
     }
   }
 
-  function buildHumanCopy(row) {
+  function liveLabel(live) {
+    if (!live || live.pending) return "pārbaudu šī brīža atbildi…";
+    if (live.ok === true && typeof live.ms === "number") {
+      return `datu bāze atbild normāli (${live.ms} ms)`;
+    }
+    if (live.ok === false && live.slow && typeof live.ms === "number") {
+      return `datu bāze atbild, bet lēni (${live.ms} ms) — iespējama slodze`;
+    }
+    if (live.ok === false) {
+      return "datu bāze neatbild vai ir pārslogota";
+    }
+    return "šī brīža statusu neizdevās noskaidrot";
+  }
+
+  function buildHumanCopy(row, live) {
     const when = formatWhen(row?.captured_at || row?.updated_at);
     const hasRealCheck = Boolean(String(row?.notice_id || "").trim());
-    const alert = Boolean(row?.alert);
+    const weeklyAlert = Boolean(row?.alert);
+    const liveBad = Boolean(live && live.ok === false && !live.pending);
+    const loadError = Boolean(row?._loadError);
+    const nowLine = `Šobrīd, atverot lapu: ${liveLabel(live)}.`;
+    const actionNone =
+      "Tev šobrīd nekas nav jādara — pārbaudi un veco datu tīrīšanu dara sistēma, ne tu.";
 
     if (!hasRealCheck) {
       return {
-        title: "Datu bāzes slodze",
-        body:
-          "Automātiskā nedēļas pārbaude vēl nav pabeigta. Kad tā būs gatava, šeit redzēsi īsu rezultātu — tev nekas nav jādara.",
-        alert: false,
-        pending: true,
+        title: liveBad ? "Datu bāzes slodze — uzmanību" : "Datu bāzes slodze",
+        lines: [
+          nowLine,
+          loadError
+            ? "Pēdējā automātiskā pārbaude: rezultātu šobrīd nevaru ielādēt."
+            : "Pēdējā automātiskā pārbaude: vēl nav veikta. Sistēma to dara pati katru pirmdienu ap plkst. 10:00.",
+          actionNone,
+        ],
+        alert: liveBad,
+        pending: !liveBad,
       };
     }
 
-    if (alert) {
+    if (weeklyAlert || liveBad) {
+      const checkLine = weeklyAlert
+        ? `Pēdējā automātiskā pārbaude: ${when || "laiks nav zināms"}. Konstatēts paaugstināts pārslogojuma risks — lietotne var kļūt lēna.`
+        : `Pēdējā automātiskā pārbaude: ${when || "laiks nav zināms"}. Toreiz paaugstināts risks netika konstatēts, bet šobrīd atbilde nav normāla.`;
       return {
         title: "Datu bāzes slodze — uzmanību",
-        body: `Tika veikta pārbaude${when ? ` (${when})` : ""}. Šobrīd pastāv paaugstināts datu bāzes pārslogojuma risks — lietotne var kļūt lēna. Sistēma jau pati brīdina un tīra vecos datus; tev šobrīd nekas nav jādara.`,
+        lines: [
+          nowLine,
+          checkLine,
+          "Ko sistēma dara: pati brīdina un tīra vecos datus.",
+          actionNone,
+        ],
         alert: true,
         pending: false,
       };
@@ -75,20 +117,24 @@
 
     return {
       title: "Datu bāzes slodze — viss kārtībā",
-      body: `Tika veikta pārbaude${when ? ` (${when})` : ""}. Paaugstināts pārslogojuma risks šobrīd nav konstatēts — datu bāzei vajadzētu strādāt normāli.`,
+      lines: [
+        nowLine,
+        `Pēdējā automātiskā pārbaude: ${when || "laiks nav zināms"}. Paaugstināts pārslogojuma risks netika konstatēts.`,
+        actionNone,
+      ],
       alert: false,
       pending: false,
     };
   }
 
-  function showBanner(row) {
+  function showBanner(row, live) {
     if (closedThisPageLoad) {
       hideBanner();
       return;
     }
 
-    const copy = buildHumanCopy(row);
-    if (!copy.body) {
+    const copy = buildHumanCopy(row, live);
+    if (!copy.lines?.length) {
       hideBanner();
       return;
     }
@@ -101,17 +147,18 @@
       document.body.prepend(el);
     }
 
+    const dbEl = document.getElementById("pdd-db-resource-banner");
     el.style.cssText = [
       "position:fixed",
       "left:0",
       "right:0",
-      document.getElementById("pdd-db-resource-banner") ? "top:3.2rem" : "top:0",
+      dbEl ? `top:${dbEl.offsetHeight}px` : "top:0",
       "z-index:10001",
       "padding:0.65rem 1rem",
       copy.alert ? "background:#92400e" : copy.pending ? "background:#334155" : "background:#1e3a5f",
       copy.alert ? "color:#fff7ed" : "color:#e0f2fe",
       copy.alert ? "border-bottom:1px solid #c2410c" : "border-bottom:1px solid #475569",
-      "font:600 0.88rem/1.45 system-ui,Segoe UI,sans-serif",
+      "font:600 0.86rem/1.4 system-ui,Segoe UI,sans-serif",
       "display:flex",
       "gap:0.75rem",
       "align-items:flex-start",
@@ -122,15 +169,17 @@
 
     el.innerHTML = "";
     const textWrap = document.createElement("div");
-    textWrap.style.cssText = "flex:1;min-width:14rem;";
+    textWrap.style.cssText = "flex:1;min-width:16rem;";
     const title = document.createElement("div");
     title.textContent = copy.title;
-    title.style.fontWeight = "700";
-    const body = document.createElement("div");
-    body.style.cssText = "font-weight:500;margin-top:0.2rem;";
-    body.textContent = copy.body;
-
-    textWrap.append(title, body);
+    title.style.cssText = "font-weight:700;font-size:0.92rem;";
+    textWrap.append(title);
+    for (const line of copy.lines) {
+      const rowEl = document.createElement("div");
+      rowEl.style.cssText = "font-weight:500;margin-top:0.18rem;";
+      rowEl.textContent = line;
+      textWrap.append(rowEl);
+    }
 
     const actions = document.createElement("span");
     actions.style.cssText = "display:inline-flex;gap:0.4rem;flex-shrink:0;";
@@ -148,6 +197,32 @@
     adjustBodyPadding();
   }
 
+  async function probeLiveStatus() {
+    const sb = globalThis.__PDD_SUPABASE__;
+    if (!sb || typeof sb.from !== "function") {
+      return { ok: null, pending: false };
+    }
+    const started = Date.now();
+    try {
+      const result = await Promise.race([
+        sb.from("users").select("id").limit(1),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), LIVE_PROBE_MS)
+        ),
+      ]);
+      const ms = Date.now() - started;
+      if (result?.error) {
+        return { ok: false, ms, pending: false };
+      }
+      if (ms >= LIVE_SLOW_MS) {
+        return { ok: false, slow: true, ms, pending: false };
+      }
+      return { ok: true, ms, pending: false };
+    } catch {
+      return { ok: false, ms: Date.now() - started, pending: false };
+    }
+  }
+
   async function fetchNoticeOnce() {
     if (!isOwnerViewer()) {
       hideBanner();
@@ -160,28 +235,26 @@
     const sb = globalThis.__PDD_SUPABASE__;
     if (!sb || typeof sb.from !== "function") return { skip: true };
 
+    let row = { notice_id: "", captured_at: null, alert: false };
     try {
       const { data, error } = await sb.from(TABLE).select("*").eq("id", 1).maybeSingle();
       if (error) {
         if (/does not exist|schema cache|42P01/i.test(String(error.message || error))) {
-          showBanner({
-            notice_id: "",
-            captured_at: new Date().toISOString(),
-            alert: false,
-          });
-          return { ok: true, pendingMigration: true };
+          row = { notice_id: "", captured_at: null, alert: false };
+        } else {
+          row = { notice_id: "", captured_at: null, alert: false, _loadError: true };
         }
-        return { skip: true };
+      } else if (data) {
+        row = data;
       }
-      if (!data) {
-        showBanner({ notice_id: "", captured_at: null, alert: false });
-        return { ok: true, empty: true };
-      }
-      showBanner(data);
-      return { ok: true };
     } catch {
-      return { skip: true };
+      row = { notice_id: "", captured_at: null, alert: false, _loadError: true };
     }
+
+    showBanner(row, { pending: true });
+    const live = await probeLiveStatus();
+    if (!closedThisPageLoad) showBanner(row, live);
+    return { ok: true };
   }
 
   function start() {
