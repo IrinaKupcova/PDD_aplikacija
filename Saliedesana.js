@@ -2237,10 +2237,14 @@
           pickByAliases(src, ["description_html", "descriptionHtml", "apraksts_html", "apraksts"], "")
         )
       ).trim(),
-      note: String(
-        src.__sal_note_clean ??
-          pickByAliases(src, ["note", "Papildu_piezimes", "papildu_piezimes", "piezimes", "piezime"], "")
-      ).trim(),
+      note: (() => {
+        if (src.__sal_note_clean != null) return String(src.__sal_note_clean).trim();
+        const raw = pickByAliases(src, ["note", "Papildu_piezimes", "papildu_piezimes", "piezimes", "piezime"], "");
+        if (raw == null) return "";
+        const s = String(raw);
+        if (s.includes(SAL_META_MARKER)) return splitPapilduPiezimes(s).note;
+        return s.trim();
+      })(),
       details: {
         eventWhat: String(
           details.eventWhat ??
@@ -2462,7 +2466,15 @@
       const q = idNum
         ? await supabase.from(REMOTE_TABLE).update(current).eq("id", idNum).select("id").limit(1)
         : await supabase.from(REMOTE_TABLE).insert(current).select("id").limit(1);
-      if (!q.error) return Number(q.data?.[0]?.id || idNum || 0) || null;
+      if (!q.error) {
+        // UPDATE ar 0 rindām (RLS / nepareizs id) NEDRĪKST skaitīties par veiksmi —
+        // citādi piezīme lokāli pazūd, bet DB paliek vecā un pēc pārlādes atgriežas.
+        if (idNum && (!Array.isArray(q.data) || q.data.length === 0)) {
+          lastErr = new Error("Pasākuma ieraksts DB netika atjaunināts (0 rindas).");
+          break;
+        }
+        return Number(q.data?.[0]?.id || idNum || 0) || null;
+      }
       lastErr = q.error;
       if (!idNum && /null value in column "?id"?/i.test(String(q.error?.message || ""))) {
         current = { ...current, id: generateRemoteIntId() };
@@ -2646,10 +2658,54 @@
       .sort((a, b) => `${String(b.date)} ${String(b.time || "")}`.localeCompare(`${String(a.date)} ${String(a.time || "")}`));
   }
 
+  /** Tieši ieraksta/notīra piezīmi DB — neatkarīgi no pārējā payload (lai dzēšana paliek visiem). */
+  async function patchRemoteNoteFields(supabase, remoteId, eventRow) {
+    const idNum = Number(remoteId || 0) || null;
+    if (!supabase || !idNum) return false;
+    const noteClean = String(eventRow?.note ?? "").trim();
+    const details = eventRow?.details && typeof eventRow.details === "object" ? eventRow.details : {};
+    const metaPack = {
+      local_id: eventRow?.id || null,
+      remote_id: idNum,
+      event_type: eventRow?.eventType || "saliedesana",
+      category: eventRow?.category || "team",
+      icon: eventRow?.icon || "",
+      color: eventRow?.color || "",
+      short_category: eventRow?.shortCategory || "",
+      poll: eventRow?.poll || emptyPoll(),
+      participants: eventRow?.participants || {},
+      details: {
+        ...(details || {}),
+        showInAktualitates: Boolean(details.showInAktualitates),
+        aktualitatesId: Number(details.aktualitatesId || 0) || null,
+      },
+    };
+    const piez = buildPapilduPiezimes(noteClean, metaPack);
+    const brivs = noteClean ? String(eventRow?.descriptionHtml ?? "").trim() || null : null;
+    const variants = [
+      { Papildu_piezimes: piez, Brivs_apraksts: brivs },
+      { papildu_piezimes: piez, brivs_apraksts: brivs },
+      { Papildu_piezimes: piez },
+      { papildu_piezimes: piez },
+    ];
+    for (const p of variants) {
+      const q = await supabase.from(REMOTE_TABLE).update(p).eq("id", idNum).select("id").limit(1);
+      if (!q.error && Array.isArray(q.data) && q.data.length > 0) return true;
+    }
+    return false;
+  }
+
   async function upsertRemoteEvent(supabase, eventRow) {
     const row = eventToRemoteRow(eventRow);
     const idNum = Number(eventRow?.remoteId || 0) || null;
-    return saveRemoteAdaptive(supabase, idNum, row);
+    const rid = await saveRemoteAdaptive(supabase, idNum, row);
+    if (rid) {
+      const noteOk = await patchRemoteNoteFields(supabase, rid, eventRow);
+      if (!noteOk) {
+        throw new Error("Piezīme netika saglabāta datubāzē. Mēģini vēlreiz.");
+      }
+    }
+    return rid;
   }
 
   async function deleteRemoteEvent(supabase, remoteId) {
@@ -3070,10 +3126,18 @@
       }
       if (loc) {
         usedLocalIds.add(String(loc.id));
-        const pick =
-          eventUpdatedMs(loc) >= eventUpdatedMs(rem)
-            ? { ...loc, remoteId: rid || loc.remoteId || null }
-            : { ...rem, id: loc.id, remoteId: rid || loc.remoteId || null };
+        const locMs = eventUpdatedMs(loc);
+        const remMs = eventUpdatedMs(rem);
+        let pick;
+        if (locMs >= remMs) {
+          pick = { ...loc, remoteId: rid || loc.remoteId || null };
+        } else {
+          pick = { ...rem, id: loc.id, remoteId: rid || loc.remoteId || null };
+          // Ja lokāli piezīme nesen notīrīta, neļauj vecajai remote piezīmei to atgriezt.
+          if (locMs > 0 && String(loc.note || "").trim() === "" && String(rem.note || "").trim() !== "") {
+            pick = { ...pick, note: "", __sal_note_clean: "" };
+          }
+        }
         out.push(normalizeEvent(pick));
       } else {
         out.push(normalizeEvent(rem));
