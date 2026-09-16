@@ -2345,6 +2345,7 @@
         .filter((a) => a.label && a.url),
       createdAt: String(src.created_at ?? src.createdAt ?? ""),
       updatedAt: String(src.updated_at ?? src.updatedAt ?? ""),
+      _pendingLocalSync: Boolean(src._pendingLocalSync),
     };
   }
 
@@ -2610,13 +2611,19 @@
         const pap = String(pickByAliases(r, ["Papildu_piezimes", "papildu_piezimes"], "") || "");
         const split = splitPapilduPiezimes(pap);
         const embedded = split.meta && typeof split.meta === "object" ? split.meta : {};
-        const papNote = split.meta ? split.note : pap.trim();
+        const papNote = pap.includes(SAL_META_MARKER) ? split.note : split.note || pap.trim();
+        const brivsRaw = String(
+          pickByAliases(r, ["Brivs_apraksts", "brivs_apraksts", "description_html", "apraksts"], "") || ""
+        ).trim();
+        const brivsNote = brivsRaw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        const noteFinal = papNote || (pap.includes(SAL_META_MARKER) ? "" : brivsNote);
         const localIdStr = String(embedded.local_id || legacyMeta.local_id || `remote-${String(r?.id ?? "")}`).trim();
         return normalizeEvent({
           ...legacyMeta,
           ...embedded,
           ...r,
-          __sal_note_clean: papNote,
+          __sal_note_clean: noteFinal,
+          description_html: pap.includes(SAL_META_MARKER) ? "" : brivsRaw,
           __sal_local_id: localIdStr,
           __sal_remote_id: r?.id != null ? Number(r.id) : null,
           local_id: localIdStr,
@@ -2658,10 +2665,52 @@
       .sort((a, b) => `${String(b.date)} ${String(b.time || "")}`.localeCompare(`${String(a.date)} ${String(a.time || "")}`));
   }
 
+  function saliedesanaRestAuth() {
+    const cfgUrl =
+      String(globalThis.__PDD_SUPABASE__?.supabaseUrl || "").trim() ||
+      "https://fdnkvecgqetmwilwolgt.supabase.co";
+    const cfgKey =
+      String(globalThis.__PDD_SUPABASE__?.supabaseKey || "").trim() ||
+      (typeof localStorage !== "undefined" ? localStorage.getItem("pdd_supabase_anon_key") : "") ||
+      "";
+    const key =
+      cfgKey ||
+      String(document?.querySelector?.("meta[name='pdd-supabase-anon']")?.content || "").trim() ||
+      "sb_publishable_wPrwQc6F0QVlnAubnhamJw_RuxtvtGo";
+    return {
+      base: String(cfgUrl || "https://fdnkvecgqetmwilwolgt.supabase.co").replace(/\/+$/, ""),
+      key,
+    };
+  }
+
+  async function patchSaliedesanaViaRest(remoteId, payload) {
+    const idNum = Number(remoteId || 0) || null;
+    if (!idNum || !payload || typeof payload !== "object") return false;
+    const { base, key } = saliedesanaRestAuth();
+    try {
+      const url = `${base}/rest/v1/${encodeURIComponent(REMOTE_TABLE)}?id=eq.${encodeURIComponent(String(idNum))}`;
+      const resp = await fetch(url, {
+        method: "PATCH",
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) return false;
+      const data = await resp.json();
+      return Array.isArray(data) && data.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   /** Tieši ieraksta/notīra piezīmi DB — neatkarīgi no pārējā payload (lai dzēšana paliek visiem). */
   async function patchRemoteNoteFields(supabase, remoteId, eventRow) {
     const idNum = Number(remoteId || 0) || null;
-    if (!supabase || !idNum) return false;
+    if (!idNum) return false;
     const noteClean = String(eventRow?.note ?? "").trim();
     const details = eventRow?.details && typeof eventRow.details === "object" ? eventRow.details : {};
     const metaPack = {
@@ -2689,8 +2738,11 @@
       { papildu_piezimes: piez },
     ];
     for (const p of variants) {
-      const q = await supabase.from(REMOTE_TABLE).update(p).eq("id", idNum).select("id").limit(1);
-      if (!q.error && Array.isArray(q.data) && q.data.length > 0) return true;
+      if (supabase) {
+        const q = await supabase.from(REMOTE_TABLE).update(p).eq("id", idNum).select("id").limit(1);
+        if (!q.error && Array.isArray(q.data) && q.data.length > 0) return true;
+      }
+      if (await patchSaliedesanaViaRest(idNum, p)) return true;
     }
     return false;
   }
@@ -3095,7 +3147,7 @@
     return Number.isFinite(t) ? t : 0;
   }
 
-  /** Apvieno lokālos un remote pasākumus — jaunākais updatedAt uzvar (nevis akli remote pārraksta). */
+  /** Apvieno lokālos un remote — DB (remote) ir kopīgais avots visiem lietotājiem. */
   function mergeSaliedesanaEvents(localRows, remoteRows) {
     const local = filterEventsByRetention(
       (Array.isArray(localRows) ? localRows : []).map(normalizeEvent).filter((x) => x.id && x.date && x.title)
@@ -3126,18 +3178,10 @@
       }
       if (loc) {
         usedLocalIds.add(String(loc.id));
-        const locMs = eventUpdatedMs(loc);
-        const remMs = eventUpdatedMs(rem);
-        let pick;
-        if (locMs >= remMs) {
-          pick = { ...loc, remoteId: rid || loc.remoteId || null };
-        } else {
-          pick = { ...rem, id: loc.id, remoteId: rid || loc.remoteId || null };
-          // Ja lokāli piezīme nesen notīrīta, neļauj vecajai remote piezīmei to atgriezt.
-          if (locMs > 0 && String(loc.note || "").trim() === "" && String(rem.note || "").trim() !== "") {
-            pick = { ...pick, note: "", __sal_note_clean: "" };
-          }
-        }
+        // Kamēr saglabāšana notiek — lokālais; pēc tam DB (remote) ir avots visiem lietotājiem.
+        const pick = loc._pendingLocalSync
+          ? { ...loc, remoteId: rid || loc.remoteId || null }
+          : { ...rem, id: loc.id, remoteId: rid || loc.remoteId || null };
         out.push(normalizeEvent(pick));
       } else {
         out.push(normalizeEvent(rem));
@@ -3153,9 +3197,9 @@
     );
   }
 
-  async function syncSaliedesanaNewsCacheForNav() {
+  async function syncSaliedesanaNewsCacheForNav(force = false) {
     const now = Date.now();
-    if (now - salSyncNavLastAt < 30000) return;
+    if (!force && now - salSyncNavLastAt < 30000) return;
     salSyncNavLastAt = now;
     const sb = globalThis.__PDD_SUPABASE__ ?? null;
     if (!sb) return;
@@ -3225,16 +3269,20 @@
       participants: prev?.participants && typeof prev.participants === "object" ? prev.participants : {},
       attachments: [],
       updated_at: new Date().toISOString(),
+      _pendingLocalSync: true,
     });
     const next = prev ? local.map((x) => (String(x.id) === nid ? row : x)) : [row, ...local];
     saveLocalEvents(next);
     const sb = globalThis.__PDD_SUPABASE__ ?? null;
     if (sb) {
       const rid = await upsertRemoteEvent(sb, row);
-      if (rid) {
-        row.remoteId = rid;
-        saveLocalEvents(next.map((x) => (String(x.id) === nid ? { ...x, remoteId: rid } : x)));
-      }
+      if (!rid) throw new Error("Pasākums netika saglabāts datubāzē.");
+      await syncSaliedesanaNewsCacheForNav(true);
+    } else {
+      const cleared = next.map((x) =>
+        String(x.id) === nid ? { ...x, _pendingLocalSync: false } : x
+      );
+      saveLocalEvents(cleared);
     }
     try {
       window.dispatchEvent(new CustomEvent("pdd:saliedesana-news-changed"));
