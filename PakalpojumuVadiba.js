@@ -1120,10 +1120,45 @@
       .filter((s) => s.length > 0);
   }
 
+  function normalizeChoiceOption(o) {
+    if (o && typeof o === "object" && !Array.isArray(o)) {
+      return {
+        label: String(o.label ?? o.name ?? o.value ?? "").trim(),
+        color: String(o.color || "").trim(),
+      };
+    }
+    return { label: String(o ?? "").trim(), color: "" };
+  }
+
+  function choiceOptionLabel(o) {
+    return normalizeChoiceOption(o).label;
+  }
+
+  function contrastTextForBg(hex) {
+    const h = String(hex || "").replace("#", "").trim();
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) return "#01171d";
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    const y = (r * 299 + g * 587 + b * 114) / 1000;
+    return y > 160 ? "#01171d" : "#ffffff";
+  }
+
+  function choiceOptionColor(col, value) {
+    const want = String(value ?? "").trim();
+    if (!want) return "";
+    const opts = Array.isArray(col?.options) ? col.options : [];
+    for (const o of opts) {
+      const n = normalizeChoiceOption(o);
+      if (n.label === want && n.color) return n.color;
+    }
+    return "";
+  }
+
   function columnOptionsForCell(col) {
     const opts = col?.options;
     if (!Array.isArray(opts)) return col?.type === "status" ? [...STATUS_PRESETS] : [];
-    return opts.filter((o) => String(o).length > 0);
+    return opts.map(choiceOptionLabel).filter((o) => o.length > 0);
   }
 
   function tableColumnDisplayName(name, type) {
@@ -1148,9 +1183,19 @@
   }
 
   function statusCellClass(col, value) {
+    if (col?.type === "choice") {
+      return choiceOptionColor(col, value) ? "pv-status-cell pv-cell-tone-custom" : "";
+    }
     if (col?.type !== "status" && !/^statuss$/i.test(String(col?.name || "").trim())) return "";
+    if (choiceOptionColor(col, value)) return "pv-status-cell pv-cell-tone-custom";
     const tone = statusToneKey(value);
     return tone === "none" ? "pv-status-cell pv-cell-tone-none" : `pv-status-cell pv-cell-tone-${tone}`;
+  }
+
+  function choiceCellInlineStyle(col, value) {
+    const color = choiceOptionColor(col, value);
+    if (!color) return null;
+    return { background: color, color: contrastTextForBg(color), fontWeight: 600 };
   }
 
   function tableCellClasses(col, value) {
@@ -1201,6 +1246,13 @@
     return { width: `${width}px`, minWidth: `${width}px` };
   }
 
+  function tableCellStyle(col, value) {
+    const base = tableColumnStyle(col) || {};
+    const tone = choiceCellInlineStyle(col, value);
+    if (!tone) return base;
+    return { ...base, ...tone };
+  }
+
   function patchColumnWidth(columns, colId, widthPx) {
     const list = Array.isArray(columns) ? columns : [];
     const w = Math.max(60, Math.min(900, Math.round(Number(widthPx) || 140)));
@@ -1244,8 +1296,8 @@
     };
     if (type === "status" || type === "choice") {
       out.options = Array.isArray(col.options)
-        ? col.options.map((o) => String(o))
-        : defaultOptionsForColumnType(type);
+        ? col.options.map((o) => normalizeChoiceOption(o))
+        : defaultOptionsForColumnType(type).map((o) => normalizeChoiceOption(o));
     }
     if (isNotesColumn(out)) out.width = Math.max(Number(out.width) || 0, 120);
     return out;
@@ -2896,7 +2948,14 @@ ${body}
       .pv-col-type-label { font-size: 0.68rem; color: #0f766e; font-weight: 500; }
       .pv-choice-options { margin-top: 0.35rem; padding-top: 0.35rem; border-top: 1px dashed #c5ebe3; }
       .pv-choice-opt-row { display: flex; gap: 0.25rem; align-items: center; margin-bottom: 0.25rem; }
-      .pv-choice-opt-row input { flex: 1; min-width: 0; }
+      .pv-choice-opt-row input[type="text"] { flex: 1; min-width: 0; }
+      .pv-choice-opt-row input[type="color"] {
+        width: 2rem; height: 1.7rem; padding: 0; border: 1px solid #c5ebe3; border-radius: 6px;
+        background: #fff; cursor: pointer; flex: 0 0 auto;
+      }
+      .pv-choice-opt-row .pv-choice-color-clear {
+        font-size: 0.65rem; padding: 0.15rem 0.35rem; color: #64748b;
+      }
       .pv-cell-multiline { white-space: pre-wrap; font-size: 0.82rem; }
       .pv-multiline-cell { position: relative; min-width: 0; display: flex; align-items: flex-start; gap: 0.2rem; }
       .pv-multiline-cell textarea {
@@ -2949,6 +3008,7 @@ ${body}
       .pv-status-cell.pv-cell-tone-todo { background: #f87171 !important; color: #7f1d1d; }
       .pv-status-cell.pv-cell-tone-cancelled { background: #9ca3af !important; color: #1f2937; }
       .pv-status-cell.pv-cell-tone-default { background: #a7f3d0 !important; color: #065f46; }
+      .pv-status-cell.pv-cell-tone-custom select { background: transparent !important; border: 0 !important; font-weight: 600; color: inherit; box-shadow: none; }
       .pv-status-cell select { background: transparent !important; border: 0 !important; font-weight: 600; color: inherit; box-shadow: none; }
       .pv-status-cell select:focus { outline: 2px solid rgba(1, 23, 29, 0.25); outline-offset: -1px; }
       .pv-table tr:hover td:not(.pv-status-cell) { background: #f0fdf9; }
@@ -3771,35 +3831,56 @@ ${body}
     }
 
     function ChoiceOptionsEditor({ options, onChange, label }) {
-      const list = Array.isArray(options) ? options : [];
+      const list = (Array.isArray(options) ? options : []).map((o) => normalizeChoiceOption(o));
 
-      function patchAt(i, val) {
-        onChange(list.map((o, idx) => (idx === i ? val : o)));
+      function patchAt(i, patch) {
+        onChange(list.map((o, idx) => (idx === i ? { ...o, ...patch } : o)));
       }
 
       function addOption() {
-        onChange([...list, ""]);
+        onChange([...list, { label: "", color: "#60a5fa" }]);
       }
 
       function removeAt(i) {
-        const label = String(list[i] || "").trim();
-        if (!askConfirm(label ? `Dzēst opciju „${label}"?` : "Dzēst šo opciju?")) return;
+        const name = String(list[i]?.label || "").trim();
+        if (!askConfirm(name ? `Dzēst opciju „${name}"?` : "Dzēst šo opciju?")) return;
         onChange(list.filter((_, idx) => idx !== i));
       }
 
       return html`
         <div class="pv-choice-options">
           <div class="meta" style=${{ marginBottom: "0.25rem" }}>${label || "Izvēles opcijas"}</div>
+          <div class="meta" style=${{ marginBottom: "0.35rem", fontSize: "0.72rem" }}>
+            Katrai vērtībai vari izvēlēties krāsu (krāsu rūtiņa).
+          </div>
           ${list.length
             ? list.map(
                 (opt, i) => html`
                   <div class="pv-choice-opt-row" key=${`opt-${i}`}>
                     <input
                       type="text"
-                      value=${opt}
+                      value=${opt.label}
                       placeholder="Opcijas nosaukums…"
-                      onInput=${(e) => patchAt(i, e.target.value)}
+                      onInput=${(e) => patchAt(i, { label: e.target.value })}
                     />
+                    <input
+                      type="color"
+                      title="Krāsa"
+                      value=${/^#[0-9a-fA-F]{6}$/.test(opt.color) ? opt.color : "#e5e7eb"}
+                      onInput=${(e) => patchAt(i, { color: e.target.value })}
+                    />
+                    ${opt.color
+                      ? html`
+                          <button
+                            type="button"
+                            class="pv-btn pv-choice-color-clear"
+                            title="Noņemt krāsu"
+                            onClick=${() => patchAt(i, { color: "" })}
+                          >
+                            Bez
+                          </button>
+                        `
+                      : null}
                     <button type="button" class="pv-col-move-btn" title="Dzēst opciju" onClick=${() => removeAt(i)}>✕</button>
                   </div>
                 `,
@@ -3916,8 +3997,13 @@ ${body}
       const type = col?.type || "text";
       if (type === "status" || type === "choice") {
         const opts = columnOptionsForCell(col);
+        const custom = choiceCellInlineStyle(col, val);
         return html`
-          <select value=${String(val)} onChange=${(e) => onChange(e.target.value)}>
+          <select
+            value=${String(val)}
+            onChange=${(e) => onChange(e.target.value)}
+            style=${custom || undefined}
+          >
             <option value="">—</option>
             ${opts.map((o) => html`<option key=${o} value=${o}>${o}</option>`)}
           </select>
@@ -4137,7 +4223,7 @@ ${body}
                       (row) => html`
                         <tr key=${row.id}>
                           ${cols.map((c) => html`
-                            <td key=${c.id} class=${tableCellClasses(c, row.cells?.[c.id])} style=${tableColumnStyle(c)}>
+                            <td key=${c.id} class=${tableCellClasses(c, row.cells?.[c.id])} style=${tableCellStyle(c, row.cells?.[c.id])}>
                               ${ce(TableCellDisplay, { col: c, value: row.cells?.[c.id], workPlanSections })}
                             </td>
                           `)}
@@ -4345,9 +4431,9 @@ ${body}
                 <p class="pv-table-quick-hint">
                   ${tableQuickEdit
                     ? tableStructureEdit
-                      ? "Tabulas struktūras labošana — kolonnas, formāti un izvēlnes. Velc kolonnas labo malu, lai mainītu platumu."
-                      : "Ātrā labošana — aizpildi šūnas; izmaiņas saglabājas automātiski. Velc kolonnas labo malu, lai mainītu platumu."
-                    : "Tabula — labo šūnas un nospied Saglabāt. Velc kolonnas labo malu, lai mainītu platumu."}
+                      ? "Tabulas struktūra — kolonnas (✕ dzēš kolonnu), rindas (✕ dzēš rindu), formāti un izvēlnes ar krāsām."
+                      : "Ātrā labošana — aizpildi šūnas; ✕ labajā malā dzēš rindu. Kolonnām: «Labot tabulu»."
+                    : "Tabula — labo šūnas un nospied Saglabāt. ✕ dzēš rindu; «Labot tabulu» — kolonnas."}
                 </p>
                 <div class="pv-toolbar">
                   <button type="button" class="pv-btn" onClick=${() => patch({ rows: [...(b.rows || []), { id: uid(), cells: {} }] })}>+ Rinda</button>
@@ -4451,7 +4537,7 @@ ${body}
                                 : (c.name || "—"),
                             }),
                         )}
-                        ${tableStructureEdit ? html`<th style=${{ width: "4.5rem" }}></th>` : null}
+                        ${html`<th style=${{ width: "4.5rem" }} title="Rindas darbības"></th>`}
                       </tr>
                     </thead>
                     <tbody>
@@ -4460,7 +4546,7 @@ ${body}
                           <tr key=${row.id}>
                             ${tableCols.map(
                               (c) => html`
-                                <td class=${tableCellClasses(c, row.cells?.[c.id])} style=${tableColumnStyle(c)}>
+                                <td class=${tableCellClasses(c, row.cells?.[c.id])} style=${tableCellStyle(c, row.cells?.[c.id])}>
                                   ${ce(TableCellEditor, {
                                     col: c,
                                     value: row.cells?.[c.id],
@@ -4477,28 +4563,31 @@ ${body}
                                 </td>
                               `,
                             )}
-                            ${tableStructureEdit
-                              ? html`
+                            ${html`
                                   <td>
                                     <div class="pv-row-actions">
-                                      <button
-                                        type="button"
-                                        class="pv-col-move-btn"
-                                        title="Pārvietot augšup"
-                                        disabled=${rowIdx <= 0}
-                                        onClick=${() => patch({ rows: reorderTableRows(b.rows, row.id, -1) })}
-                                      >
-                                        ↑
-                                      </button>
-                                      <button
-                                        type="button"
-                                        class="pv-col-move-btn"
-                                        title="Pārvietot lejup"
-                                        disabled=${rowIdx >= (b.rows || []).length - 1}
-                                        onClick=${() => patch({ rows: reorderTableRows(b.rows, row.id, 1) })}
-                                      >
-                                        ↓
-                                      </button>
+                                      ${tableStructureEdit
+                                        ? html`
+                                            <button
+                                              type="button"
+                                              class="pv-col-move-btn"
+                                              title="Pārvietot augšup"
+                                              disabled=${rowIdx <= 0}
+                                              onClick=${() => patch({ rows: reorderTableRows(b.rows, row.id, -1) })}
+                                            >
+                                              ↑
+                                            </button>
+                                            <button
+                                              type="button"
+                                              class="pv-col-move-btn"
+                                              title="Pārvietot lejup"
+                                              disabled=${rowIdx >= (b.rows || []).length - 1}
+                                              onClick=${() => patch({ rows: reorderTableRows(b.rows, row.id, 1) })}
+                                            >
+                                              ↓
+                                            </button>
+                                          `
+                                        : null}
                                       <button
                                         type="button"
                                         class="pv-col-move-btn"
@@ -4506,15 +4595,14 @@ ${body}
                                         style=${{ color: "#dc2626" }}
                                         onClick=${() => {
                                           if (!askConfirm("Dzēst šo tabulas rindu?")) return;
-                                          patch({ rows: b.rows.filter((r) => r.id !== row.id) });
+                                          patch({ rows: (b.rows || []).filter((r) => r.id !== row.id) });
                                         }}
                                       >
                                         ✕
                                       </button>
                                     </div>
                                   </td>
-                                `
-                              : null}
+                                `}
                           </tr>
                         `,
                       )}

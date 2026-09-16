@@ -2404,11 +2404,11 @@
           return PDD_LAZY_SCRIPT_PROMISES[key];
         }
         async function ensureProcesuVadibaScriptsLoaded() {
-          await loadDeferredScriptOnce("./ProcesuVadiba.js?v=202609162");
+          await loadDeferredScriptOnce("./ProcesuVadiba.js?v=202609163");
           await loadDeferredScriptOnce("./ProcesuVadibaPieslegums.js?v=202606284");
         }
         async function ensurePakalpojumuVadibaScriptsLoaded() {
-          await loadDeferredScriptOnce("./PakalpojumuVadiba.js?v=202609162");
+          await loadDeferredScriptOnce("./PakalpojumuVadiba.js?v=202609163");
           await loadDeferredScriptOnce("./PakalpojumuVadibaPieslegums.js?v=202607310");
         }
 
@@ -8729,6 +8729,31 @@
               return next;
             });
           }, []);
+          const handleGoBackRef = useRef(handleGoBack);
+          handleGoBackRef.current = handleGoBack;
+          // Pārlūka ← : iepriekšējā lietotnes lapa, nevis iziešana no aplikācijas
+          useEffect(() => {
+            if (!session?.user) return undefined;
+            try {
+              window.history.pushState({ pddNavGuard: 1 }, "", window.location.href);
+            } catch {
+              /* ignore */
+            }
+            const onPopState = () => {
+              try {
+                handleGoBackRef.current?.();
+              } catch {
+                /* ignore */
+              }
+              try {
+                window.history.pushState({ pddNavGuard: 1 }, "", window.location.href);
+              } catch {
+                /* ignore */
+              }
+            };
+            window.addEventListener("popstate", onPopState);
+            return () => window.removeEventListener("popstate", onPopState);
+          }, [session?.user?.id]);
           const handlePinCurrentSection = useCallback(() => {
             if (!currentSection) return;
             setPinnedSections((prev) => {
