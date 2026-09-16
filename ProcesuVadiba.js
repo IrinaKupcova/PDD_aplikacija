@@ -173,11 +173,16 @@
   function pickTeamState(local, remote) {
     if (!remote) return local;
     if (!local) return remote;
+    const lt = stateTimestamp(local);
+    const rt = stateTimestamp(remote);
+    // Jaunākais laiks uzvar — citādi vecāks “bagātāks” lokālais pārraksta šodienas izmaiņas.
+    if (lt > rt) return local;
+    if (rt > lt) return remote;
     const localScore = stateContentScore(local);
     const remoteScore = stateContentScore(remote);
     if (localScore > remoteScore) return local;
     if (remoteScore > localScore) return remote;
-    return stateTimestamp(remote) >= stateTimestamp(local) ? remote : local;
+    return remote;
   }
 
   function backupLocalState(state) {
@@ -386,11 +391,11 @@
   function shouldPreferRemoteOverLocal(remote, local) {
     if (!remote) return false;
     if (!local) return true;
-    const rs = stateContentScore(remote);
-    const ls = stateContentScore(local);
-    if (rs < ls) return false;
-    if (rs > ls) return true;
-    return stateTimestamp(remote) > stateTimestamp(local);
+    const rt = stateTimestamp(remote);
+    const lt = stateTimestamp(local);
+    if (rt > lt) return true;
+    if (lt > rt) return false;
+    return stateContentScore(remote) > stateContentScore(local);
   }
 
   async function saveRemoteState(sb, state) {
@@ -3323,27 +3328,25 @@ ${body}
               const candidates = [local, backup].filter(Boolean);
               let best = remote;
               for (const cand of candidates) {
-                if (stateContentScore(cand) > stateContentScore(best)) best = cand;
+                const candTs = stateTimestamp(cand);
+                const bestTs = stateTimestamp(best);
+                if (candTs > bestTs) best = cand;
+                else if (candTs === bestTs && stateContentScore(cand) > stateContentScore(best)) best = cand;
               }
               let pushedRicher = false;
-              if (stateContentScore(best) > stateContentScore(remote)) {
+              // Augšupielādējam lokālo tikai ja tas ir jaunāks (vai remote tukšs) — nevis vecāku “bagātāku”.
+              const remoteEmpty = stateContentScore(remote) <= stateContentScore(defaultState());
+              const bestNewer = stateTimestamp(best) > stateTimestamp(remote);
+              if (best !== remote && (bestNewer || remoteEmpty) && stateContentScore(best) > stateContentScore(defaultState())) {
                 const push = await saveRemoteState(sb, best);
                 if (push?.ok) {
                   remote = { ...best, updatedAt: push.updatedAt };
-                  pushedRicher = true;
-                } else {
+                  pushedRicher = bestNewer || remoteEmpty;
+                } else if (bestNewer) {
                   remote = best;
                 }
               } else {
-                const picked = pickTeamState(local, remote);
-                if (picked === local && stateTimestamp(local) > stateTimestamp(remote)) {
-                  const push = await saveRemoteState(sb, local);
-                  remote = push?.ok
-                    ? { ...local, updatedAt: push.updatedAt, updatedBy: push.updatedBy || local.updatedBy }
-                    : local;
-                } else {
-                  remote = picked;
-                }
+                remote = pickTeamState(local, remote);
               }
               if (cancelled || hydratedRef.current) return;
               hydratedRef.current = true;
@@ -3353,7 +3356,7 @@ ${body}
               if (!cancelled) {
                 setSyncStatus("synced");
                 setSyncError(
-                  pushedRicher ? "Lokālie dati bija pilnāki — augšupielādēti komandai Supabase." : "",
+                  pushedRicher ? "Jaunākie lokālie dati augšupielādēti komandai Supabase." : "",
                 );
               }
               return;
@@ -6431,12 +6434,14 @@ ${body}
 
       const setWorkPlanSections = useCallback(
         (sections, clearedTaskIds) => {
+          const updatedAt = new Date().toISOString();
           setState((prev) => ({
             ...prev,
             workPlanSections: sections,
             phases: clearedTaskIds?.length
               ? clearWorkPlanTaskFromPhases(prev.phases, clearedTaskIds)
               : prev.phases,
+            updatedAt,
           }));
         },
         [setState],
@@ -6466,7 +6471,7 @@ ${body}
             if ("progress" in patch) {
               phases = syncComputedProgressInPhases(phases);
             }
-            return { ...prev, phases };
+            return { ...prev, phases, updatedAt: new Date().toISOString() };
           });
         },
         [setState],
@@ -6478,7 +6483,7 @@ ${body}
             let phases = repositionPhaseByNumber(phaseId, numStr, prev.phases);
             phases = phases.map((p) => (p.id === phaseId ? { ...p, ...metaPatch } : p));
             phases = syncComputedProgressInPhases(phases);
-            return { ...prev, phases };
+            return { ...prev, phases, updatedAt: new Date().toISOString() };
           });
         },
         [setState],
@@ -6502,6 +6507,7 @@ ${body}
             activePhaseId: open ? phase.id : prev.activePhaseId,
             activeToolId: open ? phase.tools[0]?.id ?? null : prev.activeToolId,
             phaseEditOpen: false,
+            updatedAt: new Date().toISOString(),
           }));
           return phase.id;
         },
@@ -6520,6 +6526,7 @@ ${body}
               screen: lostActive ? "overview" : prev.screen,
               activePhaseId: lostActive ? null : prev.activePhaseId,
               activeToolId: lostActive ? null : prev.activeToolId,
+              updatedAt: new Date().toISOString(),
             };
           });
         },
