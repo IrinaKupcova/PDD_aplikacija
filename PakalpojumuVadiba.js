@@ -150,7 +150,8 @@
       (n, s) => n + (Array.isArray(s.tasks) ? s.tasks.length : 0),
       0,
     );
-    return roots * 10000 + phases.length * 100 + blocks * 10 + wpTasks * 5 + (Array.isArray(state?.notes) ? state.notes.length : 0);
+    // Piezīmes neietveram — mazāk piezīmju pēc dzēšanas nedrīkst uzskatīt par “nabadzīgāku” stāvokli.
+    return roots * 10000 + phases.length * 100 + blocks * 10 + wpTasks * 5;
   }
 
   function stateSummaryLabel(state) {
@@ -3458,7 +3459,15 @@ ${body}
                   remote = best;
                 }
               } else {
-                remote = pickTeamState(local, remote);
+                const picked = pickTeamState(local, remote);
+                if (picked === local && stateTimestamp(local) > stateTimestamp(remote)) {
+                  const push = await saveRemoteState(sb, local);
+                  remote = push?.ok
+                    ? { ...local, updatedAt: push.updatedAt, updatedBy: push.updatedBy || local.updatedBy }
+                    : local;
+                } else {
+                  remote = picked;
+                }
               }
               if (stateContentScore(remote) > stateContentScore(defaultState()) && pushedRicher) {
                 recoveredMsg = "Lokālie dati bija pilnāki — augšupielādēti komandai Supabase.";
@@ -6622,7 +6631,14 @@ ${body}
 
       const setNotes = useCallback(
         (nextNotes) => {
-          setState((prev) => ({ ...prev, notes: tidyNotes(nextNotes) }));
+          const updatedAt = new Date().toISOString();
+          const updatedBy = actorEmailForSync() || currentNoteAuthor();
+          setState((prev) => ({
+            ...prev,
+            notes: tidyNotes(nextNotes),
+            updatedAt,
+            updatedBy,
+          }));
         },
         [setState],
       );
