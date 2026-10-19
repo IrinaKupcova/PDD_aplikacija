@@ -1016,13 +1016,6 @@
                   </button>
                 </div>
               </details>
-              <button
-                type="button"
-                class=${`app-nav-link ${view === "lietotajuAnalize" ? "active" : ""}`}
-                onClick=${() => onChangeView("lietotajuAnalize")}
-              >
-                Lietotāju analīze
-              </button>
               ${pendingPoll
                 ? html`
                     <section class="pdd-nav-poll-alert" aria-label="Neaizpildīta aptauja">
