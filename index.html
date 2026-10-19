@@ -543,7 +543,7 @@
       <script defer src="./supabase/migrations/izmainas.js?v=2026051524"></script>
       <script defer src="./Sodien.js?v=202608099"></script>
       <script defer src="./Kalendars.js?v=20260422e"></script>
-      <script defer src="./Navigacija.js?v=202608131e"></script>
+      <script defer src="./Navigacija.js?v=202610191"></script>
       <script defer src="./Filtr.js?v=20260407"></script>
       <script defer src="./Saskaņošana.js?v=20260407"></script>
       <script defer src="./Prombutnes_pieteikums.js?v=20260515"></script>
@@ -3246,6 +3246,31 @@
             return html`<section class="list-panel"><p>Izmaiņu modulis nav ielādēts.</p></section>`;
           }
           return html`<${View} supabase=${supabase} highlightRowId=${highlightRowId || ""} />`;
+        }
+
+        const CLARITY_PROJECT_URL = "https://clarity.microsoft.com/projects/view/z04a2b83p5/";
+        function LietotajuAnalizeView() {
+          return html`
+            <section class="list-panel" style=${{ maxWidth: "40rem" }}>
+              <h2 style=${{ margin: "0 0 0.5rem", fontSize: "1.15rem" }}>Lietotāju analīze</h2>
+              <p style=${{ margin: "0 0 0.85rem", color: "var(--muted)", lineHeight: 1.45 }}>
+                Apmeklējumu un uzvedības statistika tiek vākta ar <strong>Microsoft Clarity</strong>.
+                Diagrammas, ieraksti un siltumakartes ir Clarity panelī (ne šajā lapā).
+              </p>
+              <p style=${{ margin: "0 0 1rem", color: "var(--muted)", fontSize: "0.88rem", lineHeight: 1.4 }}>
+                Dati parasti parādās dažu minūšu līdz dažu stundu laikā pēc pirmā apmeklējuma.
+              </p>
+              <a
+                class="btn btn-primary"
+                href=${CLARITY_PROJECT_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                style=${{ display: "inline-block", textDecoration: "none" }}
+              >
+                Atvērt Microsoft Clarity
+              </a>
+            </section>
+          `;
         }
 
         function Dashboard({ onOpenPrombutnes, onOpenDarbaUzdevumi, onOpenProcesuVadiba, onOpenPakalpojumuVadiba, onOpenTodayTask, absencesToday }) {
@@ -8560,6 +8585,7 @@
             if (sectionView === "procesuVadiba") return "Procesu vadība";
             if (sectionView === "pakalpojumuVadiba") return "Pakalpojumu vadība";
             if (sectionView === "pddAppChanges") return "Izmaiņas PDD aplikācijā";
+            if (sectionView === "lietotajuAnalize") return "Lietotāju analīze";
             if (sectionView !== "prombutnes") return "Sadaļa";
             if (sectionPromSub === "request") return "Prombūtnes pieteikums";
             if (sectionPromSub === "history") return "Prombūtnes vēsture";
@@ -9337,6 +9363,8 @@
                   />`
                 : view === "pddAppChanges"
                     ? html`<${PddAppChangesView} highlightRowId=${appChangesHighlightId} />`
+                  : view === "lietotajuAnalize"
+                    ? html`<${LietotajuAnalizeView} />`
                   : view === "darbaUzdevumiIad"
                     ? null
                   : view === "procesuVadiba"
